@@ -18,10 +18,22 @@ test("segredoTelegramValido compara header", () => {
   assert.equal(segredoTelegramValido(req, "outro"), false);
 });
 
+test("segredoTelegramValido falha fechada com segredo vazio ou ausente", () => {
+  const req = new Request("https://x", { headers: { "X-Telegram-Bot-Api-Secret-Token": "s3" } });
+  assert.equal(segredoTelegramValido(req, ""), false);
+  assert.equal(segredoTelegramValido(req, undefined), false);
+});
+
 test("tokenValido aceita query e cookie, recusa vazio", () => {
   const q = new Request("https://x/app?token=abc");
   assert.equal(tokenValido(q, "abc"), true);
   const c = new Request("https://x/app", { headers: { Cookie: "token=abc" } });
   assert.equal(tokenValido(c, "abc"), true);
   assert.equal(tokenValido(q, ""), false);
+  assert.equal(tokenValido(q, undefined), false);
+});
+
+test("tokenValido preserva tokens com '=' (base64)", () => {
+  const c = new Request("https://x/app", { headers: { Cookie: "token=ab==" } });
+  assert.equal(tokenValido(c, "ab=="), true);
 });
