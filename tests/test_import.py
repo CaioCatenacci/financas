@@ -3,7 +3,15 @@ from tools.import_planilha import (
 )
 
 def test_corrige_mojibake():
-    assert corrigir_mojibake("Educa��o") == "Educa��o" or corrigir_mojibake("Educação") == "Educação"
+    # cenário real: "Educação" em UTF-8 lido como latin1 vira "EducaÃ§Ã£o";
+    # corrigir_mojibake deve reverter isso.
+    mojibake = "EducaÃ§Ã£o"
+    assert corrigir_mojibake(mojibake) == "Educação"
+    assert corrigir_mojibake(mojibake) != mojibake  # confirma que mudou
+    # UTF-8 já correto permanece igual
+    assert corrigir_mojibake("Educação") == "Educação"
+    # entrada com caractere de substituição (ilegível) volta inalterada, sem quebrar
+    assert corrigir_mojibake("Test�") == "Test�"
 
 def test_natureza():
     assert natureza_de("Receita", 100) == "receita"
