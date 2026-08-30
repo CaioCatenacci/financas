@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "financas"
+version = "0.1.0"
+description = "Importador de histórico de gastos e gestor de transações"
+requires-python = ">=3.9"
+dependencies = [
+    "openpyxl>=3.1.0",
+    "psycopg[binary]>=3.0.0",
+    "pytest>=8.0.0",
+]
