@@ -1,0 +1,7 @@
+node_modules/
+dados/
+*.xlsx
+*.csv
+.env
+.dev.vars
+.wrangler/
