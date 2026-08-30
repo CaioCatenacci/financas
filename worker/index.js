@@ -119,8 +119,20 @@ export default {
     if (url.pathname === "/telegram") return handleTelegram(request, env);
     if (url.pathname.startsWith("/api/")) return handleApi(request, env, url);
     if (url.pathname === "/app" || url.pathname.startsWith("/app/")) {
+      // token na query? seta o cookie NO SERVIDOR e leva pro app.
+      // Fazer server-side evita a corrida do acesso.js (dois location.replace
+      // que competiam e perdiam o cookie antes do fetch do /api).
+      const q = url.searchParams.get("token");
+      if (q && q === env.APP_TOKEN) {
+        return new Response(null, {
+          status: 302,
+          headers: {
+            "Set-Cookie": `token=${q}; Path=/; Max-Age=31536000; SameSite=Strict`,
+            "Location": "/lancamentos.html",
+          },
+        });
+      }
       if (!tokenValido(request, env.APP_TOKEN)) return new Response("acesso negado", { status: 401 });
-      // repassa pro asset (index.html) preservando o cookie de token setado pelo acesso.js
       return env.ASSETS.fetch(new Request(new URL("/index.html", url), request));
     }
     return env.ASSETS.fetch(request);
