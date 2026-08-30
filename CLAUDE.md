@@ -26,10 +26,10 @@ problema é "adicionar um componente", provavelmente é a resposta errada.
   (exato, `numeric(12,2)`). Nada de acumular float em JavaScript.
 - **As parcelas têm que fechar com o total.** Uma conta que não fecha não é usada,
   mesmo estando certa na quarta casa.
-- `costing.py` / `extrair.js` são **puros**: sem banco, sem rede, sem I/O. Tudo entra
+- `extrair.js` e `money.js` são **puros**: sem banco, sem rede, sem I/O. Tudo entra
   por parâmetro. Torna auditável quando o número parece errado.
 - Comentários e testes **em português**, explicando o *porquê*, não o *quê*.
-- No JS, `parseBRtoCents()` sempre: teclado brasileiro entrega vírgula/ponto. Campo
+- Em JS, `parseBRtoCents()` sempre: teclado brasileiro entrega vírgula/ponto. Campo
   de número usa `type="text"` + `inputmode="decimal"`.
 
 ---
