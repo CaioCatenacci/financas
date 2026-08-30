@@ -1,4 +1,86 @@
-<!doctype html><meta charset="utf8"><title>Finanças</title>
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Finanças da Casa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/shell.css">
-<script src="/acesso.js"></script>
-<script>location.replace("/lancamentos.html")</script>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="brand">
+      <div class="logo">R$</div>
+      <div><h1>Finanças da Casa</h1><p>contabilidade doméstica</p></div>
+    </div>
+    <div class="tabs">
+      <button class="tab on" data-view="resumo">Resumo</button>
+      <button class="tab" data-view="lanc">Lançamentos</button>
+    </div>
+    <button class="iconbtn" id="theme" title="Alternar tema">◐</button>
+  </div>
+
+  <div class="period">
+    <button class="chip" data-p="mes">Mês atual</button>
+    <button class="chip" data-p="ano">Ano</button>
+    <button class="chip on" data-p="12m">Últimos 12 meses</button>
+    <button class="chip" data-p="tudo">Tudo</button>
+  </div>
+
+  <section id="resumo">
+    <div class="grid kpis" id="kpis" style="margin-bottom:16px"></div>
+
+    <div class="grid two" style="margin-bottom:16px">
+      <div class="card">
+        <div class="cardhead"><div><h2>Evolução mensal</h2><p class="sub">receita × despesa · saldo do mês</p></div></div>
+        <div id="evo"></div>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--receita)"></i>Receita</span>
+          <span><i class="dot" style="background:var(--despesa)"></i>Despesa</span>
+          <span><i class="dot" style="background:var(--dim)"></i>Saldo</span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="cardhead"><div><h2>Gastos por categoria</h2><p class="sub">período selecionado</p></div></div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+          <div id="donut"></div>
+          <div class="catlist" id="catlist" style="flex:1;min-width:150px"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <div class="cardhead"><div><h2>De onde vem, pra onde vai</h2><p class="sub">receita → grupos de despesa → saldo</p></div></div>
+        <div id="waterfall"></div>
+      </div>
+      <div class="card">
+        <div class="cardhead"><div><h2>Gasto por categoria: mês vs anterior</h2><p class="sub">variação do gasto mês a mês</p></div></div>
+        <div class="dbwrap" id="dumb"></div>
+        <div class="legend" style="margin-top:16px">
+          <span><i class="dot" style="background:var(--dim)"></i>Mês anterior</span>
+          <span><i class="dot" style="background:var(--accent)"></i>Mês atual</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="lanc" class="hidden">
+    <div class="tblwrap">
+      <table>
+        <thead><tr>
+          <th>Data</th><th>Descrição</th><th>Macro</th><th>Subcategoria</th>
+          <th style="text-align:right">Valor</th><th style="text-align:right">Reemb.</th><th></th>
+        </tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</div>
+<div class="tip" id="tip"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

@@ -84,10 +84,36 @@ export function criarDb(sql) {
         group by macro, sub, natureza order by total desc`;
     },
 
-    async resumoMensal() {
+    async resumoMensal(de, ate) {
       return await sql`
         select to_char(data,'YYYY-MM') as mes, natureza, sum(valor_final) as total
-        from transacoes group by 1, 2 order by 1`;
+        from transacoes where data >= ${de} and data <= ${ate}
+        group by 1, 2 order by 1`;
+    },
+
+    async resumoKPIs(de, ate) {
+      const rows = await sql`
+        select
+          coalesce(sum(valor_final) filter (where natureza = 'receita'), 0) as receita,
+          coalesce(sum(valor_final) filter (where natureza = 'despesa'), 0) as despesa,
+          coalesce(sum(valor_reembolso), 0) as reembolso
+        from transacoes where data >= ${de} and data <= ${ate}`;
+      return rows[0];
+    },
+
+    // dumbbell: despesa por macro no último mês com dados vs o mês anterior.
+    // Ancorado em max(data) (e não em "hoje") p/ ser útil mesmo sem lançamentos no mês corrente.
+    async resumoMesVsAnterior() {
+      return await sql`
+        with m as (select date_trunc('month', max(data)) as cur from transacoes)
+        select macro,
+          coalesce(sum(valor_final) filter (where date_trunc('month', data) = (select cur from m)), 0) as atual,
+          coalesce(sum(valor_final) filter (where date_trunc('month', data) = (select cur from m) - interval '1 month'), 0) as ant
+        from transacoes
+        where natureza = 'despesa'
+          and date_trunc('month', data) in ((select cur from m), (select cur from m) - interval '1 month')
+        group by macro
+        order by atual desc`;
     },
 
     async resumoReembolsoAno() {
