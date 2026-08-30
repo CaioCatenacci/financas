@@ -58,3 +58,29 @@ test("resumoPorCategoria filtra por intervalo", async () => {
   assert.equal(r[0].macro, "Casa");
   assert.deepEqual(sql.chamadas[0].values, ["2026-01-01", "2026-12-31"]);
 });
+
+test("resumoMensal passa o intervalo do período", async () => {
+  const sql = fakeSql([{ mes: "2026-01", natureza: "despesa", total: "10.00" }]);
+  const db = criarDb(sql);
+  await db.resumoMensal("2026-01-01", "2026-12-31");
+  assert.match(sql.chamadas[0].text, /to_char\(data,'YYYY-MM'\)/i);
+  assert.deepEqual(sql.chamadas[0].values, ["2026-01-01", "2026-12-31"]);
+});
+
+test("resumoKPIs retorna a linha única com receita/despesa/reembolso do período", async () => {
+  const sql = fakeSql([{ receita: "264000.00", despesa: "189400.00", reembolso: "12180.00" }]);
+  const db = criarDb(sql);
+  const r = await db.resumoKPIs("2026-01-01", "2026-12-31");
+  assert.equal(r.receita, "264000.00");
+  assert.equal(r.despesa, "189400.00");
+  assert.deepEqual(sql.chamadas[0].values, ["2026-01-01", "2026-12-31"]);
+});
+
+test("resumoMesVsAnterior consulta despesa por macro nos dois últimos meses", async () => {
+  const sql = fakeSql([{ macro: "Casa", atual: "16800.00", ant: "14200.00" }]);
+  const db = criarDb(sql);
+  const r = await db.resumoMesVsAnterior();
+  assert.equal(r[0].macro, "Casa");
+  assert.match(sql.chamadas[0].text, /date_trunc\('month', data\)/i);
+  assert.match(sql.chamadas[0].text, /natureza = 'despesa'/i);
+});

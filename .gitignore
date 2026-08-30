@@ -7,3 +7,4 @@ dados/
 .wrangler/
 __pycache__/
 *.pyc
+.vscode/

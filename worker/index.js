@@ -105,9 +105,10 @@ async function handleApi(request, env, url) {
     const de = url.searchParams.get("de") || "1900-01-01";
     const ate = url.searchParams.get("ate") || "2999-12-31";
     return j({
+      kpis: await db.resumoKPIs(de, ate),
       porCategoria: await db.resumoPorCategoria(de, ate),
-      mensal: await db.resumoMensal(),
-      reembolso: await db.resumoReembolsoAno(),
+      mensal: await db.resumoMensal(de, ate),
+      mesVsAnterior: await db.resumoMesVsAnterior(),
     });
   }
   return new Response("not found", { status: 404 });
@@ -128,7 +129,7 @@ export default {
           status: 302,
           headers: {
             "Set-Cookie": `token=${q}; Path=/; Max-Age=31536000; SameSite=Strict`,
-            "Location": "/lancamentos.html",
+            "Location": "/app",
           },
         });
       }
