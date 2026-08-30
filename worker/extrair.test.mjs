@@ -38,6 +38,18 @@ test("cai pro Claude quando Gemini vem com confiança baixa", async () => {
   assert.equal(r.extraido_por, "claude");
 });
 
+test("último recurso: Gemini válido de baixa confiança quando Claude falha", async () => {
+  const deps = {
+    limiar: 0.6,
+    callGemini: async () => ({ campos: bom, confianca: 0.3 }), // válido, mas baixo
+    callClaude: async () => { throw new Error("claude fora"); },
+  };
+  const r = await extrair(new Uint8Array(), "image/jpeg", CATS, deps);
+  assert.equal(r.ok, true);
+  assert.equal(r.extraido_por, "gemini");
+  assert.equal(r.confianca, 0.3);
+});
+
 test("falha quando ambos inválidos", async () => {
   const ruim = { ...bom, valor: "xx" };
   const deps = {
