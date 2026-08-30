@@ -81,13 +81,14 @@ CLAUDE.md CONTEXTO.md README.md
 }
 ```
 
-- [ ] **Step 2: Criar `.gitignore`**
+- [ ] **Step 2: Garantir `.gitignore`** (já existe no repo; confirmar que contém tudo abaixo, sem apagar linhas)
 
 ```
 node_modules/
 dados/
 *.xlsx
 *.csv
+.env
 .dev.vars
 .wrangler/
 ```
