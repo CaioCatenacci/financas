@@ -36,7 +36,7 @@ try {
   for (const x of r.reembolso) porAno[x.ano] = (porAno[x.ano]||0)+parseFloat(x.reembolsado);
   barras(document.getElementById("reemb"),
     Object.entries(porAno).map(([ano,total])=>({ano,total})),
-    d=>esc(d.ano), d=>d.total);
+    d=>d.ano, d=>d.total);
 } catch (e) {
   alert("Falha ao carregar: " + e.message);
 }
