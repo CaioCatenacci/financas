@@ -47,16 +47,28 @@ export function criarDb(sql) {
     },
 
     async atualizarTransacao(id, c) {
+      // read-modify-write: o driver HTTP do Neon não compõe fragmentos `sql`
+      // aninhados (só postgres.js faz isso) — então em vez de tentar manter
+      // uma coluna "como está" via referência ao próprio nome dentro do
+      // template, lemos a linha e mesclamos os campos em JS antes de gravar.
+      const rows = await sql`select * from transacoes where id = ${id}`;
+      const t = rows[0];
+      if (!t) return;
+      // undefined = manter o valor atual; para sub/pessoa, string vazia vira null (limpar)
+      const data = c.dataISO ?? t.data;
+      const macro = c.macro ?? t.macro;
+      const sub = c.sub === undefined ? t.sub : (c.sub || null);
+      const pessoa = c.pessoa === undefined ? t.pessoa : (c.pessoa || null);
+      const natureza = c.natureza ?? t.natureza;
+      const esfera = c.esfera ?? t.esfera;
+      const valor_total = c.valorCents != null ? centsToNumeric(c.valorCents) : t.valor_total;
+      const valor_reembolso = c.reembolsoCents != null ? centsToNumeric(c.reembolsoCents) : t.valor_reembolso;
+      // edição manual reclassifica: o Inc 2 aprende dessas correções
       await sql`
         update transacoes set
-          data = coalesce(${c.dataISO ?? null}, data),
-          macro = coalesce(${c.macro ?? null}, macro),
-          sub = ${c.sub === undefined ? sql`sub` : c.sub},
-          valor_total = coalesce(${c.valorCents != null ? centsToNumeric(c.valorCents) : null}, valor_total),
-          valor_reembolso = coalesce(${c.reembolsoCents != null ? centsToNumeric(c.reembolsoCents) : null}, valor_reembolso),
-          pessoa = ${c.pessoa === undefined ? sql`pessoa` : c.pessoa},
-          natureza = coalesce(${c.natureza ?? null}, natureza),
-          esfera = coalesce(${c.esfera ?? null}, esfera),
+          data = ${data}, macro = ${macro}, sub = ${sub}, pessoa = ${pessoa},
+          natureza = ${natureza}, esfera = ${esfera},
+          valor_total = ${valor_total}, valor_reembolso = ${valor_reembolso},
           origem_categoria = 'manual'
         where id = ${id}`;
     },

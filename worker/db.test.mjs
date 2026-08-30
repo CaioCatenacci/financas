@@ -36,6 +36,21 @@ test("inserirTransacao converte centavos p/ numeric string", async () => {
   assert.ok(sql.chamadas[0].values.includes("0.00"));
 });
 
+test("atualizarTransacao lê a linha, mescla e grava sem fragmentos aninhados", async () => {
+  const existente = { id: "t1", data: "2026-01-01", macro: "Casa", sub: "Luz",
+    valor_total: "100.00", valor_reembolso: "0.00", pessoa: null,
+    natureza: "despesa", esfera: "pessoal" };
+  const sql = fakeSql([existente]);
+  const db = criarDb(sql);
+  await db.atualizarTransacao("t1", { macro: "Saúde", sub: "Pediatra" });
+  assert.equal(sql.chamadas.length, 2);            // SELECT + UPDATE
+  const upd = sql.chamadas[1];
+  assert.match(upd.text, /update transacoes/i);
+  assert.ok(upd.values.includes("Saúde"));         // campo alterado
+  assert.ok(upd.values.includes("Pediatra"));
+  assert.ok(upd.values.includes("100.00"));        // valor preservado da linha lida
+});
+
 test("resumoPorCategoria filtra por intervalo", async () => {
   const sql = fakeSql([{ macro: "Casa", total: "100.00" }]);
   const db = criarDb(sql);
