@@ -1,0 +1,15 @@
+{
+  "name": "financas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test worker/",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^3"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10"
+  }
+}
