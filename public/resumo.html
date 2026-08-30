@@ -8,32 +8,36 @@
   <div class="card"><h2>Reembolso / IR por ano</h2><div id="reemb"></div></div>
 </main>
 <script type="module">
-import { apiGet, agruparMensal, centavosBR } from "/app.js";
+import { apiGet, agruparMensal, centavosBR, esc } from "/app.js";
 function barras(el, dados, rotulo, valor) {
   const max = Math.max(1, ...dados.map(valor));
   el.innerHTML = dados.map(d => {
     const w = Math.round((valor(d)/max)*300);
     return `<div style="display:flex;gap:8px;align-items:center;margin:3px 0">
-      <span style="width:160px">${rotulo(d)}</span>
+      <span style="width:160px">${esc(rotulo(d))}</span>
       <svg width="320" height="16"><rect class="bar" width="${w}" height="14"></rect></svg>
       <span>R$ ${centavosBR(String(valor(d)))}</span></div>`;
   }).join("");
 }
-const r = await apiGet("/api/resumo");
-// por categoria: soma por macro (só despesa)
-const porMacro = {};
-for (const x of r.porCategoria) if (x.natureza==="despesa") porMacro[x.macro] = (porMacro[x.macro]||0)+parseFloat(x.total);
-barras(document.getElementById("cat"),
-  Object.entries(porMacro).map(([macro,total])=>({macro,total})).sort((a,b)=>b.total-a.total),
-  d=>d.macro, d=>d.total);
-// mensal
-const mensal = agruparMensal(r.mensal);
-document.getElementById("mensal").innerHTML = mensal.map(m=>
-  `<div style="margin:3px 0">${m.mes}: receita R$ ${centavosBR(String(m.receita))} · despesa R$ ${centavosBR(String(m.despesa))} · saldo <b>R$ ${centavosBR(String(m.saldo))}</b></div>`).join("");
-// reembolso por ano
-const porAno = {};
-for (const x of r.reembolso) porAno[x.ano] = (porAno[x.ano]||0)+parseFloat(x.reembolsado);
-barras(document.getElementById("reemb"),
-  Object.entries(porAno).map(([ano,total])=>({ano,total})),
-  d=>d.ano, d=>d.total);
+try {
+  const r = await apiGet("/api/resumo");
+  // por categoria: soma por macro (só despesa)
+  const porMacro = {};
+  for (const x of r.porCategoria) if (x.natureza==="despesa") porMacro[x.macro] = (porMacro[x.macro]||0)+parseFloat(x.total);
+  barras(document.getElementById("cat"),
+    Object.entries(porMacro).map(([macro,total])=>({macro,total})).sort((a,b)=>b.total-a.total),
+    d=>d.macro, d=>d.total);
+  // mensal
+  const mensal = agruparMensal(r.mensal);
+  document.getElementById("mensal").innerHTML = mensal.map(m=>
+    `<div style="margin:3px 0">${esc(m.mes)}: receita R$ ${centavosBR(String(m.receita))} · despesa R$ ${centavosBR(String(m.despesa))} · saldo <b>R$ ${centavosBR(String(m.saldo))}</b></div>`).join("");
+  // reembolso por ano
+  const porAno = {};
+  for (const x of r.reembolso) porAno[x.ano] = (porAno[x.ano]||0)+parseFloat(x.reembolsado);
+  barras(document.getElementById("reemb"),
+    Object.entries(porAno).map(([ano,total])=>({ano,total})),
+    d=>esc(d.ano), d=>d.total);
+} catch (e) {
+  alert("Falha ao carregar: " + e.message);
+}
 </script>

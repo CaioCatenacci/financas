@@ -8,6 +8,8 @@ test("parseBRtoCents aceita formatos do teclado BR", () => {
   assert.equal(parseBRtoCents("15,50"), 1550);
   assert.equal(parseBRtoCents("1.234"), 123400); // sem centavos
   assert.equal(parseBRtoCents("100"), 10000);
+  assert.equal(parseBRtoCents("0"), 0);
+  assert.equal(parseBRtoCents("0,00"), 0);
 });
 
 test("parseBRtoCents rejeita lixo e negativo", () => {

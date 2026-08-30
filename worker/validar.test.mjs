@@ -40,3 +40,9 @@ test("rejeita macro fora da lista", () => {
   assert.equal(r.ok, false);
   assert.ok(r.erros.some((e) => e.includes("macro")));
 });
+
+test("aceita data não-padronizada e zero-preenche", () => {
+  const r = validarExtracao({ data: "5/1/2026", valor: "10", macro: "Casa" }, MACROS);
+  assert.equal(r.ok, true);
+  assert.equal(r.normalizado.dataISO, "2026-01-05");
+});

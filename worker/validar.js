@@ -2,24 +2,27 @@ import { parseBRtoCents } from "./money.js";
 
 /**
  * Normaliza data em formato BR (DD/MM/AAAA) ou ISO (AAAA-MM-DD).
+ * Aceita dados não-padronizados (ex: 5/1/2026) e zero-preenche o ISO.
  * Rejeita datas impossíveis (ex: 32/13).
  * Retorna string ISO "AAAA-MM-DD" ou null se inválida.
  */
 function normalizarData(v) {
   if (typeof v !== "string") return null;
   const s = v.trim();
-  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   let ano, mes, dia;
-  if (m) {
-    [, ano, mes, dia] = m;
-  } else {
-    m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) { [, ano, mes, dia] = m; }
+  else {
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
     if (!m) return null;
     [, dia, mes, ano] = m;
   }
+  // normaliza para 2 dígitos: modelos de visão às vezes devolvem "5/1/2026"
+  mes = String(mes).padStart(2, "0");
+  dia = String(dia).padStart(2, "0");
   const d = new Date(`${ano}-${mes}-${dia}T00:00:00Z`);
   if (isNaN(d.getTime())) return null;
-  // Rejeita overflow tipo 32/13: o Date normaliza, então confere de volta
+  // round-trip rejeita data impossível (ex.: 32/13)
   if (d.getUTCMonth() + 1 !== Number(mes) || d.getUTCDate() !== Number(dia)) return null;
   return `${ano}-${mes}-${dia}`;
 }

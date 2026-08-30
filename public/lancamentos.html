@@ -12,34 +12,49 @@
   <tbody id="linhas"></tbody></table>
 </main>
 <script type="module">
-import { apiGet, apiPatch, apiDelete, centavosBR } from "/app.js";
+import { apiGet, apiPatch, apiDelete, centavosBR, esc } from "/app.js";
 const tbody = document.getElementById("linhas");
 let categorias = [];
 async function carregar() {
-  categorias = await apiGet("/api/categorias");
-  const de = document.getElementById("de").value, ate = document.getElementById("ate").value;
-  const qs = new URLSearchParams(); if (de) qs.set("de", de); if (ate) qs.set("ate", ate);
-  const linhas = await apiGet("/api/transacoes?" + qs);
-  const macros = [...new Set(categorias.map(c=>c.macro))];
-  tbody.innerHTML = "";
-  for (const t of linhas) {
-    const tr = document.createElement("tr");
-    const opts = macros.map(m=>`<option ${m===t.macro?"selected":""}>${m}</option>`).join("");
-    tr.innerHTML = `<td>${t.data}</td><td>${t.descricao??""}</td>
-      <td><select data-id="${t.id}" class="macro">${opts}</select></td>
-      <td><input data-id="${t.id}" class="sub" value="${t.sub??""}" size="10"></td>
-      <td>R$ ${centavosBR(t.valor_total)}</td><td>R$ ${centavosBR(t.valor_reembolso)}</td>
-      <td><button data-id="${t.id}" class="del">apagar</button></td>`;
-    tbody.appendChild(tr);
+  try {
+    categorias = await apiGet("/api/categorias");
+    const de = document.getElementById("de").value, ate = document.getElementById("ate").value;
+    const qs = new URLSearchParams(); if (de) qs.set("de", de); if (ate) qs.set("ate", ate);
+    const linhas = await apiGet("/api/transacoes?" + qs);
+    const macros = [...new Set(categorias.map(c=>c.macro))];
+    tbody.innerHTML = "";
+    for (const t of linhas) {
+      const tr = document.createElement("tr");
+      const opts = macros.map(m=>`<option ${m===t.macro?"selected":""}>${esc(m)}</option>`).join("");
+      tr.innerHTML = `<td>${t.data}</td><td>${esc(t.descricao??"")}</td>
+        <td><select data-id="${t.id}" class="macro">${opts}</select></td>
+        <td><input data-id="${t.id}" class="sub" value="${esc(t.sub??"")}" size="10"></td>
+        <td>R$ ${centavosBR(t.valor_total)}</td><td>R$ ${centavosBR(t.valor_reembolso)}</td>
+        <td><button data-id="${t.id}" class="del">apagar</button></td>`;
+      tbody.appendChild(tr);
+    }
+  } catch (e) {
+    alert("Falha ao carregar: " + e.message);
   }
 }
 tbody.addEventListener("change", async (e) => {
   const id = e.target.dataset.id; if (!id) return;
-  if (e.target.classList.contains("macro")) await apiPatch(`/api/transacoes/${id}`, { macro: e.target.value });
-  if (e.target.classList.contains("sub")) await apiPatch(`/api/transacoes/${id}`, { sub: e.target.value });
+  try {
+    if (e.target.classList.contains("macro")) await apiPatch(`/api/transacoes/${id}`, { macro: e.target.value });
+    if (e.target.classList.contains("sub")) await apiPatch(`/api/transacoes/${id}`, { sub: e.target.value });
+  } catch (e) {
+    alert("Falha ao salvar: " + e.message);
+  }
 });
 tbody.addEventListener("click", async (e) => {
-  if (e.target.classList.contains("del")) { await apiDelete(`/api/transacoes/${e.target.dataset.id}`); carregar(); }
+  if (e.target.classList.contains("del")) {
+    try {
+      await apiDelete(`/api/transacoes/${e.target.dataset.id}`);
+      carregar();
+    } catch (e) {
+      alert("Falha ao salvar: " + e.message);
+    }
+  }
 });
 document.getElementById("filtrar").addEventListener("click", carregar);
 carregar();

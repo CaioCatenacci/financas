@@ -40,7 +40,7 @@ export async function extrair(imagemBytes, mime, categorias, deps) {
     geminiOk = g; // guarda p/ eventual uso se Claude também falhar
     if (!g.v.ok) errosAcum.push(...g.v.erros.map((e) => `gemini: ${e}`));
   } catch (e) {
-    errosAcum.push(`gemini: ${e.message}`);
+    errosAcum.push(`gemini: ${e?.message ?? String(e)}`);
   }
 
   // 2) Claude (fallback)
@@ -51,7 +51,7 @@ export async function extrair(imagemBytes, mime, categorias, deps) {
     }
     errosAcum.push(...c.v.erros.map((e) => `claude: ${e}`));
   } catch (e) {
-    errosAcum.push(`claude: ${e.message}`);
+    errosAcum.push(`claude: ${e?.message ?? String(e)}`);
   }
 
   // 3) último recurso: Gemini válido mas de baixa confiança ainda serve

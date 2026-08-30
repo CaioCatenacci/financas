@@ -17,7 +17,10 @@ export function agruparMensal(rows) {
   return [...mapa.values()].sort((a, b) => a.mes.localeCompare(b.mes));
 }
 
-// ---- helpers de rede (não testados) ----
-export const apiGet = (p) => fetch(p).then((r) => r.json());
-export const apiPatch = (p, body) => fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-export const apiDelete = (p) => fetch(p, { method: "DELETE" });
+// ---- helpers de rede e segurança ----
+export function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+export const apiGet = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(`GET ${p} ${r.status}`); return r.json(); });
+export const apiPatch = (p, body) => fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => { if (!r.ok) throw new Error(`PATCH ${p} ${r.status}`); return r; });
+export const apiDelete = (p) => fetch(p, { method: "DELETE" }).then((r) => { if (!r.ok) throw new Error(`DELETE ${p} ${r.status}`); return r; });

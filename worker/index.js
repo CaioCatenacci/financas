@@ -53,7 +53,7 @@ export async function tratarUpdate(update, env, deps) {
 
   const cat = n.sub ? `${n.macro} › ${n.sub}` : n.macro;
   const [a, m, d] = n.dataISO.split("-");
-  await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id, env);
+  await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id);
 }
 
 async function handleTelegram(request, env) {
