@@ -116,7 +116,10 @@ criado_em       timestamptz not null default now()
 
 ### `categorias`
 
-Configuráveis, sementadas da planilha (10 `Tipo` → `macro`; 79 `Gasto` → `sub`).
+Configuráveis, sementadas da planilha: os 10 `Tipo` → `macro`; e como `sub` **só os
+`Gasto` recorrentes** (≥ `MIN_OCORRENCIAS`, default 3). Gastos de ocorrência única (ex.
+"Cama nova", "TV Nova") não viram subcategoria — o rótulo cru fica preservado em
+`descricao` de qualquer forma (ver §10), então nada se perde e a lista de subs nasce limpa.
 
 ```sql
 id       uuid primary key default gen_random_uuid()
@@ -219,13 +222,16 @@ Dropbox. É onde a correção acontece (e a fonte do aprendizado do Inc 2).
 Python + openpyxl, uma vez só, lendo `Gastos.xlsx`:
 
 - Conserta mojibake (`Educa��o` → `Educação`) na leitura.
-- Mapeia: `Tipo→macro` · `Gasto→sub` (e também `descricao`) · `ValorTotal→valor_total` ·
-  `ValorReembolso→valor_reembolso` · `Data→data`.
+- Mapeia: `Tipo→macro` · `ValorTotal→valor_total` · `ValorReembolso→valor_reembolso` ·
+  `Data→data`. O `Gasto` cru vai **sempre** pra `descricao`; e vira `sub` **só quando é
+  recorrente** (≥ `MIN_OCORRENCIAS`, default 3) — senão `sub` fica nulo (o rótulo continua
+  em `descricao`).
 - `natureza`: `Tipo='Receita'→receita`, senão `despesa` (cruzando com o sinal do ValorFinal
   pra detectar inconsistência).
 - `esfera`: `Tipo='Empresa'→empresa`, senão `pessoal`.
 - `fonte='importacao'`, `documento_id` nulo.
-- Semeia `categorias` com os pares distintos (macro, sub); o Caio poda/mescla no app depois.
+- Semeia `categorias`: todos os macros, e como sub só os `Gasto` recorrentes
+  (≥ `MIN_OCORRENCIAS`); o Caio poda/mescla no app depois. `MIN_OCORRENCIAS` é parâmetro.
 - **Idempotente:** re-rodar substitui só as linhas `fonte='importacao'`, nunca duplica.
 - **Relatório de import** ao final (contagens por macro, linhas ambíguas de natureza/valor)
   — nada silencioso, no espírito do "diga o que errou / não invente placeholder".
