@@ -11,10 +11,11 @@ def test_normalizar_nome():
 
 
 def test_normalizar_chave():
-    """Normaliza chave: telefone/CPF → dígitos, email → minúsculas, outro → minúsculas."""
+    """Normaliza chave: telefone/CPF → dígitos, email → minúsculas, aleatória → preservada."""
     assert normalizar_chave("+55 (19) 99578-3408") == "5519995783408"
     assert normalizar_chave("***.923.318-**") == "923318"
     assert normalizar_chave("  Fulano@Email.COM ") == "fulano@email.com"
+    assert normalizar_chave("3FA85F64-5717-4562-B3FC-2C963F66AFA6") == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
     assert normalizar_chave("") is None
     assert normalizar_chave(None) is None
 

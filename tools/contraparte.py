@@ -16,7 +16,7 @@ def normalizar_nome(s):
 
 
 def normalizar_chave(s):
-    """Normaliza chave: email→minúsculas, dígitos→extrai, outro→minúsculas."""
+    """Normaliza chave: email→minúsculas, letra→preserva (EVP/UUID), dígitos→extrai."""
     if not s or not isinstance(s, str):
         return None
     t = s.strip()
@@ -24,11 +24,10 @@ def normalizar_chave(s):
         return None
     if "@" in t:
         return t.lower()  # Email
-    if any(ch.isdigit() for ch in t):
-        # Telefone/CPF: extrai dígitos
-        d = re.sub(r"\D", "", t)
-        return d or None
-    return t.lower()  # Chave aleatória
+    if re.search(r"[a-zA-Z]", t):
+        return t.lower()  # Chave aleatória (EVP/UUID): tem letra → preserva
+    d = re.sub(r"\D", "", t)  # Telefone/CPF: só dígitos
+    return d or None
 
 
 def derivar_chave(d):

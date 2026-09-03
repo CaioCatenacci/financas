@@ -13,9 +13,10 @@ export function normalizarChave(s) {
   if (!s || typeof s !== "string") return null;
   const t = s.trim();
   if (!t) return null;
-  if (t.includes("@")) return t.toLowerCase();          // e-mail
-  if (/\d/.test(t)) { const d = t.replace(/\D/g, ""); return d || null; } // telefone/CPF
-  return t.toLowerCase();                                 // chave aleatória
+  if (t.includes("@")) return t.toLowerCase();      // e-mail
+  if (/[a-z]/i.test(t)) return t.toLowerCase();      // chave aleatória (EVP/UUID): tem letra → preserva
+  const d = t.replace(/\D/g, "");                     // telefone/CPF: só dígitos
+  return d || null;
 }
 
 export function derivarChave({ contraparte_nome, contraparte_chave } = {}) {
