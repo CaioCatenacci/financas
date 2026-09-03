@@ -7,6 +7,11 @@ test("parseAprender lê '/aprender Categoria > Sub'", () => {
     { macro: "Educação", sub: "Inglês Particular" });
 });
 
+test("aceita o separador '›' (o que o app mostra), não só '>'", () => {
+  assert.deepEqual(parseAprender("/aprender Educação › Inglês Particular"),
+    { macro: "Educação", sub: "Inglês Particular" });
+});
+
 test("aceita sem subcategoria", () => {
   assert.deepEqual(parseAprender("/aprender Casa"), { macro: "Casa", sub: null });
 });
