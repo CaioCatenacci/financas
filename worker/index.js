@@ -6,7 +6,8 @@ import { subirDropbox } from "./dropbox.js";
 import { caminhoDropbox, nomeArquivo } from "./dropbox_nome.js";
 import { centsToBR } from "./money.js";
 import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
-import { normalizarChave, normalizarNome } from "./contraparte.js";
+import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
+import { parseAprender } from "./teach.js";
 
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
@@ -31,6 +32,23 @@ export async function tratarUpdate(update, env, deps) {
 
   const jaTem = await deps.db.documentoPorHash(hash);
   if (jaTem) { await deps.responderImpl(ev.chatId, "Esse comprovante eu já registrei antes.", env); return; }
+
+  // modo ensino: foto com legenda "/aprender ..." → só aprende, não cria transação
+  const ap = parseAprender(ev.caption);
+  if (ap) {
+    const cats = await deps.db.listarCategorias();
+    const macros = [...new Set(cats.map((c) => c.macro))];
+    if (!macros.includes(ap.macro)) { await deps.responderImpl(ev.chatId, `Categoria "${ap.macro}" não existe. Categorias: ${macros.join(", ")}`, env); return; }
+    const ex = await deps.extrairImpl(bytes, mime, cats);
+    if (!ex.ok) { await deps.responderImpl(ev.chatId, "Não consegui ler a contraparte desse comprovante.", env); return; }
+    const n = ex.normalizado;
+    const d = derivarChave({ contraparte_nome: n.contraparte_nome, contraparte_chave: n.contraparte_chave });
+    if (!d) { await deps.responderImpl(ev.chatId, "Comprovante sem contraparte reconhecível — não dá pra aprender.", env); return; }
+    await deps.db.upsertAssociacao({ chave: d.chave, tipo: d.tipo, macro: ap.macro, sub: ap.sub });
+    const cat = ap.sub ? `${ap.macro} › ${ap.sub}` : ap.macro;
+    await deps.responderImpl(ev.chatId, `✓ aprendido: ${n.contraparte_nome ?? d.chave} → ${cat}`, env);
+    return;
+  }
 
   const categorias = await deps.db.listarCategorias();
   const ex = await deps.extrairImpl(bytes, mime, categorias);

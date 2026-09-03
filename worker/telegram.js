@@ -8,11 +8,11 @@ export function parseUpdate(update) {
   const chatId = m.chat.id;
   if (Array.isArray(m.photo) && m.photo.length) {
     const maior = m.photo.reduce((a, b) => (b.width > a.width ? b : a));
-    return { tipo: "imagem", chatId, fileId: maior.file_id, mime: "image/jpeg", messageId: m.message_id };
+    return { tipo: "imagem", chatId, fileId: maior.file_id, mime: "image/jpeg", messageId: m.message_id, caption: m.caption || null };
   }
   if (m.document) {
     const mime = m.document.mime_type || "";
-    if (mime.startsWith("image/")) return { tipo: "imagem", chatId, fileId: m.document.file_id, mime, messageId: m.message_id };
+    if (mime.startsWith("image/")) return { tipo: "imagem", chatId, fileId: m.document.file_id, mime, messageId: m.message_id, caption: m.caption || null };
     if (mime === "application/pdf") return { tipo: "pdf", chatId };
     return { tipo: "ignorar", chatId };
   }

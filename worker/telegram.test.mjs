@@ -24,3 +24,15 @@ test("parseUpdate marca pdf e callback", () => {
   assert.equal(cb.tipo, "callback");
   assert.equal(cb.data, "del:xyz");
 });
+
+test("parseUpdate captura caption da foto", () => {
+  const u = { message: { chat: { id: 7 }, message_id: 1, caption: "/aprender Casa", photo: [{ file_id: "b", width: 800 }] } };
+  const r = parseUpdate(u);
+  assert.equal(r.caption, "/aprender Casa");
+});
+
+test("parseUpdate retorna null para caption ausente", () => {
+  const u = { message: { chat: { id: 7 }, message_id: 1, photo: [{ file_id: "b", width: 800 }] } };
+  const r = parseUpdate(u);
+  assert.equal(r.caption, null);
+});
