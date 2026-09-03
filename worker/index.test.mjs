@@ -111,3 +111,22 @@ test("teach: foto com /aprender grava associação e NÃO cria transação", asy
   assert.equal(aprendidas[0].macro, "Educação");
   assert.equal(aprendidas[0].tipo, "pix_cpf");
 });
+
+test("teach: /aprender aprende mesmo em comprovante duplicado (dedup não bloqueia)", async () => {
+  const db = dbFake();
+  const aprendidas = [];
+  db.documentoPorHash = async () => ({ id: "jaexiste" }); // duplicado
+  db.listarCategorias = async () => [{ macro: "Educação", sub: null }];
+  db.upsertAssociacao = async (a) => aprendidas.push(a);
+  const deps = {
+    db,
+    baixar: async () => ({ bytes: new Uint8Array([1]), mime: "image/jpeg" }),
+    hashBytes: async () => "h1",
+    extrairImpl: async () => ({ ok: true, normalizado: { contraparte_nome: "VIVIANE FERRER BORGATO", contraparte_chave: "+5519995783408" } }),
+    responderImpl: async () => {},
+  };
+  const update = { message: { chat: { id: 7 }, message_id: 1, caption: "/aprender Educação", photo: [{ file_id: "b", width: 800 }] } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(aprendidas.length, 1);              // aprendeu apesar do duplicado
+  assert.equal(db.estado.inseridos.length, 0);     // dry-run
+});

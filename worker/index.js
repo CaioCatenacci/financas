@@ -28,12 +28,8 @@ export async function tratarUpdate(update, env, deps) {
   if (ev.tipo !== "imagem") return;
 
   const { bytes, mime } = await deps.baixar(ev.fileId);
-  const hash = await deps.hashBytes(bytes);
 
-  const jaTem = await deps.db.documentoPorHash(hash);
-  if (jaTem) { await deps.responderImpl(ev.chatId, "Esse comprovante eu já registrei antes.", env); return; }
-
-  // modo ensino: foto com legenda "/aprender ..." → só aprende, não cria transação
+  // modo ensino: foto com legenda "/aprender ..." → só aprende, não cria transação (ignora dedup)
   const ap = parseAprender(ev.caption);
   if (ap) {
     const cats = await deps.db.listarCategorias();
@@ -49,6 +45,10 @@ export async function tratarUpdate(update, env, deps) {
     await deps.responderImpl(ev.chatId, `✓ aprendido: ${n.contraparte_nome ?? d.chave} → ${cat}`, env);
     return;
   }
+
+  const hash = await deps.hashBytes(bytes);
+  const jaTem = await deps.db.documentoPorHash(hash);
+  if (jaTem) { await deps.responderImpl(ev.chatId, "Esse comprovante eu já registrei antes.", env); return; }
 
   const categorias = await deps.db.listarCategorias();
   const ex = await deps.extrairImpl(bytes, mime, categorias);
