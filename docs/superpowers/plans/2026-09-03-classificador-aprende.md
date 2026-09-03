@@ -39,7 +39,17 @@ public/app.test.mjs               MOD  — subsPorCategoria
 public/index.html                 MOD  — cabeçalho "Categoria"; datalist
 public/shell.css                  MOD  — larguras da tabela; combobox
 CLAUDE.md / CONTEXTO.md           MOD  — vocabulário e decisões do Inc 2
+worker/teach.js                   NOVO — parseAprender(caption) (puro)
+worker/teach.test.mjs             NOVO
+worker/telegram.js                MOD  — parseUpdate captura caption
+worker/index.js                   MOD  — ramo "teach" (dry-run, sem transação)
+tools/contraparte.py              NOVO — port py de normalizar/derivar (casa com o JS)
+tools/ensino_extrair.py           NOVO — varre Dropbox, extrai contraparte, agrupa, gera CSV
+tools/ensino_aplicar.py           NOVO — upsert das associações a partir do CSV
+tests/test_contraparte.py         NOVO — paridade com o contraparte.js
+tests/test_ensino.py              NOVO — agrupamento por contraparte
 ```
+(Tasks 8–9 abaixo são o **modo ensino** — §12 da spec — aditivas ao núcleo.)
 
 ---
 
@@ -646,13 +656,302 @@ git commit -m "docs: Inc 2 — vocabulário (origem=regra), contraparte, associa
 
 ---
 
+### Task 8: Modo ensino — teach-command no Telegram (dry-run)
+
+**Files:**
+- Create: `worker/teach.js`, `worker/teach.test.mjs`
+- Modify: `worker/telegram.js` (parseUpdate captura `caption`), `worker/index.js`, `worker/index.test.mjs`
+
+**Interfaces:**
+- Consumes: `derivarChave` (contraparte.js), `db.upsertAssociacao` (Task 4), extração (Task 3).
+- Produces: `parseAprender(caption) -> { macro, sub } | null` (puro). Fluxo teach em `tratarUpdate`: se a foto vem com caption de comando, extrai só a contraparte, faz `upsert` da associação e **não cria transação**.
+
+- [ ] **Step 1: Escrever `worker/teach.test.mjs`**
+
+```javascript
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { parseAprender } from "./teach.js";
+
+test("parseAprender lê '/aprender Categoria > Sub'", () => {
+  assert.deepEqual(parseAprender("/aprender Educação > Inglês Particular"),
+    { macro: "Educação", sub: "Inglês Particular" });
+});
+test("aceita sem subcategoria", () => {
+  assert.deepEqual(parseAprender("/aprender Casa"), { macro: "Casa", sub: null });
+});
+test("ignora legenda que não é comando", () => {
+  assert.equal(parseAprender("comprovante de pix"), null);
+  assert.equal(parseAprender(""), null);
+  assert.equal(parseAprender(undefined), null);
+});
+```
+
+- [ ] **Step 2: Rodar e ver falhar** — `node --test worker/teach.test.mjs` → FAIL.
+
+- [ ] **Step 3: Implementar `worker/teach.js`**
+
+```javascript
+// Reconhece a legenda de ensino: "/aprender <Categoria> > <Subcategoria>".
+// Por quê: ensinar a associação sem criar transação (dry-run), varrendo o backlog.
+export function parseAprender(caption) {
+  if (!caption || typeof caption !== "string") return null;
+  const m = caption.trim().match(/^\/aprender\s+(.+)$/i);
+  if (!m) return null;
+  const [macro, sub] = m[1].split(">").map((s) => s.trim());
+  if (!macro) return null;
+  return { macro, sub: sub || null };
+}
+```
+
+- [ ] **Step 4: `parseUpdate` captura a legenda** — em `worker/telegram.js`, no ramo de foto/documento-imagem, incluir `caption: m.caption || null` no objeto retornado. Adicionar um teste em `telegram.test.mjs` de que uma foto com `caption` retorna `caption` preenchido.
+
+- [ ] **Step 5: Ramo teach em `tratarUpdate` (`worker/index.js`)** — importar `parseAprender` e, logo após baixar a imagem e (dedup opcional pode ser pulado no teach), antes do fluxo normal de gravação:
+
+```javascript
+  // modo ensino: foto com legenda "/aprender ..." → só aprende, não cria transação
+  const ap = parseAprender(ev.caption);
+  if (ap) {
+    const cats = await deps.db.listarCategorias();
+    const macros = [...new Set(cats.map((c) => c.macro))];
+    if (!macros.includes(ap.macro)) { await deps.responderImpl(ev.chatId, `Categoria "${ap.macro}" não existe. Categorias: ${macros.join(", ")}`, env); return; }
+    const ex = await deps.extrairImpl(bytes, mime, cats);
+    if (!ex.ok) { await deps.responderImpl(ev.chatId, "Não consegui ler a contraparte desse comprovante.", env); return; }
+    const n = ex.normalizado;
+    const d = derivarChave({ contraparte_nome: n.contraparte_nome, contraparte_chave: n.contraparte_chave });
+    if (!d) { await deps.responderImpl(ev.chatId, "Comprovante sem contraparte reconhecível — não dá pra aprender.", env); return; }
+    await deps.db.upsertAssociacao({ chave: d.chave, tipo: d.tipo, macro: ap.macro, sub: ap.sub });
+    const cat = ap.sub ? `${ap.macro} › ${ap.sub}` : ap.macro;
+    await deps.responderImpl(ev.chatId, `✓ aprendido: ${n.contraparte_nome ?? d.chave} → ${cat}`, env);
+    return;
+  }
+```
+(Importar no topo: `import { derivarChave } from "./contraparte.js";` — já usado na Task 5; e `import { parseAprender } from "./teach.js";`. `ev.caption` vem do Step 4.)
+
+- [ ] **Step 6: Teste em `worker/index.test.mjs`** — foto com caption teach:
+
+```javascript
+test("teach: foto com /aprender grava associação e NÃO cria transação", async () => {
+  const db = dbFake();
+  const aprendidas = [];
+  db.listarCategorias = async () => [{ macro: "Educação", sub: null }];
+  db.upsertAssociacao = async (a) => aprendidas.push(a);
+  const deps = {
+    db,
+    baixar: async () => ({ bytes: new Uint8Array([1]), mime: "image/jpeg" }),
+    hashBytes: async () => "h1",
+    extrairImpl: async () => ({ ok: true, extraido_por: "gemini", confianca: 0.9,
+      normalizado: { contraparte_nome: "VIVIANE FERRER BORGATO", contraparte_chave: "+5519995783408" } }),
+    responderImpl: async () => {},
+  };
+  const update = { message: { chat: { id: 7 }, message_id: 1, caption: "/aprender Educação > Inglês Particular",
+    photo: [{ file_id: "b", width: 800 }] } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.estado.inseridos.length, 0);           // dry-run: nada gravado como transação
+  assert.equal(aprendidas[0].macro, "Educação");
+  assert.equal(aprendidas[0].tipo, "pix_cpf");
+});
+```
+(No `dbFake`, garantir defaults `upsertAssociacao: async () => {}`, `buscarAssociacao: async () => null`, `listarCategorias` existente.)
+
+- [ ] **Step 7: Rodar a suíte e ver passar** — `npm test` → PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add worker/teach.js worker/teach.test.mjs worker/telegram.js worker/index.js worker/index.test.mjs
+git commit -m "feat: modo ensino no Telegram (/aprender, dry-run sem transação)"
+```
+
+---
+
+### Task 9: Modo ensino — lote pelo Dropbox
+
+**Files:**
+- Create: `tools/contraparte.py`, `tests/test_contraparte.py`, `tools/ensino_extrair.py`, `tools/ensino_aplicar.py`, `tests/test_ensino.py`
+
+**Interfaces:**
+- Produces (puros, testados): `normalizar_nome`, `normalizar_chave`, `derivar_chave` (paridade com `worker/contraparte.js`); `agrupar_por_contraparte(rows) -> list[dict]` (agrupa por chave, conta ocorrências, mantém 1ª sugestão de macro/sub).
+- Scripts: `ensino_extrair.py <pasta>` gera `contrapartes.csv`; `ensino_aplicar.py <csv>` faz upsert em `associacoes`.
+
+- [ ] **Step 1: Escrever `tests/test_contraparte.py`** (mesmos casos do JS, garantindo paridade do lookup)
+
+```python
+from tools.contraparte import normalizar_nome, normalizar_chave, derivar_chave
+
+def test_normalizar_nome():
+    assert normalizar_nome("  Viviane   Ferrer  Borgato ") == "VIVIANE FERRER BORGATO"
+    assert normalizar_nome("Educação") == "EDUCACAO"
+    assert normalizar_nome("") is None
+
+def test_normalizar_chave():
+    assert normalizar_chave("+55 (19) 99578-3408") == "5519995783408"
+    assert normalizar_chave("***.923.318-**") == "923318"
+    assert normalizar_chave("  Fulano@Email.COM ") == "fulano@email.com"
+    assert normalizar_chave("") is None
+
+def test_derivar_chave():
+    assert derivar_chave({"contraparte_chave": "+5519995783408", "contraparte_nome": "X"}) == {"chave": "5519995783408", "tipo": "pix_cpf"}
+    assert derivar_chave({"contraparte_chave": None, "contraparte_nome": "Viviane Ferrer"}) == {"chave": "VIVIANE FERRER", "tipo": "nome"}
+    assert derivar_chave({"contraparte_chave": None, "contraparte_nome": None}) is None
+```
+
+- [ ] **Step 2: Rodar e ver falhar** — `python -m pytest tests/test_contraparte.py -v` → FAIL.
+
+- [ ] **Step 3: Implementar `tools/contraparte.py`** (espelho do `worker/contraparte.js`)
+
+```python
+"""Paridade com worker/contraparte.js — a normalização TEM de casar p/ o lookup bater."""
+import re, unicodedata
+
+def normalizar_nome(s):
+    if not s or not isinstance(s, str): return None
+    n = unicodedata.normalize("NFD", s)
+    n = "".join(c for c in n if unicodedata.category(c) != "Mn")  # tira acento
+    n = re.sub(r"\s+", " ", n).upper().strip()
+    return n or None
+
+def normalizar_chave(s):
+    if not s or not isinstance(s, str): return None
+    t = s.strip()
+    if not t: return None
+    if "@" in t: return t.lower()
+    if any(ch.isdigit() for ch in t):
+        d = re.sub(r"\D", "", t); return d or None
+    return t.lower()
+
+def derivar_chave(d):
+    ch = normalizar_chave((d or {}).get("contraparte_chave"))
+    if ch: return {"chave": ch, "tipo": "pix_cpf"}
+    nm = normalizar_nome((d or {}).get("contraparte_nome"))
+    if nm: return {"chave": nm, "tipo": "nome"}
+    return None
+```
+
+- [ ] **Step 4: Rodar e ver passar** — `python -m pytest tests/test_contraparte.py -v` → PASS.
+
+- [ ] **Step 5: Escrever `tests/test_ensino.py`** (agrupamento por contraparte)
+
+```python
+from tools.ensino_extrair import agrupar_por_contraparte
+
+def test_agrupa_por_contraparte_unica():
+    rows = [
+        {"contraparte_nome": "VIVIANE FERRER BORGATO", "contraparte_chave": "+5519995783408", "macro": "Educação", "sub": "Inglês Particular"},
+        {"contraparte_nome": "VIVIANE FERRER BORGATO", "contraparte_chave": "+5519995783408", "macro": "Educação", "sub": "Inglês Particular"},
+        {"contraparte_nome": "PADARIA X", "contraparte_chave": None, "macro": "Casa", "sub": None},
+    ]
+    g = agrupar_por_contraparte(rows)
+    viv = [x for x in g if x["chave"] == "5519995783408"][0]
+    assert viv["tipo"] == "pix_cpf" and viv["n"] == 2 and viv["sugestao_macro"] == "Educação"
+    assert any(x["tipo"] == "nome" and x["chave"] == "PADARIA X" for x in g)
+```
+
+- [ ] **Step 6: Rodar e ver falhar** — `python -m pytest tests/test_ensino.py -v` → FAIL.
+
+- [ ] **Step 7: Implementar `tools/ensino_extrair.py`** (agrupamento puro + main que varre a pasta)
+
+```python
+"""Varre comprovantes do Dropbox, extrai contraparte (Gemini), agrupa por contraparte
+única e escreve contrapartes.csv p/ o Caio revisar. Uma linha por contraparte."""
+import csv, os, sys, json, base64, urllib.request
+from collections import OrderedDict
+from tools.contraparte import derivar_chave
+
+def agrupar_por_contraparte(rows):
+    ac = OrderedDict()
+    for r in rows:
+        d = derivar_chave(r)
+        if not d: continue
+        k = (d["chave"], d["tipo"])
+        if k not in ac:
+            ac[k] = {"chave": d["chave"], "tipo": d["tipo"], "nome": r.get("contraparte_nome") or "",
+                     "n": 0, "sugestao_macro": r.get("macro") or "", "sugestao_sub": r.get("sub") or ""}
+        ac[k]["n"] += 1
+    return list(ac.values())
+
+def _gemini(img_bytes, key, cats):
+    prompt = ('Leia o comprovante e responda SOMENTE JSON com {"macro":string,"sub":string|null,'
+              '"contraparte_nome":string|null,"contraparte_chave":string|null}. '
+              "Escolha macro/sub desta lista: " + "; ".join(cats))
+    body = {"contents": [{"parts": [{"text": prompt},
+             {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(img_bytes).decode()}}]}],
+            "generationConfig": {"responseMimeType": "application/json"}}
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key={key}"
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), headers={"content-type": "application/json"})
+    with urllib.request.urlopen(req) as r:
+        j = json.loads(r.read()); return json.loads(j["candidates"][0]["content"]["parts"][0]["text"])
+
+def main(pasta, key, cats, saida="contrapartes.csv"):
+    rows = []
+    for dirpath, _, files in os.walk(pasta):
+        for f in files:
+            if not f.lower().endswith((".jpg", ".jpeg", ".png")): continue
+            with open(os.path.join(dirpath, f), "rb") as fp: b = fp.read()
+            try: rows.append(_gemini(b, key, cats))
+            except Exception as e: print("falhou:", f, e)
+    grupos = agrupar_por_contraparte(rows)
+    with open(saida, "w", newline="", encoding="utf-8") as o:
+        w = csv.DictWriter(o, fieldnames=["chave", "tipo", "nome", "n", "sugestao_macro", "sugestao_sub"])
+        w.writeheader(); w.writerows(grupos)
+    print(f"{len(rows)} comprovantes → {len(grupos)} contrapartes únicas em {saida}")
+
+if __name__ == "__main__":
+    import os as _os
+    key = _os.environ["GEMINI_KEY"]  # exportar do .dev.vars, sem versionar
+    cats = _os.environ.get("CATS", "Casa; Educação; Saúde; Pessoal; Empresa; Carro; Outros").split("; ")
+    main(sys.argv[1], key, cats)
+```
+
+- [ ] **Step 8: Rodar e ver passar** — `python -m pytest tests/test_ensino.py -v` → PASS.
+
+- [ ] **Step 9: Implementar `tools/ensino_aplicar.py`** (upsert a partir do CSV revisado)
+
+```python
+"""Lê contrapartes.csv (revisado pelo Caio) e faz upsert em associacoes."""
+import csv, os, sys, psycopg
+
+def aplicar(caminho_csv, database_url):
+    n = 0
+    with psycopg.connect(database_url) as conn, conn.cursor() as cur, open(caminho_csv, encoding="utf-8") as f:
+        for row in csv.DictReader(f):
+            macro = (row.get("sugestao_macro") or "").strip()
+            if not macro: continue  # linhas sem categoria confirmada são puladas
+            sub = (row.get("sugestao_sub") or "").strip() or None
+            cur.execute(
+                """insert into associacoes (chave, tipo_chave, macro, sub, n, atualizado_em)
+                   values (%s,%s,%s,%s,1,now())
+                   on conflict (chave, tipo_chave) do update
+                     set macro=excluded.macro, sub=excluded.sub, n=associacoes.n+1, atualizado_em=now()""",
+                (row["chave"], row["tipo"], macro, sub))
+            n += 1
+        conn.commit()
+    print(f"{n} associações aplicadas")
+
+if __name__ == "__main__":
+    aplicar(sys.argv[1], os.environ["DATABASE_URL"])
+```
+
+- [ ] **Step 10: Rodar o backlog** (checkpoint, com o Caio): `GEMINI_KEY=... python tools/ensino_extrair.py "C:/Users/caioc/Dropbox/Finanças/Comprovantes"` → revisar `contrapartes.csv` → `DATABASE_URL=... python tools/ensino_aplicar.py contrapartes.csv`.
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add tools/contraparte.py tools/ensino_extrair.py tools/ensino_aplicar.py tests/test_contraparte.py tests/test_ensino.py
+git commit -m "feat: modo ensino em lote (extrai contrapartes do Dropbox, agrupa, aplica associações)"
+```
+
+---
+
 ## Checkpoint de infra (após as tasks, com o Caio)
 
 1. Aplicar `migrations/0002_associacoes.sql` no Neon (Task 1 Step 3) — efeito na infra do Caio.
 2. `npm test` (todas) + `python -m pytest tests/` (inalterado).
 3. Merge `inc2-classificador` → `master`.
 4. `wrangler deploy` (publish).
-5. Teste ponta-a-ponta: mandar um Pix pra uma contraparte nova → classifica pelo modelo → corrigir no app → mandar outro comprovante da MESMA contraparte → deve entrar já na categoria certa com "✓ aprendido".
+5. Teste ponta-a-ponta (aprendizado por correção): mandar um Pix pra uma contraparte nova → classifica pelo modelo → corrigir no app → mandar outro comprovante da MESMA contraparte → deve entrar já na categoria certa com "✓ aprendido".
+6. Teste do modo ensino (Task 8): mandar um comprovante com legenda `/aprender Educação > Inglês Particular` → bot responde "✓ aprendido: <contraparte> → ..." e NÃO cria transação; a próxima captura dessa contraparte já vem classificada.
+7. Bootstrap do backlog (Task 9, opcional): rodar `ensino_extrair.py` na pasta do Dropbox, revisar o CSV, `ensino_aplicar.py` — semeia as regras do passado de uma vez.
 
 ---
 
@@ -666,7 +965,10 @@ git commit -m "docs: Inc 2 — vocabulário (origem=regra), contraparte, associa
 - §7 app (contraparte visível via descrição/edição, descrição editável, sub combobox, rótulo Categoria, larguras) → Task 6. ✓
 - §8 migração 0002 → Task 1. ✓
 - §9 testes → cada task tem os seus (contraparte, validar, db, index, app). ✓
-- §10 fora de escopo (retroativo, painel de regras, Gemini) → não implementados, corretamente. ✓
+- §12 modo ensino (teach-command Telegram dry-run; lote pelo Dropbox agrupando por contraparte) → Tasks 8 e 9. ✓
+- §10 fora de escopo (painel de regras, outros sinais, Gemini) → não implementados, corretamente. O "retroativo" agora é coberto pelo §12/Task 9. ✓
+
+**Consistência da normalização:** `tools/contraparte.py` (Task 9) espelha `worker/contraparte.js` (Task 2) — mesmos casos de teste dos dois lados; se a normalização divergir, o lookup do worker não casa com as regras semeadas em lote. Verificar paridade ao implementar.
 
 **Placeholders:** nenhum passo com TBD/vago; todo código escrito. Passos de rede (aplicar migração, deploy) e verificação visual estão explícitos por serem inerentemente com-rede/olho, não placeholders de lógica.
 

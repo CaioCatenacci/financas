@@ -29,6 +29,7 @@ faz o classificador acertar sozinho a partir da segunda vez.
 |---|---|
 | Chave de aprendizado | **Chave Pix/CPF quando o comprovante traz; senão o nome normalizado.** |
 | Aplicação na captura | **Auto-aplica** a categoria aprendida (alta confiança), sem depender do chute do modelo; o Caio ainda pode corrigir no app. |
+| Modo ensino (bootstrap) | **Ambos** os canais, como parte do Inc 2: teach-command no Telegram (dry-run, sem criar transação) + tool de lote que varre o Dropbox e agrupa por contraparte única. Ver §12. |
 
 ## 3. Modelo de dados
 
@@ -134,9 +135,10 @@ Aplicada no Neon no checkpoint de deploy. Idempotente onde der (`if not exists`)
 
 ## 10. Fora de escopo / diferido
 
-- **Retroativo:** a transação da Viviane já corrigida **não** tem contraparte guardada
-  (capturada antes do Inc 2), então não semeia regra sozinha. A regra nasce na **próxima**
-  captura com contraparte + 1 correção. (Bootstrap manual das antigas fica pra depois.)
+- **Retroativo (resolvido pelo §12):** a transação da Viviane já corrigida não tem
+  contraparte guardada. Em vez de bootstrap manual, o **modo ensino (§12)** semeia as
+  regras a partir dos comprovantes guardados no Dropbox — ensina o passado sem esperar
+  novas capturas.
 - Painel de "regras aprendidas" (ver/editar/remover associações) — nice-to-have futuro.
 - Aprendizado por outros sinais além da contraparte (valor recorrente, descrição) — depois.
 - **Gemini não estar vencendo** as leituras (hoje o Claude carrega tudo): investigação
@@ -149,3 +151,35 @@ Aplicada no Neon no checkpoint de deploy. Idempotente onde der (`if not exists`)
 - **Auto-aplicar** pode propagar um erro se a 1ª correção foi equivocada; mitigado porque
   o Caio revê no app e uma nova correção atualiza a regra (`upsert`).
 - Comprovantes sem chave nem nome legível não aprendem — aceitável (raro).
+
+## 12. Modo ensino (bootstrap do classificador) — parte do Inc 2
+
+Objetivo: ensinar as associações **sem esperar novos gastos**, aproveitando que o Caio
+guarda quase todos os comprovantes. Dois canais, ambos escrevem em `associacoes`:
+
+### 12a. Teach-command no Telegram (incremental)
+- O Caio manda um comprovante **com legenda de comando**:
+  `/aprender <Categoria> > <Subcategoria>` (o `>` separa; sub opcional).
+- O bot **extrai a contraparte** (mesmo pipeline), valida a Categoria contra as categorias
+  reais, e faz `upsert` em `associacoes` — **dry-run: NÃO cria transação** (evita duplicar
+  com o histórico importado). Responde: `✓ aprendido: <contraparte> → Categoria › Sub (n=N)`.
+- Requer `parseUpdate` capturar `message.caption`; um ramo "teach" antes do fluxo normal.
+
+### 12b. Lote pelo Dropbox (ensina o passado de uma vez)
+Dois passos (padrão dos tools, com relatório — como o `import_planilha`):
+1. `tools/ensino_extrair.py <pasta>`: varre os comprovantes do Dropbox, extrai a contraparte
+   de cada um (Gemini), **agrupa por contraparte única** (chave normalizada), anexa o palpite
+   de categoria do modelo, e escreve `contrapartes.csv` (uma linha por contraparte:
+   chave, tipo, nome, n_ocorrencias, sugestao_macro, sugestao_sub).
+2. O Caio **revê/edita** o CSV (confirma a categoria de cada contraparte — uma vez por pessoa).
+3. `tools/ensino_aplicar.py contrapartes.csv`: `upsert` de todas as associações confirmadas.
+- Assim o Caio rotula ~contrapartes únicas (poucas dezenas), não milhares de comprovantes.
+- Reaproveita `contraparte.js`/normalização (via port em Python ou chamando a mesma lógica);
+  a normalização de chave/nome tem de **casar** com a do worker pra o lookup bater.
+
+### Notas
+- Ambos são **aditivos** ao núcleo do Inc 2 (dependem de contraparte + `associacoes`); entram
+  como tasks finais do plano.
+- O lote custa chamadas Gemini (1 por comprovante) — barato com `gemini-flash-latest`.
+- Segurança: os CSVs de contraparte contêm nome/chave de terceiros → `contrapartes*.csv`
+  entra no `.gitignore` (o `*.csv` já está coberto).
