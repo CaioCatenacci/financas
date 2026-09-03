@@ -1,4 +1,5 @@
 import { centsToNumeric } from "./money.js";
+import { derivarChave } from "./contraparte.js";
 
 export function criarDb(sql) {
   return {
@@ -19,12 +20,14 @@ export function criarDb(sql) {
       const rows = await sql`
         insert into transacoes
           (data, natureza, esfera, valor_total, valor_reembolso, macro, sub, descricao,
-           pessoa, fonte, origem_categoria, extraido_por, confianca, documento_id)
+           pessoa, fonte, origem_categoria, extraido_por, confianca, documento_id,
+           contraparte_nome, contraparte_chave)
         values
           (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
            ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.macro}, ${t.sub}, ${t.descricao},
            ${t.pessoa ?? null}, ${t.fonte}, ${t.origem_categoria}, ${t.extraido_por ?? null},
-           ${t.confianca ?? null}, ${t.documento_id ?? null})
+           ${t.confianca ?? null}, ${t.documento_id ?? null},
+           ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null})
         returning id`;
       return { id: rows[0].id };
     },
@@ -59,6 +62,7 @@ export function criarDb(sql) {
       const macro = c.macro ?? t.macro;
       const sub = c.sub === undefined ? t.sub : (c.sub || null);
       const pessoa = c.pessoa === undefined ? t.pessoa : (c.pessoa || null);
+      const descricao = c.descricao === undefined ? t.descricao : (c.descricao || null);
       const natureza = c.natureza ?? t.natureza;
       const esfera = c.esfera ?? t.esfera;
       const valor_total = c.valorCents != null ? centsToNumeric(c.valorCents) : t.valor_total;
@@ -67,14 +71,33 @@ export function criarDb(sql) {
       await sql`
         update transacoes set
           data = ${data}, macro = ${macro}, sub = ${sub}, pessoa = ${pessoa},
-          natureza = ${natureza}, esfera = ${esfera},
+          descricao = ${descricao}, natureza = ${natureza}, esfera = ${esfera},
           valor_total = ${valor_total}, valor_reembolso = ${valor_reembolso},
           origem_categoria = 'manual'
         where id = ${id}`;
+      // aprende: correção de categoria vira regra pra aquela contraparte
+      if (c.macro !== undefined || c.sub !== undefined) {
+        const d = derivarChave({ contraparte_nome: t.contraparte_nome, contraparte_chave: t.contraparte_chave });
+        if (d) await this.upsertAssociacao({ chave: d.chave, tipo: d.tipo, macro, sub });
+      }
     },
 
     async apagarTransacao(id) {
       await sql`delete from transacoes where id = ${id}`;
+    },
+
+    async buscarAssociacao(chave, tipo) {
+      const rows = await sql`select * from associacoes where chave = ${chave} and tipo_chave = ${tipo} limit 1`;
+      return rows[0] ?? null;
+    },
+
+    async upsertAssociacao({ chave, tipo, macro, sub }) {
+      await sql`
+        insert into associacoes (chave, tipo_chave, macro, sub, n, atualizado_em)
+        values (${chave}, ${tipo}, ${macro}, ${sub ?? null}, 1, now())
+        on conflict (chave, tipo_chave) do update
+          set macro = excluded.macro, sub = excluded.sub,
+              n = associacoes.n + 1, atualizado_em = now()`;
     },
 
     async resumoPorCategoria(de, ate) {
