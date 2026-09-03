@@ -23,6 +23,13 @@ create table documentos (
   recebido_em      timestamptz not null default now()
 );
 
+-- Inc 2.5: pessoas gerenciáveis (dropdown fixo, editável na tela)
+create table pessoas (
+  id    uuid primary key default gen_random_uuid(),
+  nome  text not null unique,
+  ativa boolean not null default true
+);
+
 create table transacoes (
   id               uuid primary key default gen_random_uuid(),
   data             date not null,
@@ -42,6 +49,7 @@ create table transacoes (
   documento_id     uuid references documentos(id),
   contraparte_nome  text,                     -- destinatário/pagador lido do comprovante (Inc 2)
   contraparte_chave text,                     -- chave Pix / CPF normalizável (Inc 2)
+  pessoa_id        uuid references pessoas(id), -- quem (Lucca/Manuela/...) — Inc 2.5
   criado_em        timestamptz not null default now()
 );
 
