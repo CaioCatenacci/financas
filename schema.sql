@@ -36,13 +36,26 @@ create table transacoes (
   descricao        text,
   pessoa           text,
   fonte            text not null check (fonte in ('imagem','manual','extrato','fatura','importacao')),
-  origem_categoria text not null default 'modelo' check (origem_categoria in ('modelo','manual')),
+  origem_categoria text not null default 'modelo' check (origem_categoria in ('modelo','manual','regra')),
   extraido_por     text check (extraido_por in ('gemini','claude')),
   confianca        numeric(4,3),
   documento_id     uuid references documentos(id),
+  contraparte_nome  text,                     -- destinatário/pagador lido do comprovante (Inc 2)
+  contraparte_chave text,                     -- chave Pix / CPF normalizável (Inc 2)
   criado_em        timestamptz not null default now()
 );
 
 create index idx_transacoes_data on transacoes (data);
 create index idx_transacoes_macro on transacoes (macro);
 create index idx_transacoes_fonte on transacoes (fonte);
+
+-- Inc 2: conhecimento aprendido (contraparte → categoria), alimentado pelas correções
+create table associacoes (
+  chave         text not null,
+  tipo_chave    text not null check (tipo_chave in ('pix_cpf','nome')),
+  macro         text not null,
+  sub           text,
+  n             integer not null default 1,
+  atualizado_em timestamptz not null default now(),
+  primary key (chave, tipo_chave)
+);
