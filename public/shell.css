@@ -123,6 +123,9 @@ select:focus,input:focus{outline:2px solid var(--accent);outline-offset:1px}
 .tip{position:fixed;pointer-events:none;background:var(--ink);color:var(--ground);font-size:12px;
   font-family:var(--mono);padding:6px 9px;border-radius:8px;opacity:0;transition:opacity .1s;z-index:50;white-space:nowrap}
 svg{display:block;overflow:visible}
+/* rede de segurança: gráficos responsivos nunca vazam pro card de baixo */
+#evo,#waterfall{overflow:hidden}
+#evo svg,#waterfall svg{width:100%;height:auto}
 .axis{fill:var(--dim);font-size:11px;font-family:var(--mono)}
 .grid-l{stroke:var(--line-soft);stroke-width:1}
 

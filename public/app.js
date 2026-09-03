@@ -122,9 +122,12 @@ if (typeof document !== "undefined") {
     const W = 560, H = 230, pl = 8, pr = 8, pt = 14, pb = 26, iw = W - pl - pr, ih = H - pt - pb;
     const el = $("#evo");
     if (!dados.length) { el.innerHTML = `<p class="vazio">sem dados no período</p>`; return; }
-    const max = Math.max(1, ...dados.map(d => Math.max(d.receita, d.despesa))) * 1.1;
+    // domínio inclui o saldo negativo (senão a barra de saldo é desenhada fora do viewBox
+    // quando a receita é 0 e vaza do card via svg{overflow}). hi = topo, lo = fundo (≤ 0).
+    const hi = Math.max(1, ...dados.map(d => Math.max(d.receita, d.despesa))) * 1.1;
+    const lo = Math.min(0, ...dados.map(d => d.saldo)) * 1.1;
     const n = dados.length;
-    const X = i => n === 1 ? pl + iw / 2 : pl + iw * i / (n - 1), Y = v => pt + ih * (1 - v / max);
+    const X = i => n === 1 ? pl + iw / 2 : pl + iw * i / (n - 1), Y = v => pt + ih * (hi - v) / (hi - lo);
     const path = key => dados.map((d, i) => (i ? "L" : "M") + X(i).toFixed(1) + "," + Y(d[key]).toFixed(1)).join(" ");
     const area = key => path(key) + ` L${X(n - 1).toFixed(1)},${pt + ih} L${X(0).toFixed(1)},${pt + ih} Z`;
     let g = "";
@@ -191,7 +194,11 @@ if (typeof document !== "undefined") {
     const steps = construirWaterfall(receita, cats);
     const W = 560, H = 240, pl = 8, pr = 8, pb = 44, iw = W - pl - pr, ih = H - 14 - pb;
     const el = $("#waterfall");
-    const max = Math.max(1, ...steps.map(s => s.hi)) * 1.05, Y = v => 14 + ih * (1 - v / max);
+    // domínio [lo, hi] inclui o piso negativo (quando a despesa supera a receita, o
+    // saldo/parciais ficam < 0); sem isso as barras são calculadas fora do viewBox.
+    const hi = Math.max(1, ...steps.map(s => s.hi)) * 1.05;
+    const lo = Math.min(0, ...steps.map(s => s.lo)) * 1.05;
+    const Y = v => 14 + ih * (hi - v) / (hi - lo);
     const gap = iw / steps.length, bw = gap * 0.6;
     let bars = "", labels = "", conn = "";
     steps.forEach((s, i) => {
