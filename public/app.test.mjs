@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsPorCategoria,
+  agruparPorPessoa,
 } from "./app.js";
 
 test("agruparMensal soma receita/despesa e saldo por mês", () => {
@@ -49,6 +50,20 @@ test("construirWaterfall monta receita → despesas → saldo com lo/hi cumulati
     { nm: "A", tipo: "despesa", lo: 400, hi: 1000 },
     { nm: "B", tipo: "despesa", lo: 100, hi: 400 },
     { nm: "Saldo", tipo: "saldo", lo: 0, hi: 100 },
+  ]);
+});
+
+test("agruparPorPessoa dobra receita/despesa da mesma pessoa numa linha, ordenado por despesa desc", () => {
+  const rows = [
+    { pessoa: "Caio", natureza: "despesa", total: "100.00" },
+    { pessoa: "Caio", natureza: "receita", total: "300.00" },
+    { pessoa: "Ana", natureza: "despesa", total: "500.00" },
+    { pessoa: "—", natureza: "despesa", total: "20.00" }, // sem pessoa vinculada: rótulo vem pronto do backend
+  ];
+  assert.deepEqual(agruparPorPessoa(rows), [
+    { pessoa: "Ana", receita: 0, despesa: 500, saldo: -500 },
+    { pessoa: "Caio", receita: 300, despesa: 100, saldo: 200 },
+    { pessoa: "—", receita: 0, despesa: 20, saldo: -20 },
   ]);
 });
 

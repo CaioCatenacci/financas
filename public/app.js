@@ -11,6 +11,21 @@ export function agruparMensal(rows) {
   return [...mapa.values()].sort((a, b) => a.mes.localeCompare(b.mes));
 }
 
+// resumo.porPessoa vem do backend como linhas {pessoa, natureza, total} (uma por pessoa×natureza)
+// dobra em uma linha por pessoa. Mesmo formato de saída que agruparMensal usa (receita/despesa/saldo).
+// Ordena por despesa desc porque é um corte de gasto (quem gastou mais primeiro).
+export function agruparPorPessoa(rows) {
+  const mapa = new Map();
+  for (const r of rows) {
+    if (!mapa.has(r.pessoa)) mapa.set(r.pessoa, { pessoa: r.pessoa, receita: 0, despesa: 0, saldo: 0 });
+    const o = mapa.get(r.pessoa);
+    const v = parseFloat(r.total);
+    if (r.natureza === "receita") o.receita += v; else o.despesa += v;
+    o.saldo = o.receita - o.despesa;
+  }
+  return [...mapa.values()].sort((a, b) => b.despesa - a.despesa);
+}
+
 export const centavosBR = numericStr => {
   const cents = Math.round(parseFloat(numericStr) * 100);
   const reais = Math.floor(Math.abs(cents) / 100).toLocaleString("pt-BR");
@@ -73,7 +88,7 @@ if (typeof document !== "undefined") {
   const MES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
   const mesLabel = ym => MES[+ym.slice(5, 7) - 1];
 
-  const estado = { periodo: "12m", resumo: null, transacoes: [], cores: {} };
+  const estado = { periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [] };
 
   // API
   const apiGet = p => fetch(p).then(r => { if (!r.ok) throw new Error(`GET ${p} ${r.status}`); return r.json(); });
@@ -225,6 +240,30 @@ if (typeof document !== "undefined") {
     });
   }
 
+  // ----- gasto por pessoa -----
+  function drawPessoa() {
+    const rows = agruparPorPessoa(estado.resumo.porPessoa || []);
+    const el = $("#pessoa");
+    if (!rows.length) { el.innerHTML = `<p class="vazio">sem despesas no período</p>`; return; }
+    const max = Math.max(1, ...rows.map(r => r.despesa)) * 1.06;
+    const cores = construirCores(rows.map(r => r.pessoa));
+    el.innerHTML = rows.map((r, i) => {
+      const w = (100 * r.despesa / max).toFixed(1);
+      return `<div class="pprow" data-i="${i}">
+        <span class="pplabel">${esc(r.pessoa)}</span>
+        <svg class="pptrack" viewBox="0 0 100 14" preserveAspectRatio="none" role="img" aria-label="${esc(r.pessoa)}">
+          <rect x="0" y="2" width="${w}" height="10" rx="3" style="fill:var(${cores[r.pessoa]})"/>
+        </svg>
+        <span class="ppval">${BRL(r.despesa)}</span>
+      </div>`;
+    }).join("");
+    el.querySelectorAll(".pprow").forEach(row => {
+      const r = rows[+row.dataset.i];
+      row.addEventListener("mousemove", e => showTip(e, `<b>${esc(r.pessoa)}</b><br>Despesa ${BRL(r.despesa)}<br>Receita ${BRL(r.receita)}<br>Saldo ${BRL(r.saldo)}`));
+      row.addEventListener("mouseleave", hideTip);
+    });
+  }
+
   // ----- tabela de lançamentos -----
   function fmtData(d) { const s = String(d).slice(0, 10); const [a, m, dia] = s.split("-"); return `${dia}/${m}/${a}`; }
   function drawRows() {
@@ -235,11 +274,14 @@ if (typeof document !== "undefined") {
       const subs = (estado.subs && estado.subs[t.macro]) || [];
       const dlId = `subs-${i}`;
       const dlOpts = subs.map(s => `<option value="${esc(s)}"></option>`).join("");
+      const pessoaOpts = `<option value="">—</option>` +
+        estado.pessoas.map(p => `<option value="${esc(p.id)}" ${p.id === t.pessoa_id ? "selected" : ""}>${esc(p.nome)}</option>`).join("");
       return `<tr data-id="${t.id}" data-i="${i}">
         <td class="dt">${fmtData(t.data)}</td>
         <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—"></td>
         <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.macro)})"></i><select class="edmacro">${opts}</select></span></td>
         <td><input class="edsub" list="${dlId}" value="${esc(t.sub || "")}" placeholder="—"><datalist id="${dlId}">${dlOpts}</datalist></td>
+        <td><select class="edpessoa">${pessoaOpts}</select></td>
         <td class="val" style="color:${rec ? "var(--receita)" : "var(--ink)"}">${rec ? "+" : ""}R$ ${centavosBR(t.valor_total)}</td>
         <td class="val" style="color:var(--mut)">${+t.valor_reembolso ? "R$ " + centavosBR(t.valor_reembolso) : "—"}</td>
         <td><button class="del" title="Apagar">✕</button></td>
@@ -252,14 +294,14 @@ if (typeof document !== "undefined") {
     try {
       const { de, ate } = periodoRange(estado.periodo);
       const qs = `?de=${de}&ate=${ate}`;
-      const [resumo, transacoes, categorias] = await Promise.all([
-        apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/categorias"),
+      const [resumo, transacoes, categorias, pessoas] = await Promise.all([
+        apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/categorias"), apiGet("/api/pessoas"),
       ]);
-      estado.resumo = resumo; estado.transacoes = transacoes;
+      estado.resumo = resumo; estado.transacoes = transacoes; estado.pessoas = pessoas;
       estado.subs = subsPorCategoria(categorias);
       const macros = categorias.map(c => c.macro).concat(transacoes.map(t => t.macro));
       estado.cores = construirCores(macros);
-      drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawRows();
+      drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
@@ -297,6 +339,8 @@ if (typeof document !== "undefined") {
       }
       if (e.target.classList.contains("edsub")) await apiPatch(`/api/transacoes/${id}`, { sub: e.target.value });
       if (e.target.classList.contains("eddesc")) await apiPatch(`/api/transacoes/${id}`, { descricao: e.target.value });
+      // select vazio ("—") vira null: transação sem pessoa vinculada
+      if (e.target.classList.contains("edpessoa")) await apiPatch(`/api/transacoes/${id}`, { pessoa_id: e.target.value || null });
     } catch (err) { alert("Falha ao salvar: " + err.message); }
   });
   $("#rows").addEventListener("click", async e => {
@@ -307,6 +351,6 @@ if (typeof document !== "undefined") {
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }
-  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); } }, 150); });
+  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); } }, 150); });
   carregar();
 }
