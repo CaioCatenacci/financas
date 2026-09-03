@@ -93,10 +93,27 @@ Resultado: o próximo Pix para Viviane entra como *Educação › Inglês Partic
 
 ## 7. App
 
-- Mostrar a **contraparte** na tabela de Lançamentos (hoje o `descricao` é fraco); ajuda
-  o Caio a reconhecer a transação e a confiar na regra.
-- A edição inline **já dispara** o aprendizado (via o PATCH do §5) — nenhuma tela nova
-  obrigatória nesta fatia. (Um painel "regras aprendidas" fica como *nice-to-have* futuro.)
+Melhorias na tabela de Lançamentos (entram junto neste incremento):
+
+- **Mostrar a contraparte** (hoje o `descricao` é fraco); ajuda a reconhecer a transação
+  e a confiar na regra aprendida.
+- **Descrição editável** — vira `<input>` inline com `PATCH descricao`. Requer que
+  `atualizarTransacao` (§5) e o handler PATCH passem a aceitar o campo `descricao`
+  (hoje não aceitam).
+- **Subcategoria = combobox aninhada à categoria** — `<input list=...>` + `<datalist>`
+  nativo, populado com as **subs daquela categoria** (autocompleta o que já existe e
+  ainda permite digitar uma nova). Ao trocar a categoria, a lista de subs é repopulada.
+  As subs por categoria saem do `/api/categorias` (já retorna `{macro, sub}`), agrupadas
+  no cliente.
+- **Renomear rótulo "Macro" → "Categoria"** na UI (cabeçalho e afins). **Decisão:** muda
+  só o rótulo; a coluna no banco continua `macro`/`sub` (renomear a coluna cascatearia em
+  schema/queries/extração/import sem ganho). O vocabulário fixo do CLAUDE.md segue
+  `macro`/`sub` internamente.
+- **Dimensionar a tabela** para não cortar texto — em especial a subcategoria (hoje
+  `.edsub` é fixo em 130px e trunca subs longas). Larguras flexíveis; célula de descrição
+  e de subcategoria com espaço adequado; valor/data seguem mono à direita sem quebra.
+- A edição inline **já dispara** o aprendizado (via o PATCH do §5). Um painel dedicado de
+  "regras aprendidas" fica como *nice-to-have* futuro.
 
 ## 8. Migração
 
@@ -106,10 +123,12 @@ Aplicada no Neon no checkpoint de deploy. Idempotente onde der (`if not exists`)
 
 ## 9. Testes
 
-- Puros (node): `normalizarChave`, `normalizarNome`, derivação de chave/tipo, e a
-  decisão de aplicar regra (dado uma associação + uma contraparte → categoria resultante).
+- Puros (node): `normalizarChave`, `normalizarNome`, derivação de chave/tipo, a decisão
+  de aplicar regra (associação + contraparte → categoria), e `subsPorCategoria(cats)`
+  (agrupa `/api/categorias` por macro → lista de subs, para o combobox).
 - `db.test`: `upsertAssociacao` (insert e incremento de `n`), `buscarAssociacao`
-  (prioridade pix_cpf > nome), `inserirTransacao` gravando contraparte.
+  (prioridade pix_cpf > nome), `inserirTransacao` gravando contraparte, `atualizarTransacao`
+  aceitando `descricao`.
 - `extrair`: o `normalizado` carrega contraparte/chave; regra aplicada sobrepõe o modelo.
 - Integração leve: PATCH de categoria gera associação; captura seguinte auto-aplica.
 
