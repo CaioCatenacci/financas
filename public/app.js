@@ -157,7 +157,9 @@ if (typeof document !== "undefined") {
     const n = dados.length;
     const X = i => n === 1 ? pl + iw / 2 : pl + iw * i / (n - 1), Y = v => pt + ih * (hi - v) / (hi - lo);
     const path = key => dados.map((d, i) => (i ? "L" : "M") + X(i).toFixed(1) + "," + Y(d[key]).toFixed(1)).join(" ");
-    const area = key => path(key) + ` L${X(n - 1).toFixed(1)},${pt + ih} L${X(0).toFixed(1)},${pt + ih} Z`;
+    // fecha a área na linha do zero (Y(0)), não no fundo do viewBox: com domínio [lo,hi]
+    // e lo<0, pt+ih passou a ser Y(lo), o que inflava o preenchimento até o piso negativo.
+    const area = key => path(key) + ` L${X(n - 1).toFixed(1)},${Y(0).toFixed(1)} L${X(0).toFixed(1)},${Y(0).toFixed(1)} Z`;
     let g = "";
     for (let k = 0; k <= 3; k++) { const y = pt + ih * k / 3; g += `<line class="grid-l" x1="${pl}" y1="${y}" x2="${W - pr}" y2="${y}"/>`; }
     let bars = "";
