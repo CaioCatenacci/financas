@@ -48,6 +48,11 @@ export function periodoRange(preset, hoje = new Date()) {
   const iso = (yy, mm, dd) => `${yy}-${pad(mm + 1)}-${pad(dd)}`;
   const lastDay = (yy, mm) => new Date(Date.UTC(yy, mm + 1, 0)).getUTCDate();
   if (preset === "mes") return { de: iso(y, m, 1), ate: iso(y, m, lastDay(y, m)) };
+  if (preset === "mespassado") {
+    // mês anterior; Date resolve a virada de ano (janeiro → dezembro do ano passado)
+    const d = new Date(Date.UTC(y, m - 1, 1)), yy = d.getUTCFullYear(), mm = d.getUTCMonth();
+    return { de: iso(yy, mm, 1), ate: iso(yy, mm, lastDay(yy, mm)) };
+  }
   if (preset === "ano") return { de: `${y}-01-01`, ate: `${y}-12-31` };
   if (preset === "12m") {
     const s = new Date(Date.UTC(y, m - 11, 1));

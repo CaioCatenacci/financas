@@ -41,6 +41,12 @@ test("periodoRange devolve intervalos ISO por preset", () => {
   assert.deepEqual(periodoRange("mes", h), { de: "2026-08-01", ate: "2026-08-31" });
   assert.deepEqual(periodoRange("12m", h), { de: "2025-09-01", ate: "2026-08-31" });
   assert.deepEqual(periodoRange("tudo", h), { de: "1900-01-01", ate: "2999-12-31" });
+  assert.deepEqual(periodoRange("mespassado", h), { de: "2026-07-01", ate: "2026-07-31" });
+});
+
+test("periodoRange mespassado vira o ano em janeiro (jan → dez do ano anterior)", () => {
+  const jan = new Date(Date.UTC(2026, 0, 10)); // 2026-01-10
+  assert.deepEqual(periodoRange("mespassado", jan), { de: "2025-12-01", ate: "2025-12-31" });
 });
 
 test("construirWaterfall monta receita → despesas → saldo com lo/hi cumulativos", () => {
