@@ -117,8 +117,8 @@ Telegram recebe só botão Apagar (foto que não é comprovante).
 Separação limpa: bot foca em velocidade de captura;
 app foca em precisão/aprendizado.
 
-Essa divisão também prepara bem pro Incremento 2 (classificador que aprende):
-as correções vão morar no app, que passará a treinar o modelo.
+Essa divisão também preparou bem pro Incremento 2 (classificador que aprende):
+as correções moram no app, que agora treina o modelo a partir de cada edição.
 
 ---
 
@@ -191,7 +191,6 @@ que é a mais recente e estável.
 | O que | Por que não | Quando |
 |---|---|---|
 | Extrato + fatura | PDF parsing é complexo; v1 é imagem. | Incremento 3 |
-| Classificador que aprende | Sem histórico de correções, não há o que treinar. | Incremento 2 (usa histórico de edições do app) |
 | Conciliação | Depende de Incremento 3 (extrato/fatura). | Incremento 3 |
 | Metas / planejamento | Dados não existem ainda. | Incremento 4 |
 | PJ em cascata | Estrutura simples pro Caio pessoa física primeiro. | Incremento 5 |
