@@ -81,6 +81,26 @@ export function subsPorCategoria(cats) {
   return g;
 }
 
+// remove acentos p/ busca acento-insensível ("sao paulo" acha "São Paulo").
+const normalizarBusca = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+// filtra client-side; campo vazio/undefined = não filtra naquela dimensão.
+export function filtrarTransacoes(rows, filtro = {}) {
+  const { categoria, pessoa, origem, texto } = filtro;
+  const txt = texto && texto.trim() ? normalizarBusca(texto.trim()) : "";
+  return rows.filter(t => {
+    if (categoria && t.macro !== categoria) return false;
+    if (pessoa === "__sem__") { if (t.pessoa_id) return false; }
+    else if (pessoa && t.pessoa !== pessoa) return false;
+    if (origem && t.origem_categoria !== origem) return false;
+    if (txt) {
+      const alvo = normalizarBusca((t.descricao ?? "") + " " + (t.contraparte_nome ?? ""));
+      if (!alvo.includes(txt)) return false;
+    }
+    return true;
+  });
+}
+
 // ---------- app (só no browser) ----------
 if (typeof document !== "undefined") {
   const $ = (s, r = document) => r.querySelector(s);
@@ -93,7 +113,10 @@ if (typeof document !== "undefined") {
   const MES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
   const mesLabel = ym => MES[+ym.slice(5, 7) - 1];
 
-  const estado = { periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [] };
+  const estado = {
+    periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
+    filtro: { categoria: "", pessoa: "", origem: "", texto: "" },
+  };
 
   // API
   const apiGet = p => fetch(p).then(r => { if (!r.ok) throw new Error(`GET ${p} ${r.status}`); return r.json(); });
@@ -278,9 +301,31 @@ if (typeof document !== "undefined") {
 
   // ----- tabela de lançamentos -----
   function fmtData(d) { const s = String(d).slice(0, 10); const [a, m, dia] = s.split("-"); return `${dia}/${m}/${a}`; }
+
+  // opções de Categoria/Pessoa dependem dos dados carregados; repopula em carregar()
+  // preservando a seleção atual (o filtro não é resetado ao trocar de período).
+  function popularFiltros() {
+    const macros = [...new Set(Object.keys(estado.cores))].sort();
+    $("#fcategoria").innerHTML = `<option value="">Categoria</option>` +
+      macros.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+    $("#fpessoa").innerHTML = `<option value="">Pessoa</option><option value="__sem__">Sem pessoa</option>` +
+      estado.pessoas.map(p => `<option value="${esc(p.nome)}">${esc(p.nome)}</option>`).join("");
+    $("#fcategoria").value = estado.filtro.categoria;
+    $("#fpessoa").value = estado.filtro.pessoa;
+    $("#forigem").value = estado.filtro.origem;
+    $("#ftexto").value = estado.filtro.texto;
+  }
+
   function drawRows() {
     const macros = [...new Set(Object.keys(estado.cores))].sort();
-    $("#rows").innerHTML = estado.transacoes.map((t, i) => {
+    const linhas = filtrarTransacoes(estado.transacoes, estado.filtro);
+    const contador = $("#fcontador");
+    if (contador) contador.textContent = `${linhas.length} de ${estado.transacoes.length}`;
+    if (!linhas.length) {
+      $("#rows").innerHTML = `<tr><td colspan="8" class="vazio">nenhum lançamento com esses filtros</td></tr>`;
+      return;
+    }
+    $("#rows").innerHTML = linhas.map((t, i) => {
       const rec = t.natureza === "receita";
       const opts = macros.map(mm => `<option ${mm === t.macro ? "selected" : ""}>${esc(mm)}</option>`).join("");
       const subs = (estado.subs && estado.subs[t.macro]) || [];
@@ -313,6 +358,7 @@ if (typeof document !== "undefined") {
       estado.subs = subsPorCategoria(categorias);
       const macros = categorias.map(c => c.macro).concat(transacoes.map(t => t.macro));
       estado.cores = construirCores(macros);
+      popularFiltros();
       drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
@@ -334,6 +380,20 @@ if (typeof document !== "undefined") {
     const next = cur === "dark" ? "light" : cur === "light" ? "dark" : (matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark");
     document.documentElement.setAttribute("data-theme", next);
     try { localStorage.setItem("tema", next); } catch { /* ignora */ }
+  });
+  // toolbar de filtro: client-side, nunca refaz fetch — só recalcula drawRows()
+  $("#filtros").addEventListener("change", e => {
+    if (e.target.id === "fcategoria") estado.filtro.categoria = e.target.value;
+    else if (e.target.id === "fpessoa") estado.filtro.pessoa = e.target.value;
+    else if (e.target.id === "forigem") estado.filtro.origem = e.target.value;
+    else return;
+    drawRows();
+  });
+  $("#ftexto").addEventListener("input", e => { estado.filtro.texto = e.target.value; drawRows(); });
+  $("#flimpar").addEventListener("click", () => {
+    estado.filtro = { categoria: "", pessoa: "", origem: "", texto: "" };
+    $("#fcategoria").value = ""; $("#fpessoa").value = ""; $("#forigem").value = ""; $("#ftexto").value = "";
+    drawRows();
   });
   // tabela: editar/apagar
   $("#rows").addEventListener("change", async e => {

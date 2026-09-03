@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsPorCategoria,
-  agruparPorPessoa,
+  agruparPorPessoa, filtrarTransacoes,
 } from "./app.js";
 
 test("agruparMensal soma receita/despesa e saldo por mês", () => {
@@ -81,4 +81,62 @@ test("subsPorCategoria agrupa subs por categoria, ignorando nulos e duplicados",
   const g = subsPorCategoria(cats);
   assert.deepEqual(g["Casa"], ["Luz", "Água"]);
   assert.deepEqual(g["Saúde"], ["Plano"]);
+});
+
+// ---------- filtrarTransacoes (Task A8: toolbar de filtro em Lançamentos) ----------
+
+// fixture com as 4 dimensões variando, pra cada teste isolar uma delas.
+const T = [
+  { id: 1, macro: "Casa", pessoa: "Caio", pessoa_id: 1, origem_categoria: "modelo", descricao: "Supermercado", contraparte_nome: "Mercado Extra Ltda" },
+  { id: 2, macro: "Lazer", pessoa: "Ana", pessoa_id: 2, origem_categoria: "manual", descricao: "Cinema", contraparte_nome: null },
+  { id: 3, macro: "Casa", pessoa: null, pessoa_id: null, origem_categoria: "regra", descricao: "Conta de luz", contraparte_nome: "Cia Energia" },
+  { id: 4, macro: "Saúde", pessoa: "Caio", pessoa_id: 1, origem_categoria: "modelo", descricao: "Remédio", contraparte_nome: "Drogaria São Paulo" },
+];
+
+test("filtrarTransacoes sem filtro (objeto vazio ou omitido) devolve tudo", () => {
+  assert.deepEqual(filtrarTransacoes(T, {}), T);
+  assert.deepEqual(filtrarTransacoes(T), T);
+});
+
+test("filtrarTransacoes por categoria casa t.macro exatamente; vazio ignora a dimensão", () => {
+  assert.deepEqual(filtrarTransacoes(T, { categoria: "Casa" }).map(t => t.id), [1, 3]);
+  assert.deepEqual(filtrarTransacoes(T, { categoria: "" }), T);
+});
+
+test("filtrarTransacoes por pessoa casa o nome; vazio ignora a dimensão", () => {
+  assert.deepEqual(filtrarTransacoes(T, { pessoa: "Caio" }).map(t => t.id), [1, 4]);
+  assert.deepEqual(filtrarTransacoes(T, { pessoa: "" }), T);
+});
+
+test("filtrarTransacoes pessoa '__sem__' pega só linhas sem pessoa_id", () => {
+  assert.deepEqual(filtrarTransacoes(T, { pessoa: "__sem__" }).map(t => t.id), [3]);
+});
+
+test("filtrarTransacoes por origem casa origem_categoria; vazio ignora a dimensão", () => {
+  assert.deepEqual(filtrarTransacoes(T, { origem: "regra" }).map(t => t.id), [3]);
+  assert.deepEqual(filtrarTransacoes(T, { origem: "" }), T);
+});
+
+test("filtrarTransacoes por texto casa substring case-insensitive em descricao ou contraparte_nome", () => {
+  // bate na descrição
+  assert.deepEqual(filtrarTransacoes(T, { texto: "remédio" }).map(t => t.id), [4]);
+  // bate na contraparte, com case diferente
+  assert.deepEqual(filtrarTransacoes(T, { texto: "EXTRA" }).map(t => t.id), [1]);
+  // contraparte_nome null não deve quebrar (trata como "")
+  assert.deepEqual(filtrarTransacoes(T, { texto: "cinema" }).map(t => t.id), [2]);
+});
+
+test("filtrarTransacoes texto vazio ou só espaços ignora a dimensão", () => {
+  assert.deepEqual(filtrarTransacoes(T, { texto: "" }), T);
+  assert.deepEqual(filtrarTransacoes(T, { texto: "   " }), T);
+});
+
+test("filtrarTransacoes texto é acento-insensível", () => {
+  // "sao paulo" sem acento deve casar com "Drogaria São Paulo"
+  assert.deepEqual(filtrarTransacoes(T, { texto: "sao paulo" }).map(t => t.id), [4]);
+});
+
+test("filtrarTransacoes combina dimensões por E (categoria + pessoa)", () => {
+  assert.deepEqual(filtrarTransacoes(T, { categoria: "Casa", pessoa: "Caio" }).map(t => t.id), [1]);
+  assert.deepEqual(filtrarTransacoes(T, { categoria: "Casa", pessoa: "__sem__" }).map(t => t.id), [3]);
 });

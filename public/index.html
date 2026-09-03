@@ -75,6 +75,22 @@
   </section>
 
   <section id="lanc" class="hidden">
+    <div class="filtros" id="filtros">
+      <select id="fcategoria" aria-label="Filtrar por categoria"><option value="">Categoria</option></select>
+      <select id="fpessoa" aria-label="Filtrar por pessoa">
+        <option value="">Pessoa</option>
+        <option value="__sem__">Sem pessoa</option>
+      </select>
+      <select id="forigem" aria-label="Filtrar por origem">
+        <option value="">Origem</option>
+        <option value="modelo">modelo</option>
+        <option value="manual">manual</option>
+        <option value="regra">regra</option>
+      </select>
+      <input id="ftexto" type="text" placeholder="Buscar descrição/favorecido" aria-label="Buscar descrição ou favorecido">
+      <button id="flimpar" class="chip" type="button">Limpar</button>
+      <span class="fcontador" id="fcontador"></span>
+    </div>
     <div class="tblwrap">
       <table>
         <thead><tr>
