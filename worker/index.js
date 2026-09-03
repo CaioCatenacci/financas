@@ -6,6 +6,8 @@ import { subirDropbox } from "./dropbox.js";
 import { caminhoDropbox, nomeArquivo } from "./dropbox_nome.js";
 import { centsToBR } from "./money.js";
 import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
+import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
+import { parseAprender } from "./teach.js";
 
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
@@ -26,8 +28,25 @@ export async function tratarUpdate(update, env, deps) {
   if (ev.tipo !== "imagem") return;
 
   const { bytes, mime } = await deps.baixar(ev.fileId);
-  const hash = await deps.hashBytes(bytes);
 
+  // modo ensino: foto com legenda "/aprender ..." → só aprende, não cria transação (ignora dedup)
+  const ap = parseAprender(ev.caption);
+  if (ap) {
+    const cats = await deps.db.listarCategorias();
+    const macros = [...new Set(cats.map((c) => c.macro))];
+    if (!macros.includes(ap.macro)) { await deps.responderImpl(ev.chatId, `Categoria "${ap.macro}" não existe. Categorias: ${macros.join(", ")}`, env); return; }
+    const ex = await deps.extrairImpl(bytes, mime, cats);
+    if (!ex.ok) { await deps.responderImpl(ev.chatId, "Não consegui ler a contraparte desse comprovante.", env); return; }
+    const n = ex.normalizado;
+    const d = derivarChave({ contraparte_nome: n.contraparte_nome, contraparte_chave: n.contraparte_chave });
+    if (!d) { await deps.responderImpl(ev.chatId, "Comprovante sem contraparte reconhecível — não dá pra aprender.", env); return; }
+    await deps.db.upsertAssociacao({ chave: d.chave, tipo: d.tipo, macro: ap.macro, sub: ap.sub });
+    const cat = ap.sub ? `${ap.macro} › ${ap.sub}` : ap.macro;
+    await deps.responderImpl(ev.chatId, `✓ aprendido: ${n.contraparte_nome ?? d.chave} → ${cat}`, env);
+    return;
+  }
+
+  const hash = await deps.hashBytes(bytes);
   const jaTem = await deps.db.documentoPorHash(hash);
   if (jaTem) { await deps.responderImpl(ev.chatId, "Esse comprovante eu já registrei antes.", env); return; }
 
@@ -36,6 +55,11 @@ export async function tratarUpdate(update, env, deps) {
   if (!ex.ok) { console.error("extração falhou:", (ex.erros || []).join(" | ")); await deps.responderImpl(ev.chatId, "Não consegui ler esse comprovante. Pode reenviar mais nítido?", env); return; }
 
   const n = ex.normalizado;
+  // aplica regra aprendida pela contraparte (pix/cpf primeiro, nome depois)
+  let origemCat = "modelo";
+  const ck = normalizarChave(n.contraparte_chave);
+  if (ck) { const r = await deps.db.buscarAssociacao(ck, "pix_cpf"); if (r) { n.macro = r.macro; n.sub = r.sub; origemCat = "regra"; } }
+  if (origemCat === "modelo") { const nm = normalizarNome(n.contraparte_nome); if (nm) { const r = await deps.db.buscarAssociacao(nm, "nome"); if (r) { n.macro = r.macro; n.sub = r.sub; origemCat = "regra"; } } }
   const ext = mime === "image/png" ? "png" : "jpg";
   const caminho = `${caminhoDropbox(n.dataISO)}/${nomeArquivo({ ...n, ext })}`;
   const dropboxPath = await deps.subir(env, caminho, bytes);
@@ -47,13 +71,15 @@ export async function tratarUpdate(update, env, deps) {
   const tx = await deps.db.inserirTransacao({
     dataISO: n.dataISO, natureza: n.natureza, esfera: "pessoal",
     valorCents: n.valorCents, reembolsoCents: 0, macro: n.macro, sub: n.sub,
-    descricao: n.descricao, pessoa: null, fonte: "imagem", origem_categoria: "modelo",
+    descricao: n.descricao, pessoa: null, fonte: "imagem", origem_categoria: origemCat,
     extraido_por: ex.extraido_por, confianca: ex.confianca, documento_id: doc.id,
+    contraparte_nome: n.contraparte_nome, contraparte_chave: n.contraparte_chave,
   });
 
   const cat = n.sub ? `${n.macro} › ${n.sub}` : n.macro;
+  const selo = origemCat === "regra" ? " ✓ aprendido" : "";
   const [a, m, d] = n.dataISO.split("-");
-  await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id);
+  await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat}${selo} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id);
 }
 
 async function handleTelegram(request, env) {

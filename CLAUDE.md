@@ -43,10 +43,41 @@ problema é "adicionar um componente", provavelmente é a resposta errada.
 | `natureza` | `despesa` \| `receita` | direção do fluxo |
 | `esfera` | `pessoal` \| `empresa` | (empresa é Incremento 5) |
 | `fonte` | `imagem` \| `manual` \| `extrato` \| `fatura` \| `importacao` | onde veio / como entrou |
-| `origem_categoria` | `modelo` \| `manual` | quem sugeriu a categoria |
+| `origem_categoria` | `modelo` \| `manual` \| `regra` | quem sugeriu a categoria |
 | `extraido_por` | `gemini` \| `claude` | qual modelo leu o comprovante |
 
 Valores são **minúsculos, sem espaço, sem acentuação**. Validação no Worker.
+
+**Nota:** a UI chama a coluna `macro` de "Categoria"; internamente, as colunas seguem
+como `macro` (nível 1) e `sub` (nível 2, opcional). Renomear a coluna cascatearia em
+schema/queries/extração/import sem ganho prático — a etiqueta de rótulo é só na UI.
+
+### Colunas novas (Incremento 2)
+
+| Coluna | Tabela | Descrição |
+|---|---|---|
+| `contraparte_nome` | `transacoes` | destinatário/pagador lido do comprovante |
+| `contraparte_chave` | `transacoes` | chave Pix/CPF normalizada (null se não houver) |
+
+Novidade: `origem_categoria = 'regra'` significa a categoria veio de uma associação
+aprendida (mapeamento contraparte → categoria confirmado manualmente em transações
+anteriores). A tabela `associacoes` guarda essas regras.
+
+### Tabela `associacoes` (Incremento 2)
+
+```sql
+create table associacoes (
+  chave       text not null,
+  tipo_chave  text not null check (tipo_chave in ('pix_cpf','nome')),
+  macro       text not null,
+  sub         text,
+  n           integer not null default 1,
+  atualizado_em timestamptz not null default now(),
+  primary key (chave, tipo_chave)
+);
+```
+
+Uma associação por (chave, tipo). Lookup na captura tenta `pix_cpf` primeiro, depois `nome`.
 
 ---
 
@@ -96,7 +127,7 @@ O CI (`.github/workflows/ci.yml`) roda os dois.
 |---|---|---|---|
 | 1 | **Captura + ver** | imagem → extrai → grava + Dropbox → app lista/resumo; importa histórico | implementação |
 | 1.5 | Lançamento manual | texto (`"15,50 padaria 29/08"`) via Claude, validado | *fast-follow* |
-| 2 | Classificador que aprende | app grava correções; sistema passa a acertar | Incremento 2 |
+| 2 | Classificador que aprende | app grava correções; sistema passa a acertar | implementado |
 | 3 | Extrato + fatura | PDF → parsing → transações; conciliação | Incremento 3 |
 | 4 | Planejamento | metas/realizado vs alvo | Incremento 4 |
 | 5 | Camada PJ | receita empresa → cascata → despesas casa | Incremento 5 |

@@ -84,3 +84,50 @@ test("resumoMesVsAnterior consulta despesa por macro nos dois últimos meses", a
   assert.match(sql.chamadas[0].text, /date_trunc\('month', data\)/i);
   assert.match(sql.chamadas[0].text, /natureza = 'despesa'/i);
 });
+
+test("inserirTransacao grava contraparte", async () => {
+  const sql = fakeSql([{ id: "t1" }]);
+  const db = criarDb(sql);
+  await db.inserirTransacao({
+    dataISO: "2026-08-28", natureza: "despesa", esfera: "pessoal", valorCents: 91600,
+    reembolsoCents: 0, macro: "Educação", sub: "Inglês Particular", descricao: "Pix",
+    pessoa: null, fonte: "imagem", origem_categoria: "regra", extraido_por: "claude",
+    confianca: 0.85, documento_id: "d1",
+    contraparte_nome: "VIVIANE FERRER BORGATO", contraparte_chave: "5519995783408",
+  });
+  assert.ok(sql.chamadas[0].values.includes("VIVIANE FERRER BORGATO"));
+  assert.ok(sql.chamadas[0].values.includes("5519995783408"));
+});
+
+test("buscarAssociacao consulta por chave e tipo", async () => {
+  const sql = fakeSql([{ chave: "5519995783408", tipo_chave: "pix_cpf", macro: "Educação", sub: "Inglês Particular" }]);
+  const db = criarDb(sql);
+  const r = await db.buscarAssociacao("5519995783408", "pix_cpf");
+  assert.equal(r.macro, "Educação");
+  assert.deepEqual(sql.chamadas[0].values, ["5519995783408", "pix_cpf"]);
+});
+
+test("upsertAssociacao insere e incrementa n", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.upsertAssociacao({ chave: "5519995783408", tipo: "pix_cpf", macro: "Educação", sub: "Inglês Particular" });
+  assert.match(sql.chamadas[0].text, /insert into associacoes/i);
+  assert.match(sql.chamadas[0].text, /on conflict/i);
+});
+
+test("atualizarTransacao aceita descricao e aprende associação quando muda categoria", async () => {
+  const existente = { id: "t1", data: "2026-08-28", macro: "Pessoal", sub: "Fatura",
+    valor_total: "916.00", valor_reembolso: "0.00", pessoa: null, descricao: "Pix",
+    natureza: "despesa", esfera: "pessoal",
+    contraparte_nome: "VIVIANE FERRER BORGATO", contraparte_chave: "5519995783408" };
+  const sql = fakeSql([existente]);
+  const db = criarDb(sql);
+  await db.atualizarTransacao("t1", { macro: "Educação", sub: "Inglês Particular", descricao: "Aula de inglês" });
+  // 3 chamadas: SELECT, UPDATE, UPSERT associacao
+  assert.equal(sql.chamadas.length, 3);
+  assert.match(sql.chamadas[1].text, /update transacoes/i);
+  assert.ok(sql.chamadas[1].values.includes("Aula de inglês")); // descricao editada
+  assert.match(sql.chamadas[2].text, /insert into associacoes/i);
+  assert.ok(sql.chamadas[2].values.includes("5519995783408")); // chave pix/cpf
+  assert.ok(sql.chamadas[2].values.includes("Educação"));
+});

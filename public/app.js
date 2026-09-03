@@ -51,6 +51,16 @@ export function construirWaterfall(receita, cats) {
   return steps;
 }
 
+// categorias [{macro, sub}] → agrupa subs por macro, ignorando nulos e duplicados
+export function subsPorCategoria(cats) {
+  const g = {};
+  for (const c of cats) {
+    if (!g[c.macro]) g[c.macro] = [];
+    if (c.sub && !g[c.macro].includes(c.sub)) g[c.macro].push(c.sub);
+  }
+  return g;
+}
+
 // ---------- app (só no browser) ----------
 if (typeof document !== "undefined") {
   const $ = (s, r = document) => r.querySelector(s);
@@ -219,14 +229,17 @@ if (typeof document !== "undefined") {
   function fmtData(d) { const s = String(d).slice(0, 10); const [a, m, dia] = s.split("-"); return `${dia}/${m}/${a}`; }
   function drawRows() {
     const macros = [...new Set(Object.keys(estado.cores))].sort();
-    $("#rows").innerHTML = estado.transacoes.map(t => {
+    $("#rows").innerHTML = estado.transacoes.map((t, i) => {
       const rec = t.natureza === "receita";
       const opts = macros.map(mm => `<option ${mm === t.macro ? "selected" : ""}>${esc(mm)}</option>`).join("");
-      return `<tr data-id="${t.id}">
+      const subs = (estado.subs && estado.subs[t.macro]) || [];
+      const dlId = `subs-${i}`;
+      const dlOpts = subs.map(s => `<option value="${esc(s)}"></option>`).join("");
+      return `<tr data-id="${t.id}" data-i="${i}">
         <td class="dt">${fmtData(t.data)}</td>
-        <td>${esc(t.descricao || "")}</td>
+        <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—"></td>
         <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.macro)})"></i><select class="edmacro">${opts}</select></span></td>
-        <td><input class="edsub" value="${esc(t.sub || "")}" placeholder="—"></td>
+        <td><input class="edsub" list="${dlId}" value="${esc(t.sub || "")}" placeholder="—"><datalist id="${dlId}">${dlOpts}</datalist></td>
         <td class="val" style="color:${rec ? "var(--receita)" : "var(--ink)"}">${rec ? "+" : ""}R$ ${centavosBR(t.valor_total)}</td>
         <td class="val" style="color:var(--mut)">${+t.valor_reembolso ? "R$ " + centavosBR(t.valor_reembolso) : "—"}</td>
         <td><button class="del" title="Apagar">✕</button></td>
@@ -243,6 +256,7 @@ if (typeof document !== "undefined") {
         apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/categorias"),
       ]);
       estado.resumo = resumo; estado.transacoes = transacoes;
+      estado.subs = subsPorCategoria(categorias);
       const macros = categorias.map(c => c.macro).concat(transacoes.map(t => t.macro));
       estado.cores = construirCores(macros);
       drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawRows();
@@ -271,8 +285,18 @@ if (typeof document !== "undefined") {
   $("#rows").addEventListener("change", async e => {
     const tr = e.target.closest("tr"); if (!tr) return; const id = tr.dataset.id;
     try {
-      if (e.target.classList.contains("edmacro")) await apiPatch(`/api/transacoes/${id}`, { macro: e.target.value });
+      if (e.target.classList.contains("edmacro")) {
+        await apiPatch(`/api/transacoes/${id}`, { macro: e.target.value });
+        // repopula as subs da nova categoria no datalist da linha
+        const dl = tr.querySelector("datalist");
+        const subs = (estado.subs && estado.subs[e.target.value]) || [];
+        if (dl) dl.innerHTML = subs.map(s => `<option value="${esc(s)}"></option>`).join("");
+        // atualiza a cor do chip
+        const dot = tr.querySelector(".macrochip .dot");
+        if (dot) dot.style.background = `var(${corDe(e.target.value)})`;
+      }
       if (e.target.classList.contains("edsub")) await apiPatch(`/api/transacoes/${id}`, { sub: e.target.value });
+      if (e.target.classList.contains("eddesc")) await apiPatch(`/api/transacoes/${id}`, { descricao: e.target.value });
     } catch (err) { alert("Falha ao salvar: " + err.message); }
   });
   $("#rows").addEventListener("click", async e => {

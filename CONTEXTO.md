@@ -117,8 +117,8 @@ Telegram recebe só botão Apagar (foto que não é comprovante).
 Separação limpa: bot foca em velocidade de captura;
 app foca em precisão/aprendizado.
 
-Essa divisão também prepara bem pro Incremento 2 (classificador que aprende):
-as correções vão morar no app, que passará a treinar o modelo.
+Essa divisão também preparou bem pro Incremento 2 (classificador que aprende):
+as correções moram no app, que agora treina o modelo a partir de cada edição.
 
 ---
 
@@ -148,12 +148,49 @@ que "oops, esqueci de ativar a lista".
 
 ---
 
+## 10. Incremento 2: Classificador que aprende (por contraparte)
+
+**Decisão:** o sistema aprende associações **contraparte → categoria** a partir das
+correções do usuário no app. Na captura seguinte, transações com a mesma contraparte
+(chave Pix, CPF ou nome normalizado) recebem a categoria aprendida automaticamente,
+sem depender do chute do modelo.
+
+**Por que:** o histórico real do Caio mostra que 95% das transações recorrentes são
+para as mesmas pessoas — pagamentos de aluguel, professor de inglês, padaria do bairro.
+Capturar a chave (Pix/CPF) e o nome, então associá-los com a categoria corrigida no app,
+resolve o problema na raiz: a segunda transação pra Viviane (professora de inglês) já
+entra com a categoria certa, `origem_categoria='regra'`. O Caio ainda pode corrigir no app
+se a regra errar; uma nova correção atualiza a regra (`upsert`).
+
+**Colunas novas:**
+- `transacoes.contraparte_nome` — destinatário/pagador lido do comprovante
+- `transacoes.contraparte_chave` — chave Pix/CPF normalizada (null se não houver)
+- `origem_categoria` ganha valor `'regra'` (categoria veio de associação aprendida)
+
+**Tabela nova:**
+- `associacoes(chave, tipo_chave, macro, sub, n, atualizado_em)` — uma regra por
+  (chave, tipo), onde tipo é `'pix_cpf'` ou `'nome'`. Lookup na captura tenta Pix/CPF
+  primeiro, depois nome (fallback). Campo `n` reforça quantas confirmações reforçaram
+  a regra; `atualizado_em` marca quando foi visto por último.
+
+**Modo ensino (bootstrap):** duas formas de semear associações sem esperar novos gastos:
+1. **Telegram `/aprender`** — Caio manda comprovante com legenda `/aprender Educação > Inglês Particular`
+   (dry-run, extrai contraparte, valida categoria, faz `upsert` em associacoes, **não cria transação**).
+2. **Lote Dropbox** — `tools/ensino_extrair.py` varre comprovantes, extrai contraparte de cada um
+   (Gemini), agrupa por chave única, escreve CSV com sugestão de categoria. Caio revê/edita.
+   `tools/ensino_aplicar.py` faz `upsert` de todas as associações confirmadas de uma vez.
+   Assim o Caio rotula ~dezenas de contrapartes únicas, não milhares de comprovantes.
+
+**Gemini fix:** a versão `gemini-2.5-flash` foi descontinuada (404). Agora usa `gemini-flash-latest`,
+que é a mais recente e estável.
+
+---
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
 |---|---|---|
 | Extrato + fatura | PDF parsing é complexo; v1 é imagem. | Incremento 3 |
-| Classificador que aprende | Sem histórico de correções, não há o que treinar. | Incremento 2 (usa histórico de edições do app) |
 | Conciliação | Depende de Incremento 3 (extrato/fatura). | Incremento 3 |
 | Metas / planejamento | Dados não existem ainda. | Incremento 4 |
 | PJ em cascata | Estrutura simples pro Caio pessoa física primeiro. | Incremento 5 |

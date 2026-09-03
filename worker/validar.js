@@ -30,10 +30,10 @@ function normalizarData(v) {
 /**
  * Valida extração de dados financeiros.
  *
- * @param {Object} campos - { data, valor, descricao?, natureza?, macro, sub? }
+ * @param {Object} campos - { data, valor, descricao?, natureza?, macro, sub?, contraparte_nome?, contraparte_chave? }
  * @param {Array<string>} macrosValidas - lista de categorias principais válidas
  * @returns {Object} { ok: boolean, erros: string[], normalizado?: {...} }
- *   Se ok, normalizado contém: dataISO, valorCents, natureza, macro, sub, descricao
+ *   Se ok, normalizado contém: dataISO, valorCents, natureza, macro, sub, descricao, contraparte_nome, contraparte_chave
  */
 export function validarExtracao(campos, macrosValidas) {
   const erros = [];
@@ -78,6 +78,8 @@ export function validarExtracao(campos, macrosValidas) {
       macro,
       sub: campos.sub || null,
       descricao: campos.descricao || null,
+      contraparte_nome: campos.contraparte_nome || null,
+      contraparte_chave: campos.contraparte_chave || null,
     },
   };
 }
