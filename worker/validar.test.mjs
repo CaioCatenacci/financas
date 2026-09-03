@@ -13,6 +13,7 @@ test("aceita extração completa e normaliza data BR + valor", () => {
   assert.deepEqual(r.normalizado, {
     dataISO: "2026-08-29", valorCents: 1550, natureza: "despesa",
     macro: "Casa", sub: "Limpeza", descricao: "Padaria",
+    contraparte_nome: null, contraparte_chave: null,
   });
 });
 
@@ -45,4 +46,21 @@ test("aceita data não-padronizada e zero-preenche", () => {
   const r = validarExtracao({ data: "5/1/2026", valor: "10", macro: "Casa" }, MACROS);
   assert.equal(r.ok, true);
   assert.equal(r.normalizado.dataISO, "2026-01-05");
+});
+
+test("normalizado repassa contraparte quando presente", () => {
+  const r = validarExtracao(
+    { data: "2026-08-28", valor: "916,00", macro: "Casa",
+      contraparte_nome: "VIVIANE FERRER BORGATO", contraparte_chave: "+5519995783408" },
+    MACROS
+  );
+  assert.equal(r.ok, true);
+  assert.equal(r.normalizado.contraparte_nome, "VIVIANE FERRER BORGATO");
+  assert.equal(r.normalizado.contraparte_chave, "+5519995783408");
+});
+
+test("contraparte ausente vira null no normalizado", () => {
+  const r = validarExtracao({ data: "2026-08-28", valor: "10", macro: "Casa" }, MACROS);
+  assert.equal(r.normalizado.contraparte_nome, null);
+  assert.equal(r.normalizado.contraparte_chave, null);
 });
