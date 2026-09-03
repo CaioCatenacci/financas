@@ -186,6 +186,28 @@ que é a mais recente e estável.
 
 ---
 
+## 11. Incremento 2.5, Fase A: Pessoa (dropdown fixo + corte no Resumo)
+
+O campo `pessoa` já existia no banco (importado da planilha) mas não aparecia nem era
+editável — o Caio usa pra separar, p.ex., a escola do Lucca da escola da Manuela.
+
+**Decisão:** lista fixa **gerenciável**, não texto livre. Vira a tabela `pessoas(id, nome,
+ativa)` e `transacoes.pessoa_id` (FK). Motivo: renomear/mesclar fica trivial (muda o `nome`
+da linha, as transações seguem pelo id) e o dropdown evita as variações de digitação que
+sujariam um corte por pessoa. A semente (Caio, Paola, Lucca, Manuela, Casa) é editável na
+tela depois; a migração também traz os nomes que já existiam no histórico.
+
+**Por que na mão:** o comprovante não diz de quem é o gasto. Então `pessoa_id` não sai da
+extração — é um select editável na tabela de Lançamentos (mesmo lugar onde já se corrige
+categoria/sub). O Resumo ganha o painel **"Gasto por pessoa"**, que responde a pergunta que
+motivou tudo: quanto foi pra cada filho.
+
+**Faseamento:** a Pessoa (Fase A) é entregável e deploiável sozinha, antes do grosso da
+migração de categorias pra ID/FK + genericização + tela de gestão (Fase B), que só começa
+depois do Caio aprovar o mapa de genericização (mexe na categorização real).
+
+---
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

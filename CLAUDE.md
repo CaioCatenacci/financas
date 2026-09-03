@@ -79,6 +79,32 @@ create table associacoes (
 
 Uma associação por (chave, tipo). Lookup na captura tenta `pix_cpf` primeiro, depois `nome`.
 
+### Pessoa (Incremento 2.5, Fase A)
+
+`pessoa` é dropdown de lista fixa **gerenciável** — separa, p.ex., escola do Lucca vs da
+Manuela. A tabela `pessoas(id, nome, ativa)` é a fonte; `transacoes.pessoa_id` referencia
+por id (a coluna string `transacoes.pessoa` segue durante a transição e sai na limpeza da
+Fase B). O comprovante não diz de quem é o gasto → `pessoa_id` é preenchido **na mão** no
+app (select editável na tabela de Lançamentos, `PATCH {pessoa_id}`; vazio → null).
+
+| Coluna | Tabela | Descrição |
+|---|---|---|
+| `pessoa_id` | `transacoes` | FK → `pessoas(id)`; quem (Lucca/Manuela/Casa/…), editável no app |
+
+```sql
+create table pessoas (
+  id    uuid primary key default gen_random_uuid(),
+  nome  text not null unique,
+  ativa boolean not null default true
+);
+```
+
+O Resumo ganha o corte **"Gasto por pessoa"** (`/api/resumo` devolve `porPessoa`;
+`GET /api/pessoas` lista as ativas). Migração aditiva em `migrations/0003_pessoas.sql`
+(semeia Caio/Paola/Lucca/Manuela/Casa + nomes já existentes no histórico, backfill do
+`pessoa_id` pelo nome). A Fase B (categorias FK + genericização + tela de gestão) é
+separada e não roda sem aprovação do mapa de genericização.
+
 ---
 
 ## Segurança — inegociável
