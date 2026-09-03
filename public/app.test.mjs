@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall,
+  agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsPorCategoria,
 } from "./app.js";
 
 test("agruparMensal soma receita/despesa e saldo por mês", () => {
@@ -50,4 +50,14 @@ test("construirWaterfall monta receita → despesas → saldo com lo/hi cumulati
     { nm: "B", tipo: "despesa", lo: 100, hi: 400 },
     { nm: "Saldo", tipo: "saldo", lo: 0, hi: 100 },
   ]);
+});
+
+test("subsPorCategoria agrupa subs por categoria, ignorando nulos e duplicados", () => {
+  const cats = [
+    { macro: "Casa", sub: "Luz" }, { macro: "Casa", sub: "Água" }, { macro: "Casa", sub: null },
+    { macro: "Casa", sub: "Luz" }, { macro: "Saúde", sub: "Plano" },
+  ];
+  const g = subsPorCategoria(cats);
+  assert.deepEqual(g["Casa"], ["Luz", "Água"]);
+  assert.deepEqual(g["Saúde"], ["Plano"]);
 });
