@@ -130,3 +130,56 @@ test("teach: /aprender aprende mesmo em comprovante duplicado (dedup não bloque
   assert.equal(aprendidas.length, 1);              // aprendeu apesar do duplicado
   assert.equal(db.estado.inseridos.length, 0);     // dry-run
 });
+
+// Testes da API /api/*
+function dbApiFake() {
+  return {
+    listarPessoas: async () => [
+      { id: 1, nome: "Alice" },
+      { id: 2, nome: "Bob" },
+    ],
+    listarCategorias: async () => [{ macro: "Casa", sub: "Limpeza" }],
+    resumoKPIs: async () => ({ receita: 1000, despesa: 500, reembolso: 0 }),
+    resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
+    resumoMensal: async () => [{ mes: "2026-09", natureza: "despesa", total: 500 }],
+    resumoMesVsAnterior: async () => [{ macro: "Casa", atual: 500, ant: 300 }],
+    resumoPorPessoa: async () => [
+      { pessoa: "Alice", natureza: "despesa", total: 300 },
+      { pessoa: "Bob", natureza: "receita", total: 1000 },
+    ],
+  };
+}
+
+// Importar handleApi para teste — precisa ser exportado
+import { handleApi } from "./index.js";
+
+test("GET /api/pessoas retorna lista de pessoas", async () => {
+  const db = dbApiFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/pessoas", { headers: { "Cookie": "token=token123" } });
+  const url = new URL(request.url);
+
+  const response = await handleApi(request, env, url, db);
+  const data = await response.json();
+  assert.deepEqual(data, [
+    { id: 1, nome: "Alice" },
+    { id: 2, nome: "Bob" },
+  ]);
+});
+
+test("/api/resumo inclui porPessoa", async () => {
+  const db = dbApiFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/resumo?de=2026-01-01&ate=2026-12-31", { headers: { "Cookie": "token=token123" } });
+  const url = new URL(request.url);
+
+  const response = await handleApi(request, env, url, db);
+  const data = await response.json();
+  assert.ok(data.porPessoa, "resposta deve incluir campo porPessoa");
+  assert.ok(Array.isArray(data.porPessoa), "porPessoa deve ser array");
+  assert.equal(data.porPessoa.length, 2, "porPessoa deve ter 2 registros");
+  assert.ok(data.kpis, "resposta deve manter kpis");
+  assert.ok(data.porCategoria, "resposta deve manter porCategoria");
+  assert.ok(data.mensal, "resposta deve manter mensal");
+  assert.ok(data.mesVsAnterior, "resposta deve manter mesVsAnterior");
+});

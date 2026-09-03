@@ -107,10 +107,10 @@ async function handleTelegram(request, env) {
   return new Response("ok");
 }
 
-async function handleApi(request, env, url) {
+export async function handleApi(request, env, url, dbOpt = null) {
   if (!tokenValido(request, env.APP_TOKEN)) return new Response("no", { status: 401 });
-  const sql = neon(env.DATABASE_URL);
-  const db = criarDb(sql);
+  const sql = dbOpt ? null : neon(env.DATABASE_URL);
+  const db = dbOpt || criarDb(sql);
   const j = (data) => new Response(JSON.stringify(data), { headers: { "content-type": "application/json" } });
 
   if (url.pathname === "/api/transacoes" && request.method === "GET") {
@@ -118,6 +118,7 @@ async function handleApi(request, env, url) {
     return j(await db.listarTransacoes({ de: p.get("de"), ate: p.get("ate"), macro: p.get("macro"), natureza: p.get("natureza"), esfera: p.get("esfera") }));
   }
   if (url.pathname === "/api/categorias") return j(await db.listarCategorias());
+  if (url.pathname === "/api/pessoas") return j(await db.listarPessoas());
   if (url.pathname.startsWith("/api/transacoes/") && request.method === "PATCH") {
     const id = url.pathname.split("/").pop();
     await db.atualizarTransacao(id, await request.json());
@@ -135,6 +136,7 @@ async function handleApi(request, env, url) {
       porCategoria: await db.resumoPorCategoria(de, ate),
       mensal: await db.resumoMensal(de, ate),
       mesVsAnterior: await db.resumoMesVsAnterior(),
+      porPessoa: await db.resumoPorPessoa(de, ate),
     });
   }
   return new Response("not found", { status: 404 });
@@ -144,7 +146,7 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/telegram") return handleTelegram(request, env);
-    if (url.pathname.startsWith("/api/")) return handleApi(request, env, url);
+    if (url.pathname.startsWith("/api/")) return handleApi(request, env, url, null);
     if (url.pathname === "/app" || url.pathname.startsWith("/app/")) {
       // token na query? seta o cookie NO SERVIDOR e leva pro app.
       // Fazer server-side evita a corrida do acesso.js (dois location.replace
