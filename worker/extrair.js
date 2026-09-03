@@ -71,7 +71,9 @@ function b64(bytes) {
 }
 
 export async function callGeminiHTTP(bytes, mime, categorias, key) {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+  // gemini-flash-latest: alias estável do flash atual (barato). O 'gemini-2.5-flash'
+  // foi descontinuado p/ novos usuários (404), o que jogava tudo no fallback Claude.
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${key}`;
   const body = {
     contents: [{ parts: [
       { text: PROMPT(categorias) },
