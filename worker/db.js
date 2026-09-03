@@ -20,12 +20,12 @@ export function criarDb(sql) {
       const rows = await sql`
         insert into transacoes
           (data, natureza, esfera, valor_total, valor_reembolso, macro, sub, descricao,
-           pessoa, fonte, origem_categoria, extraido_por, confianca, documento_id,
+           pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
            contraparte_nome, contraparte_chave)
         values
           (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
            ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.macro}, ${t.sub}, ${t.descricao},
-           ${t.pessoa ?? null}, ${t.fonte}, ${t.origem_categoria}, ${t.extraido_por ?? null},
+           ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria}, ${t.extraido_por ?? null},
            ${t.confianca ?? null}, ${t.documento_id ?? null},
            ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null})
         returning id`;
@@ -36,16 +36,21 @@ export function criarDb(sql) {
       return await sql`select macro, sub, natureza from categorias where ativa order by macro, sub`;
     },
 
+    async listarPessoas() {
+      return await sql`select id, nome from pessoas where ativa order by nome`;
+    },
+
     async listarTransacoes(f = {}) {
       // filtros opcionais; usa coalesce p/ ignorar quando nulos
       return await sql`
-        select * from transacoes
-        where (${f.de ?? null}::date is null or data >= ${f.de ?? null})
-          and (${f.ate ?? null}::date is null or data <= ${f.ate ?? null})
-          and (${f.macro ?? null}::text is null or macro = ${f.macro ?? null})
-          and (${f.natureza ?? null}::text is null or natureza = ${f.natureza ?? null})
-          and (${f.esfera ?? null}::text is null or esfera = ${f.esfera ?? null})
-        order by data desc, criado_em desc
+        select t.*, p.nome as pessoa from transacoes t
+        left join pessoas p on p.id = t.pessoa_id
+        where (${f.de ?? null}::date is null or t.data >= ${f.de ?? null})
+          and (${f.ate ?? null}::date is null or t.data <= ${f.ate ?? null})
+          and (${f.macro ?? null}::text is null or t.macro = ${f.macro ?? null})
+          and (${f.natureza ?? null}::text is null or t.natureza = ${f.natureza ?? null})
+          and (${f.esfera ?? null}::text is null or t.esfera = ${f.esfera ?? null})
+        order by t.data desc, t.criado_em desc
         limit 1000`;
     },
 
@@ -57,11 +62,11 @@ export function criarDb(sql) {
       const rows = await sql`select * from transacoes where id = ${id}`;
       const t = rows[0];
       if (!t) return;
-      // undefined = manter o valor atual; para sub/pessoa, string vazia vira null (limpar)
+      // undefined = manter o valor atual; para sub/pessoa_id, string vazia vira null (limpar)
       const data = c.dataISO ?? t.data;
       const macro = c.macro ?? t.macro;
       const sub = c.sub === undefined ? t.sub : (c.sub || null);
-      const pessoa = c.pessoa === undefined ? t.pessoa : (c.pessoa || null);
+      const pessoa_id = c.pessoa_id === undefined ? t.pessoa_id : (c.pessoa_id || null);
       const descricao = c.descricao === undefined ? t.descricao : (c.descricao || null);
       const natureza = c.natureza ?? t.natureza;
       const esfera = c.esfera ?? t.esfera;
@@ -70,7 +75,7 @@ export function criarDb(sql) {
       // edição manual reclassifica: o Inc 2 aprende dessas correções
       await sql`
         update transacoes set
-          data = ${data}, macro = ${macro}, sub = ${sub}, pessoa = ${pessoa},
+          data = ${data}, macro = ${macro}, sub = ${sub}, pessoa_id = ${pessoa_id},
           descricao = ${descricao}, natureza = ${natureza}, esfera = ${esfera},
           valor_total = ${valor_total}, valor_reembolso = ${valor_reembolso},
           origem_categoria = 'manual'
@@ -145,6 +150,16 @@ export function criarDb(sql) {
                sum(valor_total) as bruto, sum(valor_reembolso) as reembolsado, sum(valor_final) as liquido
         from transacoes where valor_reembolso > 0
         group by 1, 2 order by 1, 2`;
+    },
+
+    async resumoPorPessoa(de, ate) {
+      return await sql`
+        select coalesce(p.nome, '—') as pessoa, t.natureza, sum(t.valor_final) as total
+        from transacoes t
+        left join pessoas p on p.id = t.pessoa_id
+        where t.data >= ${de} and t.data <= ${ate}
+        group by 1, 2
+        order by 3 desc`;
     },
   };
 }
