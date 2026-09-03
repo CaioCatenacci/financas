@@ -33,7 +33,7 @@ export async function tratarUpdate(update, env, deps) {
 
   const categorias = await deps.db.listarCategorias();
   const ex = await deps.extrairImpl(bytes, mime, categorias);
-  if (!ex.ok) { await deps.responderImpl(ev.chatId, "Não consegui ler esse comprovante. Pode reenviar mais nítido?", env); return; }
+  if (!ex.ok) { console.error("extração falhou:", (ex.erros || []).join(" | ")); await deps.responderImpl(ev.chatId, "Não consegui ler esse comprovante. Pode reenviar mais nítido?", env); return; }
 
   const n = ex.normalizado;
   const ext = mime === "image/png" ? "png" : "jpg";
