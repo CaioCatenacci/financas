@@ -11,6 +11,7 @@ function dbFake() {
     inserirDocumento: async (d) => { estado.docs.push(d); return { id: "doc1" }; },
     inserirTransacao: async (t) => { estado.inseridos.push(t); return { id: "tx1" }; },
     apagarTransacao: async (id) => { estado.apagados.push(id); },
+    buscarAssociacao: async () => null,
   };
 }
 
@@ -59,4 +60,32 @@ test("callback del apaga a transação", async () => {
   const update = { callback_query: { message: { chat: { id: 7 }, message_id: 3 }, data: "del:tx1" } };
   await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
   assert.deepEqual(db.estado.apagados, ["tx1"]);
+});
+
+test("regra aprendida sobrepõe o chute do modelo", async () => {
+  const enviados = [];
+  const db = dbFake();
+  db.buscarAssociacao = async (chave, tipo) =>
+    (chave === "5519995783408" && tipo === "pix_cpf")
+      ? { macro: "Educação", sub: "Inglês Particular" } : null;
+  const deps = {
+    db,
+    baixar: async () => ({ bytes: new Uint8Array([1]), mime: "image/jpeg" }),
+    hashBytes: async () => "h9",
+    extrairImpl: async () => ({ ok: true, extraido_por: "claude", confianca: 0.85,
+      normalizado: { dataISO: "2026-08-28", valorCents: 91600, natureza: "despesa",
+        macro: "Pessoal", sub: "Fatura", descricao: "Pix",
+        contraparte_nome: "VIVIANE FERRER BORGATO", contraparte_chave: "+5519995783408" } }),
+    subir: async () => "/x.jpg",
+    confirmar: async (chat, texto, id) => enviados.push(texto),
+    responderImpl: async () => {},
+  };
+  const update = { message: { chat: { id: 7 }, message_id: 1, photo: [{ file_id: "b", width: 800 }] } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  const ins = db.estado.inseridos[0];
+  assert.equal(ins.macro, "Educação");           // veio da regra, não "Pessoal"
+  assert.equal(ins.sub, "Inglês Particular");
+  assert.equal(ins.origem_categoria, "regra");
+  assert.equal(ins.contraparte_chave, "+5519995783408"); // guarda a contraparte
+  assert.ok(enviados.some(t => /aprendido/i.test(t)));
 });
