@@ -25,7 +25,6 @@ export async function tratarUpdate(update, env, deps) {
     await deps.responderImpl(ev.chatId, "🗑 Apagado.", env);
     return;
   }
-  if (ev.tipo === "pdf") { await deps.responderImpl(ev.chatId, "PDF de extrato/fatura é do próximo incremento — por ora, mande foto de comprovante.", env); return; }
   if (ev.tipo === "texto") {
     const p = parseLancamentoTexto(ev.texto);
     if (!p.ok) {
@@ -64,7 +63,7 @@ export async function tratarUpdate(update, env, deps) {
     await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(d.valorCents)} · ${dd}/${mm} · ${cat} · "${d.descricao}"${selo}`, tx.id);
     return;
   }
-  if (ev.tipo !== "imagem") return;
+  if (ev.tipo !== "imagem" && ev.tipo !== "pdf") return;
 
   const { bytes, mime } = await deps.baixar(ev.fileId);
 
@@ -103,7 +102,7 @@ export async function tratarUpdate(update, env, deps) {
   const ck = normalizarChave(n.contraparte_chave);
   if (ck) { const r = await deps.db.buscarAssociacao(ck, "pix_cpf"); if (r) { categoria_id = r.categoria_id; subcategoria_id = r.subcategoria_id; origemCat = "regra"; } }
   if (origemCat === "modelo") { const nm = normalizarNome(n.contraparte_nome); if (nm) { const r = await deps.db.buscarAssociacao(nm, "nome"); if (r) { categoria_id = r.categoria_id; subcategoria_id = r.subcategoria_id; origemCat = "regra"; } } }
-  const ext = mime === "image/png" ? "png" : "jpg";
+  const ext = ev.tipo === "pdf" ? "pdf" : (mime === "image/png" ? "png" : "jpg");
   const caminho = `${caminhoDropbox(n.dataISO)}/${nomeArquivo({ ...n, ext })}`;
   const dropboxPath = await deps.subir(env, caminho, bytes);
 

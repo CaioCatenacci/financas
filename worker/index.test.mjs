@@ -141,6 +141,34 @@ test("teach: /aprender aprende mesmo em comprovante duplicado (dedup não bloque
   assert.equal(db.estado.inseridos.length, 0);     // dry-run
 });
 
+test("PDF de comprovante vira transação (reusa fluxo de imagem, fonte=imagem)", async () => {
+  const enviados = [];
+  const db = dbFake();
+  const subidos = [];
+  const deps = {
+    db,
+    baixar: async () => ({ bytes: new Uint8Array([1, 2, 3]), mime: "application/pdf" }),
+    hashBytes: async () => "hpdf",
+    extrairImpl: async (bytes, mime) => {
+      assert.equal(mime, "application/pdf");   // o mime do PDF chega ao extrator
+      return { ok: true, extraido_por: "gemini", confianca: 0.9,
+        normalizado: { dataISO: "2026-03-29", valorCents: 4200, natureza: "despesa",
+          macro: "Casa", sub: "Limpeza", descricao: "Recibo", contraparte_nome: null, contraparte_chave: null } };
+    },
+    subir: async (e, caminho) => { subidos.push(caminho); return caminho; },
+    confirmar: async (chat, texto, id) => enviados.push(texto),
+    responderImpl: async () => {},
+  };
+  const update = { message: { chat: { id: 7 }, message_id: 1, document: { file_id: "fpdf", mime_type: "application/pdf" } } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  const ins = db.estado.inseridos[0];
+  assert.equal(ins.fonte, "imagem");
+  assert.equal(ins.categoria_id, "cCasa");
+  assert.equal(ins.subcategoria_id, "sLimp");
+  assert.ok(subidos[0].endsWith(".pdf"));       // arquivo salvo como .pdf
+  assert.ok(enviados.length === 1);
+});
+
 test("texto estruturado vira transação manual, resolvendo categoria e pessoa", async () => {
   const enviados = [];
   const db = dbFake();

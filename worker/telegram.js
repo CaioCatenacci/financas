@@ -13,7 +13,7 @@ export function parseUpdate(update) {
   if (m.document) {
     const mime = m.document.mime_type || "";
     if (mime.startsWith("image/")) return { tipo: "imagem", chatId, fileId: m.document.file_id, mime, messageId: m.message_id, caption: m.caption || null };
-    if (mime === "application/pdf") return { tipo: "pdf", chatId };
+    if (mime === "application/pdf") return { tipo: "pdf", chatId, fileId: m.document.file_id, mime, messageId: m.message_id, caption: m.caption || null };
     return { tipo: "ignorar", chatId };
   }
   if (m.text) return { tipo: "texto", chatId, texto: m.text, messageId: m.message_id };
