@@ -21,9 +21,21 @@ def carregar_associacoes(cur):
     return {normalizar_nome(ch): {"categoria_nome": cn, "sub_nome": sn} for ch, cn, sn in cur.fetchall()}
 
 def carregar_existentes(cur, de, ate):
+    # Só candidatas a conciliação as linhas AINDA não conciliadas (spec §6.2) — uma linha
+    # com linha_hash já carimbado não pode ser "casada" de novo (o update no-opa e a
+    # transação nova vira órfã, silenciosamente perdida).
     cur.execute("""select id, to_char(data,'YYYY-MM-DD'), round(valor_final*100)::bigint,
-                          linha_hash from transacoes where data between %s and %s""", (de, ate))
+                          linha_hash from transacoes
+                   where data between %s and %s and linha_hash is null""", (de, ate))
     return [{"id": str(i), "data": d, "valor_cents": int(v), "linha_hash": h} for i, d, v, h in cur.fetchall()]
+
+def carregar_hashes(cur, de, ate):
+    # Hashes JÁ gravados na janela (linha_hash is not null) — separado de carregar_existentes
+    # porque este agora só devolve candidatas não-conciliadas; o guard de idempotência
+    # ("jatem": reimportar o mesmo extrato não duplica) precisa ver as linhas já carimbadas.
+    cur.execute("""select linha_hash from transacoes
+                   where data between %s and %s and linha_hash is not null""", (de, ate))
+    return {h for (h,) in cur.fetchall()}
 
 def _mais_dias(iso, n):
     """Soma n dias (negativo para subtrair) a uma data em formato ISO."""
@@ -46,8 +58,9 @@ def main(caminho, conta, commit):
             print("Nenhum lançamento encontrado no extrato — nada a fazer.")
             return 0
         # Amplia a busca ±3 dias para capturar transações existentes na janela de reconciliação
-        existentes = carregar_existentes(cur, _mais_dias(min(datas), -3), _mais_dias(max(datas), 3))
-        hashes_existentes = {e["linha_hash"] for e in existentes if e["linha_hash"]}
+        de, ate = _mais_dias(min(datas), -3), _mais_dias(max(datas), 3)
+        existentes = carregar_existentes(cur, de, ate)
+        hashes_existentes = carregar_hashes(cur, de, ate)
         novos, casados, nao_gasto, ambiguos, jatem = [], [], [], [], []
         for l in ext["linhas"]:
             lh = linha_hash(conta, l["data"], l["descricao"], l["valor_cents"], l["ordinal"])
@@ -58,6 +71,10 @@ def main(caminho, conta, commit):
             registro = {**l, "linha_hash": lh, **info}
             if rec["status"] == "casado":
                 registro["match_id"] = rec["match_id"]; casados.append(registro)
+                # Consome a candidata casada do lote em memória: evita que uma SEGUNDA linha
+                # do mesmo lote (mesmo valor/data) case de novo com essa transação já usada
+                # (spec §6.2) — a próxima linha corretamente vira "novo" em vez de se perder.
+                existentes = [e for e in existentes if e["id"] != rec["match_id"]]
             elif rec["status"] == "ambiguo":
                 ambiguos.append(registro)
             elif not info["computa_resumo"]:
