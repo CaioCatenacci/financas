@@ -1,9 +1,10 @@
 """Importa um extrato Itaú (PDF): parse → checksum → classifica → reconcilia → preview → grava.
 Sem --commit, é dry-run (só mostra o preview). Roda local (pypdf + psycopg)."""
 import os, sys
+from datetime import date, timedelta
 from pypdf import PdfReader
 from tools.extrato_itau import parse_extrato, conferir_checksum
-from tools.classificar_linha import classificar, normalizar_descritor
+from tools.classificar_linha import classificar
 from tools.reconciliar import linha_hash, reconciliar_linha
 from tools.categorias import carregar_catalogo, resolver_categoria
 from tools.contraparte import normalizar_nome
@@ -24,6 +25,11 @@ def carregar_existentes(cur, de, ate):
                           linha_hash from transacoes where data between %s and %s""", (de, ate))
     return [{"id": str(i), "data": d, "valor_cents": int(v), "linha_hash": h} for i, d, v, h in cur.fetchall()]
 
+def _mais_dias(iso, n):
+    """Soma n dias (negativo para subtrair) a uma data em formato ISO."""
+    y, m, d = (int(x) for x in iso.split("-"))
+    return (date(y, m, d) + timedelta(days=n)).isoformat()
+
 def main(caminho, conta, commit):
     import psycopg
     texto = ler_texto(caminho)
@@ -36,7 +42,11 @@ def main(caminho, conta, commit):
         catalogo = carregar_catalogo(cur)
         assoc = carregar_associacoes(cur)
         datas = [l["data"] for l in ext["linhas"]]
-        existentes = carregar_existentes(cur, min(datas), max(datas))
+        if not datas:
+            print("Nenhum lançamento encontrado no extrato — nada a fazer.")
+            return 0
+        # Amplia a busca ±3 dias para capturar transações existentes na janela de reconciliação
+        existentes = carregar_existentes(cur, _mais_dias(min(datas), -3), _mais_dias(max(datas), 3))
         hashes_existentes = {e["linha_hash"] for e in existentes if e["linha_hash"]}
         novos, casados, nao_gasto, ambiguos, jatem = [], [], [], [], []
         for l in ext["linhas"]:
