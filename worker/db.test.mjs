@@ -281,3 +281,20 @@ test("atualizarTransacao alterna computa_resumo", async () => {
   assert.match(upd.text, /computa_resumo/i);
   assert.ok(upd.values.includes(false));
 });
+
+test("transacoesNaJanela traz só linha_hash null com valor em cents", async () => {
+  const sql = fakeSql([{ id:"t1", data:"2025-12-10", valor_cents: 19478 }]);
+  const db = criarDb(sql);
+  const r = await db.transacoesNaJanela("2025-12-01","2025-12-31");
+  assert.equal(r[0].valorCents, 19478);
+  assert.match(sql.chamadas[0].text, /linha_hash is null/i);
+  assert.match(sql.chamadas[0].text, /round\(valor_final\*100\)/i);
+});
+
+test("hashesNaJanela devolve os hashes não-nulos", async () => {
+  const sql = fakeSql([{ linha_hash:"abc" }]);
+  const db = criarDb(sql);
+  const r = await db.hashesNaJanela("2025-12-01","2025-12-31");
+  assert.deepEqual(r, ["abc"]);
+  assert.match(sql.chamadas[0].text, /linha_hash is not null/i);
+});

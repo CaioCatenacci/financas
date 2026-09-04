@@ -223,5 +223,23 @@ export function criarDb(sql) {
         group by 1, 2
         order by 3 desc`;
     },
+
+    // ---- apoio à importação: consultas de reconciliação ----
+    async transacoesNaJanela(de, ate) {
+      const rows = await sql`
+        select id, to_char(data,'YYYY-MM-DD') as data,
+          (round(valor_final*100))::bigint as valor_cents
+        from transacoes
+        where data between ${de} and ${ate} and linha_hash is null`;
+      return rows.map(r => ({ id: String(r.id), data: r.data, valorCents: Number(r.valor_cents) }));
+    },
+
+    async hashesNaJanela(de, ate) {
+      const rows = await sql`
+        select linha_hash
+        from transacoes
+        where data between ${de} and ${ate} and linha_hash is not null`;
+      return rows.map(r => r.linha_hash);
+    },
   };
 }
