@@ -1,7 +1,8 @@
 """Importa uma fatura Itaú (PDF): itens viram despesas (fonte=fatura), categorizados/idempotentes.
 E marca o pagamento correspondente no extrato como não-gasto (computa_resumo=false).
 Dry-run por padrão; --commit grava. Reusa helpers do importar_extrato."""
-import os, sys
+import os, sys, re
+import datetime
 from pypdf import PdfReader
 from tools.fatura_itau import parse_fatura
 from tools.classificar_linha import classificar
@@ -29,7 +30,9 @@ def main(caminho, ano, mes, commit):
             if lh in existentes:
                 continue
             info = classificar(item["descricao"], catalogo, assoc)  # fatura = sempre gasto
-            desc = item["descricao"] + (f" (parc {item['parcela']})" if item["parcela"] else "")
+            # Remove "PARCELA XX/YY" (case-insensitive) from establishment text to avoid duplication
+            desc_limpo = re.sub(r'\bPARCELA\s+\d{2}/\d{2}\b', '', item["descricao"], flags=re.IGNORECASE).strip()
+            desc = desc_limpo + (f" (parc {item['parcela']})" if item["parcela"] else "")
             novos.append({**item, "linha_hash": lh, "descricao_final": desc, **info})
         print(f"fatura {mes}/{ano}: {len(novos)} itens novos (R$ {sum(x['valor_cents'] for x in novos)/100:.2f}); "
               f"total fatura R$ {fat['total_cents']/100:.2f}")
@@ -45,16 +48,30 @@ def main(caminho, ano, mes, commit):
                    values (%s,'despesa','pessoal',%s,0,%s,%s,%s,'fatura',%s,%s,true,%s)""",
                 (x["data"], x["valor_cents"]/100.0, cat_id, sub_id, x["descricao_final"],
                  ("regra" if x["categoria_nome"] else "modelo"), x["contraparte_nome"], x["linha_hash"]))
-        # marca o pagamento da fatura no extrato como não-gasto (mesmo total, natureza despesa, ainda não marcado)
-        cur.execute("""update transacoes set computa_resumo=false
-                       where fonte='extrato' and natureza='despesa'
-                         and round(valor_final*100)::bigint=%s and computa_resumo=true""",
-                    (fat["total_cents"],))
-        marcadas = cur.rowcount
-        conn.commit()
-        print(f"✅ gravados {len(novos)} itens; pagamento no extrato marcado não-gasto: {marcadas} linha(s).")
-        if marcadas != 1:
-            print("⚠ confira: esperava marcar exatamente 1 pagamento no extrato (valor pode divergir por encargos).")
+        # Marca o pagamento da fatura no extrato como não-gasto
+        # Primeiro: identifica candidatos dentro da janela de data (fatura date até ~62 dias depois)
+        primeiro_dia = datetime.date(int(ano), int(mes), 1)
+        janela_fim = primeiro_dia + datetime.timedelta(days=62)
+        cur.execute(
+            """select id from transacoes
+               where fonte='extrato' and natureza='despesa' and computa_resumo=true
+                 and round(valor_final*100)::bigint=%s
+                 and data >= %s and data <= %s""",
+            (fat["total_cents"], primeiro_dia, janela_fim))
+        candidatos = [row[0] for row in cur.fetchall()]
+        if len(candidatos) == 1:
+            # Exatamente 1 candidato: marcar como não-gasto
+            cur.execute("update transacoes set computa_resumo=false where id=%s", (candidatos[0],))
+            conn.commit()
+            print(f"✅ gravados {len(novos)} itens; pagamento no extrato marcado não-gasto: 1 linha.")
+        elif len(candidatos) == 0:
+            # Nenhum candidato: aviso (não critica, pois encargos podem divergir)
+            conn.commit()
+            print(f"✅ gravados {len(novos)} itens; nenhum pagamento correspondente encontrado no extrato na janela — marque manualmente no app se necessário.")
+        else:
+            # Múltiplos candidatos: aviso e sem marcar nada (deixa para manual)
+            conn.commit()
+            print(f"✅ gravados {len(novos)} itens; ⚠ {len(candidatos)} possíveis pagamentos encontrados (ids: {candidatos}) — marque o correto manualmente no app.")
     return 0
 
 if __name__ == "__main__":
