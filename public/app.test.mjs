@@ -4,6 +4,9 @@ import {
   agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes,
 } from "./app.js";
+import { reconstruirTexto } from "./pdf_extrair.js";
+import { parseExtrato } from "../worker/extrato.js";
+import { parseFatura } from "../worker/fatura.js";
 
 test("agruparMensal soma receita/despesa e saldo por mês", () => {
   const rows = [
@@ -155,4 +158,108 @@ test("filtrarTransacoes por computa: só gasto / só não-gasto / tudo", () => {
   assert.deepEqual(filtrarTransacoes(rows, { computa: "gasto" }).map(t => t.id), [1]);
   assert.deepEqual(filtrarTransacoes(rows, { computa: "naogasto" }).map(t => t.id), [2]);
   assert.deepEqual(filtrarTransacoes(rows, { computa: "" }).map(t => t.id), [1, 2]);
+});
+
+// ---------- reconstruirTexto (Task 8: pdf.js -> texto compatível com parseExtrato/parseFatura) ----------
+// Fixtures sintéticas: como os PDFs reais (Fatura_Itau, itau_extrato) não estão em disco
+// nessa sessão, os `itens` abaixo modelam a geometria descrita no plano (fatura Itaú:
+// coluna do item à esquerda, coluna de juros/ruído à direita, mesma linha/y). A ponte
+// de confiança real é rodar parseExtrato/parseFatura direto no texto reconstruído.
+
+test("reconstruirTexto modo layout: 2 colunas na mesma linha -> data, estabelecimento, valor do item antes do ruído da direita", () => {
+  const itens = [
+    // linha 1 (y=700): estabelecimento partido em 2 tokens (comum no pdf.js), valor do item
+    // em x=300 (coluna esquerda) e "Juros 10,50" em x=430/460 (coluna direita, deve vir depois)
+    { str: "29/05", x: 60, y: 700 },
+    { str: "PARK E CO", x: 100, y: 700 },
+    { str: "ESTACIONAME", x: 180, y: 700 },
+    { str: "17,00", x: 300, y: 700 },
+    { str: "Juros", x: 430, y: 700 },
+    { str: "10,50", x: 460, y: 700 },
+    // linha 2 (y=680, abaixo da linha 1) — sem coluna direita
+    { str: "30/05", x: 60, y: 680 },
+    { str: "OUTRO ESTABELECIMENTO", x: 100, y: 680 },
+    { str: "25,90", x: 300, y: 680 },
+  ];
+
+  const texto = reconstruirTexto(itens, "layout");
+  const linhas = texto.split("\n");
+  assert.equal(linhas.length, 2);
+  // linha 1 primeiro (y maior = mais alto na página = vem antes)
+  assert.match(linhas[0], /^29\/05\s+PARK E CO\s+ESTACIONAME\s+17,00\s+Juros\s+10,50$/);
+  assert.match(linhas[1], /^30\/05\s+OUTRO ESTABELECIMENTO\s+25,90$/);
+
+  // a prova real de compatibilidade: parseFatura tem que ler o texto reconstruído certo
+  const { itens: parsed, totalCents } = parseFatura(texto, 2025);
+  assert.deepEqual(parsed, [
+    { data: "2025-05-29", descricao: "PARK E CO ESTACIONAME", valorCents: 1700, parcela: null },
+    { data: "2025-05-30", descricao: "OUTRO ESTABELECIMENTO", valorCents: 2590, parcela: null },
+  ]);
+  assert.equal(totalCents, 0);
+});
+
+test("reconstruirTexto modo simples: uma coluna, itens da linha juntam com espaço único", () => {
+  const itens = [
+    { str: "10/12/2025", x: 60, y: 500 },
+    { str: "SALDO", x: 150, y: 500 },
+    { str: "DO", x: 190, y: 500 },
+    { str: "DIA", x: 220, y: 500 },
+    { str: "8.876,46", x: 400, y: 500 },
+  ];
+
+  const texto = reconstruirTexto(itens, "simples");
+  assert.equal(texto, "10/12/2025 SALDO DO DIA 8.876,46");
+
+  const { linhas, saldos } = parseExtrato(texto);
+  assert.deepEqual(linhas, []);
+  assert.deepEqual(saldos, [{ data: "2025-12-10", saldoCents: 887646 }]);
+});
+
+test("reconstruirTexto modo simples: duas linhas (y diferente) viram duas linhas de texto, compatíveis com parseExtrato", () => {
+  const itens = [
+    { str: "10/12/2025", x: 60, y: 500 },
+    { str: "SALDO", x: 150, y: 500 },
+    { str: "DO", x: 190, y: 500 },
+    { str: "DIA", x: 220, y: 500 },
+    { str: "8.876,46", x: 400, y: 500 },
+    // linha de lançamento, y menor (abaixo) — mesma data, descrição com barra e negativo
+    { str: "10/12/2025", x: 60, y: 480 },
+    { str: "PIX", x: 150, y: 480 },
+    { str: "QRS", x: 190, y: 480 },
+    { str: "LOJA", x: 230, y: 480 },
+    { str: "X10/12", x: 280, y: 480 },
+    { str: "-100,00", x: 400, y: 480 },
+  ];
+
+  const texto = reconstruirTexto(itens, "simples");
+  const { linhas, saldos } = parseExtrato(texto);
+  assert.deepEqual(saldos, [{ data: "2025-12-10", saldoCents: 887646 }]);
+  assert.deepEqual(linhas, [
+    { data: "2025-12-10", descricao: "PIX QRS LOJA X10/12", valorCents: 10000, natureza: "despesa", ordinal: 0 },
+  ]);
+});
+
+test("reconstruirTexto agrupa por y com tolerância (rounding sub-pixel do pdf.js) e ordena por x mesmo com itens fora de ordem", () => {
+  // y varia por rounding (699.6 vs 700.3) e os itens chegam fora de ordem — ambos comuns
+  // na saída real do pdf.js getTextContent().
+  const itens = [
+    { str: "17,00", x: 300, y: 699.6 },
+    { str: "29/05", x: 60, y: 700.3 },
+    { str: "LOJA X", x: 100, y: 700 },
+  ];
+  const texto = reconstruirTexto(itens, "layout");
+  assert.equal(texto.split("\n").length, 1);
+  assert.match(texto, /^29\/05\s+LOJA X\s+17,00$/);
+});
+
+test("reconstruirTexto ignora itens com string vazia/só espaço (comuns no pdf.js)", () => {
+  const itens = [
+    { str: "29/05", x: 60, y: 700 },
+    { str: "  ", x: 90, y: 700 },
+    { str: "", x: 95, y: 700 },
+    { str: "LOJA", x: 100, y: 700 },
+    { str: "17,00", x: 300, y: 700 },
+  ];
+  const texto = reconstruirTexto(itens, "layout");
+  assert.match(texto, /^29\/05\s+LOJA\s+17,00$/);
 });
