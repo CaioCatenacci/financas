@@ -399,6 +399,32 @@ test("POST /api/importar/preview (fatura) padroniza o mês p/ 2 dígitos (idempo
   assert.equal(await call(5), await call("05"), "mes 5 e '05' devem gerar o mesmo linha_hash");
 });
 
+test("POST /api/importar/preview (fatura) sem ano/mês → 400 com mensagem clara (não 500)", async () => {
+  const db = dbImportarFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/importar/preview", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ tipo: "fatura", texto: TXT_FATURA_MIN, ano: "", mes: "" }),
+  });
+  const response = await handleApi(request, env, new URL(request.url), db);
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.match(data.erro, /ano.*mês|mês.*ano/i);
+});
+
+test("POST /api/importar/preview com texto vazio → 400 (PDF ilegível)", async () => {
+  const db = dbImportarFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/importar/preview", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ tipo: "extrato", texto: "   ", conta: "itau" }),
+  });
+  const response = await handleApi(request, env, new URL(request.url), db);
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.match(data.erro, /extrair texto|ilegível|vazio/i);
+});
+
 test("/api/resumo inclui porPessoa", async () => {
   const db = dbApiFake();
   const env = { APP_TOKEN: "token123", DATABASE_URL: "" };

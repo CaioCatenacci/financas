@@ -165,6 +165,7 @@ export async function handleApi(request, env, url, dbOpt = null) {
   const body = () => request.json();
   // desloca uma data ISO (YYYY-MM-DD) por n dias em UTC — usado p/ a janela de reconciliação.
   const deslocaDias = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+  const erroJson = (msg, status) => new Response(JSON.stringify({ erro: msg }), { status, headers: { "content-type": "application/json" } });
 
   if (url.pathname === "/api/transacoes" && request.method === "GET") {
     const p = url.searchParams;
@@ -215,7 +216,9 @@ export async function handleApi(request, env, url, dbOpt = null) {
   }
   // ---- importar extrato/fatura (Incremento 3) ----
   if (url.pathname === "/api/importar/preview" && request.method === "POST") {
+   try {
     const b = await body();
+    if (!b.texto || !b.texto.trim()) return erroJson("Não foi possível extrair texto do PDF (arquivo vazio ou ilegível).", 400);
     const catalogo = await db.catalogo();
     const associacoes = await db.associacoesPorNome();
 
@@ -237,7 +240,11 @@ export async function handleApi(request, env, url, dbOpt = null) {
     }
 
     if (b.tipo === "fatura") {
-      const { itens } = parseFatura(b.texto, b.ano);
+      const ano = parseInt(b.ano, 10), mesNum = parseInt(b.mes, 10);
+      if (!ano || ano < 2000 || ano > 2100 || !mesNum || mesNum < 1 || mesNum > 12) {
+        return erroJson("Informe ano (ex.: 2025) e mês (1–12) da fatura.", 400);
+      }
+      const { itens } = parseFatura(b.texto, ano);
       const hoje = new Date().toISOString().slice(0, 10);
       let de = hoje, ate = hoje;
       if (itens.length) {
@@ -247,13 +254,18 @@ export async function handleApi(request, env, url, dbOpt = null) {
       const hashes = await db.hashesNaJanela(de, ate);
       // mês com 2 dígitos: entra na conta sintética fatura-${ano}${mes} da linha_hash. "5" e "05"
       // gerariam hashes diferentes p/ a mesma fatura (quebrando a dedup — o bloco 2 gravou "05").
-      const mes = String(b.mes).padStart(2, "0");
-      return j(montarPreviewFatura(b.texto, b.ano, mes, { catalogo, associacoes, hashes }));
+      const mes = String(mesNum).padStart(2, "0");
+      return j(montarPreviewFatura(b.texto, ano, mes, { catalogo, associacoes, hashes }));
     }
 
-    return new Response(JSON.stringify({ erro: `tipo inválido: ${b.tipo}` }), { status: 400, headers: { "content-type": "application/json" } });
+    return erroJson(`tipo inválido: ${b.tipo}`, 400);
+   } catch (err) {
+     // devolve a mensagem real (não um 500 opaco) — facilita diagnosticar do navegador.
+     return erroJson(`preview falhou: ${err && err.message ? err.message : String(err)}`, 500);
+   }
   }
   if (url.pathname === "/api/importar/aplicar" && request.method === "POST") {
+   try {
     const b = await body();
     const r = await aplicar(db, b.decisao);
     // fatura: depois de gravar os itens, marca o pagamento correspondente no extrato como fora do
@@ -266,6 +278,9 @@ export async function handleApi(request, env, url, dbOpt = null) {
       r.pagamentoCandidatos = pg.candidatos;
     }
     return j(r);
+   } catch (err) {
+     return erroJson(`aplicar falhou: ${err && err.message ? err.message : String(err)}`, 500);
+   }
   }
 
   return new Response("not found", { status: 404 });

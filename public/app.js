@@ -201,7 +201,16 @@ if (typeof document !== "undefined") {
 
   // API
   const apiGet = p => fetch(p).then(r => { if (!r.ok) throw new Error(`GET ${p} ${r.status}`); return r.json(); });
-  const apiPost = (p, body) => fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => { if (!r.ok) throw new Error(`POST ${p} ${r.status}`); return r.json(); });
+  const apiPost = async (p, body) => {
+    const r = await fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) {
+      // tenta ler {erro} do corpo p/ mostrar a mensagem real em vez de só o status
+      let msg = `POST ${p} ${r.status}`;
+      try { const e = await r.json(); if (e && e.erro) msg = e.erro; } catch { /* corpo não-JSON */ }
+      throw new Error(msg);
+    }
+    return r.json();
+  };
   const apiPatch = (p, body) => fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => { if (!r.ok) throw new Error(`PATCH ${p} ${r.status}`); return r; });
   const apiDelete = p => fetch(p, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error(`DELETE ${p} ${r.status}`); return r; });
 
@@ -645,14 +654,25 @@ if (typeof document !== "undefined") {
       const arquivo = $("#imparquivo")?.files?.[0];
       if (!arquivo) { alert("Escolha um arquivo PDF."); return; }
       st.tipo = $("#imptipo").value;
+      // Captura TODOS os valores do form ANTES de re-renderizar: drawImportar() (chamado logo
+      // abaixo p/ mostrar "Lendo…") recria os inputs vazios, então ler conta/ano/mês depois dele
+      // pegava string vazia (conta virava "conta", ano virava 0 → 500 no servidor).
+      let conta = null, ano = null, mes = null;
+      if (st.tipo === "extrato") {
+        conta = $("#impconta").value || "conta";
+      } else {
+        ano = parseInt($("#impano").value, 10); mes = parseInt($("#impmes").value, 10);
+        if (!ano || !mes || mes < 1 || mes > 12) { alert("Preencha ano (ex.: 2025) e mês (1–12) da fatura."); return; }
+        st.ano = ano; st.mes = mes;
+      }
       st.carregando = true; st.ultimoResultado = null; drawImportar();
       try {
         const buf = await arquivo.arrayBuffer();
         const modo = st.tipo === "fatura" ? "layout" : "simples";
         const texto = await extrairTextoPDF(buf, modo);
         const corpo = { tipo: st.tipo, texto };
-        if (st.tipo === "extrato") corpo.conta = $("#impconta").value || "conta";
-        else { corpo.ano = +$("#impano").value; corpo.mes = $("#impmes").value; st.ano = corpo.ano; st.mes = corpo.mes; }
+        if (st.tipo === "extrato") corpo.conta = conta;
+        else { corpo.ano = ano; corpo.mes = mes; }
         st.preview = await apiPost("/api/importar/preview", corpo);
       } catch (err) {
         alert("Falha ao ler/pré-visualizar: " + err.message);
