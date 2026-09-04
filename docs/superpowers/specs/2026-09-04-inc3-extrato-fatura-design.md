@@ -26,7 +26,7 @@ aplicações/investimentos).
 | Ingestão | **Ferramenta local** (`tools/`, padrão `import_planilha`) com **preview p/ aprovar** antes de gravar. |
 | Fatura × extrato | Os **itens da fatura** são os gastos (`fonte=fatura`); a **linha de pagamento** no extrato é marcada não-gasto. |
 | Reconciliação | Casa linha do extrato ↔ transação já capturada por **valor exato + data em janela de ±3 dias**; casou → mantém a existente, marca conciliada, não duplica; ambíguo → preview. |
-| Categoria | Linhas novas passam pelas **associações aprendidas** (Inc 2, por contraparte da descrição) → senão **Outros**. |
+| Categoria (aprende) | Cada linha guarda o **descritor do estabelecimento como `contraparte_nome`** (data-sufixo removida), `contraparte_chave` null. No import, `buscarAssociacao` pelo descritor normalizado → categoria; senão **Outros**. Reclassificar no app dispara o **mesmo** `upsertAssociacao` (Inc 2) → o próximo import já vem certo. Objetivo: saber onde o dinheiro é gasto, com o app aprendendo os descritores recorrentes. |
 | Idempotência | Cada linha ganha **chave estável** (`linha_hash`); reimportar / meses sobrepostos não duplicam. |
 | Canal | Só o **bloco 1** (comprovante avulso) usa o bot; o lote (extrato/fatura) é a ferramenta local. |
 
@@ -70,10 +70,18 @@ insert into categorias (nome, natureza) values ('Transferências','despesa'), ('
   + `checksum(linhas, saldos)`; ignora `SALDO DO DIA`. Testável por string.
 - **`tools/fatura_itau.py`** (puro): `parse_fatura(texto) -> [{data, estabelecimento, valor_cents, parcela?}]`
   + total; ano do período. Testável por string.
-- **`tools/classificar_linha.py`** (puro): dado `descricao`/`valor`, deriva contraparte e resolve
-  categoria via associações (reusa `tools/contraparte.py` + `tools/categorias.py`); reconhece
-  **não-gasto** por uma lista de padrões editável (`PIX TRANSF <nomes próprios>`, `APLICACAO`,
-  `PERSONDIF`, `COR COMP CDB`, `PERS BLACK`, pagamento de cartão, etc.).
+- **`tools/classificar_linha.py`** (puro): dado `descricao`/`valor`:
+  - **descritor:** `normalizar_descritor(descricao)` — remove o sufixo de data (`…30/12`), prefixos
+    de meio (`PIX QRS`/`PIX TRANSF`/`PAG BOLETO`/`DA `), números soltos, colapsa espaços — p/ que
+    o **mesmo estabelecimento colapse na mesma chave** entre meses (ex.: `PIX QRS AMAZON.COM.30/12`
+    e `…28/11` → `amazon com`). Esse descritor vira `contraparte_nome` da transação.
+  - **categoria:** `buscarAssociacao(normalizarNome(descritor), 'nome')` → categoria/sub; senão
+    `Outros`. Reusa `tools/contraparte.py` + `tools/categorias.py`. Como o descritor é gravado em
+    `contraparte_nome`, **corrigir no app aprende pela via existente** (Inc 2) e o próximo import
+    já classifica sozinho.
+  - **não-gasto:** lista de padrões editável (`PIX TRANSF <nomes próprios>`, `APLICACAO`,
+    `PERSONDIF`, `COR COMP CDB`, `PERS BLACK`, pagamento de cartão, etc.) → `computa_resumo=false`
+    + categoria organizacional.
 - **`tools/importar_extrato.py`** / **`tools/importar_fatura.py`** (I/O): lê PDF (pypdf), chama o
   parser, reconcilia contra o banco, monta o **preview** (novos / casados / não-gasto / checksum),
   pede confirmação, grava por id (`fonte='extrato'|'fatura'`, `computa_resumo`, `linha_hash`,
@@ -113,7 +121,8 @@ insert into categorias (nome, natureza) values ('Transferências','despesa'), ('
 - Puros (pytest): `parse_extrato`/`parse_fatura` com amostras reais (fixtures de texto), incl.
   `SALDO DO DIA` ignorado, valor negativo/positivo, milhar+centavos, parcela `x/y`; `checksum`
   (bate / não bate); reconhecimento de não-gasto (cada padrão); reconciliação (casa 1, ambíguo,
-  nenhum, janela de ±3 dias); `linha_hash` estável e idempotente.
+  nenhum, janela de ±3 dias); `linha_hash` estável e idempotente; `normalizar_descritor`
+  (mesmo estabelecimento em meses diferentes → mesma chave; data-sufixo/prefixo removidos).
 - db (fakeSql): `resumo*` incluem `computa_resumo` no WHERE.
 - Integração (manual/controller): rodar os 2 PDFs de exemplo, conferir preview + checksum.
 
@@ -127,6 +136,10 @@ insert into categorias (nome, natureza) values ('Transferências','despesa'), ('
   mitigado por mandar ambíguos pro preview (nunca auto-concilia com >1 candidato).
 - **Risco (não-gasto mal reconhecido):** um gasto real classificado como transferência sai do
   Resumo; mitigado por os padrões serem conservadores + visível no preview + editável no app.
+- **Risco (descritor):** normalizar de menos → o mesmo estabelecimento não colapsa (aprende
+  várias vezes); de mais → estabelecimentos distintos colidem numa categoria. Mitigado por
+  começar conservador (só remove data-sufixo/prefixos conhecidos) e por você corrigir no app
+  (o aprendizado é por descritor, então ajusta rápido). Testes fixam casos recorrentes reais.
 - **Risco (chave de reconciliação):** `linha_hash` com `ordinal_no_dia` depende da ordem estável
   do PDF; reimport do mesmo arquivo é estável, mas dois arquivos com a mesma linha precisam do
   mesmo ordinal — o parse deriva o ordinal da ordem de aparição no dia.
