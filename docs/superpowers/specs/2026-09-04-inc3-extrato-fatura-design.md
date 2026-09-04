@@ -91,8 +91,10 @@ insert into categorias (nome, natureza) values ('Transferências','despesa'), ('
 - **`worker/db.js`:** todos os `resumo*` ganham `and t.computa_resumo` (o corte por pessoa/categoria/
   KPIs/mensal/mês-vs-anterior/reembolso passam a ignorar o não-gasto). Sem mudança de assinatura.
 - **`schema.sql`:** reflete `computa_resumo` + `linha_hash` + as 2 categorias.
-- **UI (app):** opcional/menor — mostrar um selo "fora do resumo" na tabela de Lançamentos e um
-  filtro "só não-gasto"; **fora do escopo mínimo** deste bloco (pode virar fast-follow).
+- **UI (app):** selo **"fora do resumo"** na tabela de Lançamentos p/ linhas `computa_resumo=false`,
+  toggle p/ editar a flag (reclassificar um não-gasto que era gasto de verdade, e vice-versa) via
+  `PATCH {computa_resumo}`, e uma dimensão no filtro (A8): "só gastos / só não-gasto / tudo".
+  `listarTransacoes` já devolve `t.*` (inclui `computa_resumo`). **No escopo** (Fase 3).
 
 ## 6. Reconciliação (o núcleo)
 
@@ -115,6 +117,8 @@ insert into categorias (nome, natureza) values ('Transferências','despesa'), ('
   fotos, preview, inserção). É a espinha.
 - **Fase 2 — Fatura:** `fatura_itau.py` + `importar_fatura.py` (itens `fonte=fatura`, parcelas) +
   marcar o pagamento correspondente no extrato como não-gasto. Reusa preview/classificação.
+- **Fase 3 — App:** selo "fora do resumo" + toggle (`PATCH {computa_resumo}`) na tabela de
+  Lançamentos + dimensão no filtro (só gastos / só não-gasto / tudo). Depende só da flag (0006).
 
 ## 8. Testes
 
