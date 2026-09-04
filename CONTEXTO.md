@@ -208,6 +208,34 @@ depois do Caio aprovar o mapa de genericização (mexe na categorização real).
 
 ---
 
+## 12. Incremento 2.5, Fase B: categorias por id + genericização + tela de gestão
+
+As categorias vieram da planilha com nomes específicos demais ("Mensalidade Escola
+Iguatemi", "Fatura Cartão de Crédito Nubank") e eram **strings** espalhadas em `transacoes`
+e `associacoes` — renomear/mesclar exigia cascata frágil e não havia tela.
+
+**Decisão:** migrar pra **ID/FK** (tabelas `categorias`/`subcategorias`) e **genericizar**
+os nomes de uma vez. O favorecido específico foi pra `descricao` (ex.: sub "Mensalidade
+Escola Iguatemi" → categoria Educação › Escola, descrição "Colégio Iguatemi"). O Caio
+aprovou o **mapa de genericização** (gerado das categorias vivas) antes de qualquer escrita
+— o mapa mescla variações (5 subs de Iguatemi viraram Escola/Material escolar; 2 faturas de
+cartão viraram "Fatura de cartão"; 3 salários viraram "Salário").
+
+**Migração em 2 etapas** pra não quebrar produção: `0004` **aditiva** (ids convivem com as
+strings; backfill do mapa; NOT NULL de `macro` solto no cutover) → **cutover** do código
+(db/api/app/tools por id, deploy) → `0005` **limpeza** (drop das strings) — destrutiva, só
+depois do cutover validado em produção.
+
+**Truque que economizou trabalho:** os resumos fazem join e apelidam `c.nome as macro`, então
+os gráficos do Resumo não mudaram no cutover — só Lançamentos (selects por id) e a nova aba
+**Ajustes** (gestão: renomear/mesclar/desativar) precisaram de UI nova.
+
+**Por que a genericização importa:** com nomes genéricos + favorecido na descrição + o corte
+por pessoa (Fase A), dá pra responder "quanto de escola por filho" sem a categoria carregar o
+nome da escola. Renome/merge agora é mudar uma linha — as transações seguem pelo id.
+
+---
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

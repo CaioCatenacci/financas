@@ -102,8 +102,39 @@ create table pessoas (
 O Resumo ganha o corte **"Gasto por pessoa"** (`/api/resumo` devolve `porPessoa`;
 `GET /api/pessoas` lista as ativas). Migração aditiva em `migrations/0003_pessoas.sql`
 (semeia Caio/Paola/Lucca/Manuela/Casa + nomes já existentes no histórico, backfill do
-`pessoa_id` pelo nome). A Fase B (categorias FK + genericização + tela de gestão) é
-separada e não roda sem aprovação do mapa de genericização.
+`pessoa_id` pelo nome).
+
+### Categorias por id (Incremento 2.5, Fase B)
+
+Categoria/subcategoria deixaram de ser strings em `transacoes`/`associacoes` e viraram
+**tabelas por id** (renome/mesclar viram triviais, e há tela de gestão). O modelo:
+
+```sql
+create table categorias    (id uuid pk, nome text unique, natureza text, ativa bool);
+create table subcategorias (id uuid pk, categoria_id uuid → categorias, nome, ativa,
+                            unique(categoria_id, nome));
+```
+
+`transacoes` e `associacoes` ganharam `categoria_id`/`subcategoria_id` (FK). A migração
+`0004_categorias_fk.sql` é **aditiva**: renomeou a tabela antiga `categorias`(macro/sub)
+para `categorias_legacy`, criou o modelo novo, e fez **backfill genericizado** a partir do
+mapa aprovado (`docs/genericizacao-map.csv`, não versionado): cada `(macro,sub)` virou
+`categoria_id/subcategoria_id`, e o favorecido específico foi pra `descricao` quando ela
+era redundante. As colunas string (`macro`/`sub`) ficam vestigiais (NOT NULL solto) até a
+limpeza `0005` (drop) — gate destrutivo, só após o cutover validado.
+
+- **Extração:** o modelo devolve **nomes**; ao gravar, `resolverCategoria(nome→id)` de
+  `worker/categorias.js` resolve (fallback `Outros`, que sempre existe). A regra aprendida
+  (`associacoes`) e o `/aprender` também gravam por id.
+- **API:** `GET /api/catalogo` (categorias+subcategorias); CRUD em `/api/categorias`,
+  `/api/subcategorias` (inclui `POST /api/subcategorias/merge`) e `/api/pessoas`; o
+  `/api/resumo` apelida `c.nome as macro` no join — por isso os gráficos não mudaram.
+- **UI:** Lançamentos usa selects por id; a aba **"Ajustes"** gere categorias/subs/pessoas
+  (add/renomear/mesclar/desativar).
+- **Tools:** `tools/categorias.py` (`resolver_categoria`/`carregar_catalogo`) — `import_planilha`
+  e `ensino_aplicar` resolvem nome→id.
+
+A UI chama `categoria` a categoria (nome) e `subcategoria` a sub; internamente é tudo por id.
 
 ---
 
