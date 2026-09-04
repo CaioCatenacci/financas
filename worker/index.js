@@ -163,6 +163,8 @@ export async function handleApi(request, env, url, dbOpt = null) {
 
   const id = () => url.pathname.split("/").pop();
   const body = () => request.json();
+  // desloca uma data ISO (YYYY-MM-DD) por n dias em UTC — usado p/ a janela de reconciliação.
+  const deslocaDias = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
 
   if (url.pathname === "/api/transacoes" && request.method === "GET") {
     const p = url.searchParams;
@@ -225,8 +227,12 @@ export async function handleApi(request, env, url, dbOpt = null) {
         de = linhas.reduce((min, l) => (l.data < min ? l.data : min), linhas[0].data);
         ate = linhas.reduce((max, l) => (l.data > max ? l.data : max), linhas[0].data);
       }
-      const existentes = await db.transacoesNaJanela(de, ate);
-      const hashes = await db.hashesNaJanela(de, ate);
+      // Janela de reconciliação ±3 dias (igual tools/importar_extrato.py): reconciliarLinha casa
+      // dentro de ±3d, então uma transação já lançada 1–3 dias antes/depois da borda do extrato é
+      // candidata legítima e PRECISA entrar em `existentes` — senão a linha vira "novo" e duplica.
+      const deJanela = deslocaDias(de, -3), ateJanela = deslocaDias(ate, 3);
+      const existentes = await db.transacoesNaJanela(deJanela, ateJanela);
+      const hashes = await db.hashesNaJanela(deJanela, ateJanela);
       return j(montarPreviewExtrato(b.texto, b.conta, { catalogo, associacoes, existentes, hashes }));
     }
 
@@ -239,7 +245,10 @@ export async function handleApi(request, env, url, dbOpt = null) {
         ate = itens.reduce((max, i) => (i.data > max ? i.data : max), itens[0].data);
       }
       const hashes = await db.hashesNaJanela(de, ate);
-      return j(montarPreviewFatura(b.texto, b.ano, b.mes, { catalogo, associacoes, hashes }));
+      // mês com 2 dígitos: entra na conta sintética fatura-${ano}${mes} da linha_hash. "5" e "05"
+      // gerariam hashes diferentes p/ a mesma fatura (quebrando a dedup — o bloco 2 gravou "05").
+      const mes = String(b.mes).padStart(2, "0");
+      return j(montarPreviewFatura(b.texto, b.ano, mes, { catalogo, associacoes, hashes }));
     }
 
     return new Response(JSON.stringify({ erro: `tipo inválido: ${b.tipo}` }), { status: 400, headers: { "content-type": "application/json" } });

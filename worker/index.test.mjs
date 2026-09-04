@@ -322,6 +322,49 @@ test("POST /api/importar/aplicar grava novos e retorna as contagens", async () =
   assert.equal(data.gravados, 1);
 });
 
+test("POST /api/importar/preview (extrato) amplia a janela de reconciliação ±3 dias", async () => {
+  // uma transação já lançada 3 dias APÓS o único lançamento do extrato (10/12 → 13/12), mesmo
+  // valor: com a janela ampliada ela é candidata e CASA; sem ampliar (bug), viraria "novo" =
+  // duplicata. O fake filtra pela janela recebida, então o teste falha se a janela não abrir ±3d.
+  const janelas = [];
+  const db = {
+    catalogo: async () => ({ categorias: [{ id: "cO", nome: "Outros" }], subcategorias: [] }),
+    associacoesPorNome: async () => ({}),
+    transacoesNaJanela: async (de, ate) => {
+      janelas.push({ de, ate });
+      return [{ id: "tX", data: "2025-12-13", valorCents: 10000 }].filter(t => t.data >= de && t.data <= ate);
+    },
+    hashesNaJanela: async () => [],
+    inserirTransacao: async () => ({ id: "x" }),
+    carimbarLinhaHash: async () => {},
+  };
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/importar/preview", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ tipo: "extrato", texto: TXT_EXTRATO, conta: "c1" }),
+  });
+  const data = await (await handleApi(request, env, new URL(request.url), db)).json();
+  assert.deepEqual(janelas[0], { de: "2025-12-07", ate: "2025-12-13" }); // ±3 dias do 10/12
+  assert.equal(data.resumo.casados, 1); // casou com a de 13/12 (borda)
+  assert.equal(data.resumo.novos, 0);   // não duplicou
+});
+
+const TXT_FATURA_MIN = `                DATA       ESTABELECIMENTO                       VALOR EM R$
+                29/05      PARK E CO ESTACIONAME                          17,00`;
+
+test("POST /api/importar/preview (fatura) padroniza o mês p/ 2 dígitos (idempotência do linha_hash)", async () => {
+  const call = async (mes) => {
+    const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+    const request = new Request("http://localhost/api/importar/preview", {
+      method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+      body: JSON.stringify({ tipo: "fatura", texto: TXT_FATURA_MIN, ano: 2025, mes }),
+    });
+    const data = await (await handleApi(request, env, new URL(request.url), dbImportarFake())).json();
+    return data.itens[0].linhaHash;
+  };
+  assert.equal(await call(5), await call("05"), "mes 5 e '05' devem gerar o mesmo linha_hash");
+});
+
 test("/api/resumo inclui porPessoa", async () => {
   const db = dbApiFake();
   const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
