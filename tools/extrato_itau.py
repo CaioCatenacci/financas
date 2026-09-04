@@ -35,18 +35,22 @@ def parse_extrato(texto):
     return {"linhas": linhas, "saldos": saldos}
 
 def conferir_checksum(linhas, saldos):
-    # entre cada par de SALDO DO DIA consecutivos (ordenados por data), a variação de saldo
-    # deve igualar a soma (com sinal) dos lançamentos daquele dia/intervalo.
-    if len(saldos) < 2:
-        return {"ok": True, "diferenca_cents": 0}  # sem dois saldos não dá p/ conferir
-    porData = {}
-    for l in linhas:
-        v = l["valor_cents"] if l["natureza"] == "receita" else -l["valor_cents"]
-        porData[l["data"]] = porData.get(l["data"], 0) + v
-    s = sorted(saldos, key=lambda x: x["data"])
+    # entre saldos consecutivos, a variação de saldo deve igualar a soma (com sinal) dos
+    # lançamentos no intervalo (prev, cur] — atribui por INTERVALO (não por dia exato), pois
+    # há dias com lançamento sem "SALDO DO DIA". Descarta saldos após o último lançamento
+    # (ex.: o "saldo do dia" da data de emissão, fora do período).
+    if len(saldos) < 2 or not linhas:
+        return {"ok": True, "diferenca_cents": 0}
+    maxlanc = max(l["data"] for l in linhas)
+    s = sorted((x for x in saldos if x["data"] <= maxlanc), key=lambda x: x["data"])
+    if len(s) < 2:
+        return {"ok": True, "diferenca_cents": 0}
+    lo = sorted(linhas, key=lambda l: l["data"])
     dif = 0
     for i in range(1, len(s)):
+        de, ate = s[i - 1]["data"], s[i]["data"]
         esperado = s[i]["saldo_cents"] - s[i - 1]["saldo_cents"]
-        real = porData.get(s[i]["data"], 0)
+        real = sum((l["valor_cents"] if l["natureza"] == "receita" else -l["valor_cents"])
+                   for l in lo if de < l["data"] <= ate)
         dif += esperado - real
     return {"ok": dif == 0, "diferenca_cents": dif}
