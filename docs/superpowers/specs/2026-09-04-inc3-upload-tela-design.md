@@ -1,7 +1,8 @@
 # Incremento 3 — Bloco 3: upload de extrato/fatura no app, com tela de revisão
 
 **Data:** 2026-09-04
-**Status:** rascunho (spec começado sob limite de quota; **confirmar a decisão central §3 no início da próxima sessão** antes de virar plano)
+**Status:** aprovado — decisão central §3 confirmada pelo Caio: **opção (a)** (browser extrai com
+pdf.js, Worker parseia o texto; portar os 4 módulos p/ JS). Vira plano.
 **Projeto:** `C:\Users\caioc\Caio\financas`
 
 ---
