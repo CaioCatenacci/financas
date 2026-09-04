@@ -243,6 +243,24 @@ export function criarDb(sql) {
       return rows.map(r => r.linha_hash);
     },
 
+    // Marca o pagamento da fatura no extrato como fora do resumo (computa_resumo=false): procura
+    // UMA despesa de extrato ainda no resumo cujo valor bata com o total da fatura, dentro de
+    // [de,ate]. Espelha tools/importar_fatura.py: 1 candidato → marca; 0 ou >1 → não mexe (devolve
+    // a contagem p/ quem chama avisar). Sem isso, os itens da fatura + o pagamento no extrato
+    // contariam o gasto do cartão duas vezes no Resumo.
+    async marcarPagamentoFaturaNaoGasto(totalCents, de, ate) {
+      const rows = await sql`
+        select id from transacoes
+        where fonte = 'extrato' and natureza = 'despesa' and computa_resumo = true
+          and (round(valor_final*100))::bigint = ${totalCents}
+          and data between ${de} and ${ate}`;
+      if (rows.length === 1) {
+        await sql`update transacoes set computa_resumo = false where id = ${rows[0].id}`;
+        return { marcados: 1, candidatos: 1 };
+      }
+      return { marcados: 0, candidatos: rows.length };
+    },
+
     // carimba a linha_hash na transação já existente que casou (reconciliação) — só se ainda
     // não tiver sido carimbada, senão mascararia um bug de duplo-match (espelha
     // tools/importar_extrato.py::_gravar).

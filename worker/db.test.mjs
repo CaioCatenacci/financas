@@ -345,3 +345,34 @@ test("associacoesPorNome monta dict camelCase chaveado por normalizarNome, só t
   assert.match(sql.chamadas[0].text, /left join subcategorias/i);
   assert.deepEqual(r, { "LOJA X": { categoriaNome: "Casa", subNome: "Limpeza" } });
 });
+
+test("marcarPagamentoFaturaNaoGasto marca quando há exatamente 1 candidato", async () => {
+  const sql = fakeSql([{ id: "pg1" }]); // select devolve 1 candidato
+  const db = criarDb(sql);
+  const r = await db.marcarPagamentoFaturaNaoGasto(16700, "2025-05-01", "2025-07-02");
+  // 1º call: select dos candidatos (extrato/despesa/no resumo/valor bate/janela)
+  assert.match(sql.chamadas[0].text, /from transacoes/i);
+  assert.match(sql.chamadas[0].text, /fonte = 'extrato'/i);
+  assert.match(sql.chamadas[0].text, /computa_resumo = true/i);
+  assert.ok(sql.chamadas[0].values.includes(16700));
+  // 2º call: update marcando fora do resumo
+  assert.match(sql.chamadas[1].text, /update transacoes set computa_resumo = false/i);
+  assert.deepEqual(sql.chamadas[1].values, ["pg1"]);
+  assert.deepEqual(r, { marcados: 1, candidatos: 1 });
+});
+
+test("marcarPagamentoFaturaNaoGasto não marca com 0 candidatos", async () => {
+  const sql = fakeSql([]); // nenhum candidato
+  const db = criarDb(sql);
+  const r = await db.marcarPagamentoFaturaNaoGasto(16700, "2025-05-01", "2025-07-02");
+  assert.equal(sql.chamadas.length, 1); // só o select, sem update
+  assert.deepEqual(r, { marcados: 0, candidatos: 0 });
+});
+
+test("marcarPagamentoFaturaNaoGasto não marca com >1 candidato (ambíguo, deixa manual)", async () => {
+  const sql = fakeSql([{ id: "a" }, { id: "b" }]);
+  const db = criarDb(sql);
+  const r = await db.marcarPagamentoFaturaNaoGasto(16700, "2025-05-01", "2025-07-02");
+  assert.equal(sql.chamadas.length, 1); // só o select, sem update
+  assert.deepEqual(r, { marcados: 0, candidatos: 2 });
+});

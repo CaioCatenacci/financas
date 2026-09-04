@@ -149,7 +149,9 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
     resumo.novos++;
   });
 
-  return { checksum, itens, resumo };
+  // totalCents = total impresso na fatura (não a soma dos itens novos): quem aplica usa isso pra
+  // achar e marcar o pagamento correspondente no extrato como fora do resumo (evita contar 2x).
+  return { checksum, itens, resumo, totalCents };
 }
 
 /**

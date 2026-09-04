@@ -255,7 +255,17 @@ export async function handleApi(request, env, url, dbOpt = null) {
   }
   if (url.pathname === "/api/importar/aplicar" && request.method === "POST") {
     const b = await body();
-    return j(await aplicar(db, b.decisao));
+    const r = await aplicar(db, b.decisao);
+    // fatura: depois de gravar os itens, marca o pagamento correspondente no extrato como fora do
+    // resumo (janela de 62 dias a partir do 1º dia do mês da fatura, igual tools/importar_fatura.py).
+    if (b.fatura && b.fatura.totalCents) {
+      const mes = String(b.fatura.mes).padStart(2, "0");
+      const de = `${b.fatura.ano}-${mes}-01`;
+      const pg = await db.marcarPagamentoFaturaNaoGasto(b.fatura.totalCents, de, deslocaDias(de, 62));
+      r.pagamentoMarcado = pg.marcados;
+      r.pagamentoCandidatos = pg.candidatos;
+    }
+    return j(r);
   }
 
   return new Response("not found", { status: 404 });

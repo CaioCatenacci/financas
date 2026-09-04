@@ -101,6 +101,7 @@ test("preview fatura: itens novos, checksum ok (itens==total)", () => {
   assert.equal(p.checksum.ok, true);
   assert.equal(p.resumo.novos, 2);
   assert.equal(p.resumo.casados, 0); // fatura não reconcilia contra existentes
+  assert.equal(p.totalCents, 16700); // total impresso exposto p/ marcar o pagamento no extrato
 });
 
 test("preview fatura: item que casaria padrão de não-gasto continua gasto (invariante 'sempre gasto')", () => {

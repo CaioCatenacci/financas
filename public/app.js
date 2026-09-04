@@ -196,7 +196,7 @@ if (typeof document !== "undefined") {
     periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
-    importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null },
+    importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
   };
 
   // API
@@ -570,6 +570,18 @@ if (typeof document !== "undefined") {
     </div>`;
   }
 
+  // mensagem de resultado do "Aplicar" (compartilhada pelos dois ramos de render de drawImportar).
+  function msgResultado(r) {
+    if (!r) return "";
+    let extra = "";
+    if (r.pagamentoMarcado != null) { // presente só em fatura
+      extra = r.pagamentoMarcado
+        ? " · pagamento da fatura no extrato marcado fora do resumo"
+        : ` · pagamento no extrato não marcado automaticamente (${r.pagamentoCandidatos} candidato(s)) — ajuste em Lançamentos se preciso`;
+    }
+    return `<p class="impresultado">✅ gravados ${r.gravados} (${r.naoGasto} fora do resumo) · conciliados ${r.conciliados}${extra}. Atualize Resumo/Lançamentos para ver.</p>`;
+  }
+
   function drawImportar() {
     const st = estado.importar;
     const preview = st.preview;
@@ -593,10 +605,7 @@ if (typeof document !== "undefined") {
       </div>`;
 
     if (!preview) {
-      const resultado = st.ultimoResultado
-        ? `<p class="impresultado">✅ gravados ${st.ultimoResultado.gravados} (${st.ultimoResultado.naoGasto} fora do resumo) · conciliados ${st.ultimoResultado.conciliados}. Atualize Resumo/Lançamentos para ver.</p>`
-        : "";
-      $("#importar").innerHTML = controles + resultado;
+      $("#importar").innerHTML = controles + msgResultado(st.ultimoResultado);
       return;
     }
 
@@ -611,9 +620,7 @@ if (typeof document !== "undefined") {
     const ambiguos = preview.itens.filter(it => it.status === "ambiguo");
     const jaTem = preview.itens.filter(it => it.status === "jaTem");
 
-    const resultado = st.ultimoResultado
-      ? `<p class="impresultado">✅ gravados ${st.ultimoResultado.gravados} (${st.ultimoResultado.naoGasto} fora do resumo) · conciliados ${st.ultimoResultado.conciliados}. Atualize Resumo/Lançamentos para ver.</p>`
-      : "";
+    const resultado = msgResultado(st.ultimoResultado);
 
     $("#importar").innerHTML = controles + `
       <div class="card" style="margin-bottom:16px">
@@ -645,7 +652,7 @@ if (typeof document !== "undefined") {
         const texto = await extrairTextoPDF(buf, modo);
         const corpo = { tipo: st.tipo, texto };
         if (st.tipo === "extrato") corpo.conta = $("#impconta").value || "conta";
-        else { corpo.ano = +$("#impano").value; corpo.mes = $("#impmes").value; }
+        else { corpo.ano = +$("#impano").value; corpo.mes = $("#impmes").value; st.ano = corpo.ano; st.mes = corpo.mes; }
         st.preview = await apiPost("/api/importar/preview", corpo);
       } catch (err) {
         alert("Falha ao ler/pré-visualizar: " + err.message);
@@ -658,7 +665,11 @@ if (typeof document !== "undefined") {
       if (!podeAplicar(st.preview)) return;
       try {
         const decisao = montarDecisao(st.preview, estado.catalogo, st.tipo);
-        st.ultimoResultado = await apiPost("/api/importar/aplicar", { decisao });
+        const payload = { decisao };
+        // fatura: manda o total impresso + ano/mês pro servidor achar o pagamento no extrato e
+        // marcá-lo fora do resumo (evita contar o gasto do cartão duas vezes).
+        if (st.tipo === "fatura") payload.fatura = { totalCents: st.preview.totalCents, ano: st.ano, mes: st.mes };
+        st.ultimoResultado = await apiPost("/api/importar/aplicar", payload);
         st.preview = null; // evita reaplicar o mesmo lote sem novo preview
         drawImportar();
       } catch (err) {

@@ -283,6 +283,10 @@ function dbImportarFake() {
     hashesNaJanela: async () => [],
     inserirTransacao: async (t) => { estado.inseridos.push(t); return { id: "novo-id" }; },
     carimbarLinhaHash: async (id, hash) => { estado.carimbados.push({ id, hash }); },
+    marcarPagamentoFaturaNaoGasto: async (totalCents, de, ate) => {
+      estado.pagamento = { totalCents, de, ate };
+      return { marcados: 1, candidatos: 1 };
+    },
   };
 }
 
@@ -320,6 +324,36 @@ test("POST /api/importar/aplicar grava novos e retorna as contagens", async () =
   const data = await response.json();
   assert.equal(db.estado.inseridos.length, 1);
   assert.equal(data.gravados, 1);
+});
+
+test("POST /api/importar/aplicar (fatura) marca o pagamento no extrato como fora do resumo", async () => {
+  const db = dbImportarFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/importar/aplicar", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({
+      decisao: { novos: [{ descricao: "item", categoria_id: "cO" }], naoGasto: [], casados: [] },
+      fatura: { totalCents: 16700, ano: 2025, mes: 5 },
+    }),
+  });
+  const data = await (await handleApi(request, env, new URL(request.url), db)).json();
+  // janela: 1º dia do mês (mês padronizado p/ "05") até +62 dias
+  assert.equal(db.estado.pagamento.totalCents, 16700);
+  assert.equal(db.estado.pagamento.de, "2025-05-01");
+  assert.equal(db.estado.pagamento.ate, "2025-07-02"); // 2025-05-01 + 62 dias
+  assert.equal(data.pagamentoMarcado, 1);
+});
+
+test("POST /api/importar/aplicar (extrato, sem fatura) NÃO chama marcação de pagamento", async () => {
+  const db = dbImportarFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/importar/aplicar", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ decisao: { novos: [], naoGasto: [], casados: [] } }),
+  });
+  const data = await (await handleApi(request, env, new URL(request.url), db)).json();
+  assert.equal(db.estado.pagamento, undefined); // não tocou no pagamento
+  assert.equal(data.pagamentoMarcado, undefined);
 });
 
 test("POST /api/importar/preview (extrato) amplia a janela de reconciliação ±3 dias", async () => {
