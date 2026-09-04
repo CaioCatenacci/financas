@@ -45,6 +45,11 @@ export function criarDb(sql) {
       return await sql`select id, nome from pessoas where ativa order by nome`;
     },
 
+    async pessoaPorNome(nome) {
+      const rows = await sql`select id, nome from pessoas where ativa and lower(nome) = lower(${nome}) limit 1`;
+      return rows[0] ?? null;
+    },
+
     // join p/ devolver os NOMES (categoria/subcategoria/pessoa) além dos ids; o app usa os nomes.
     async listarTransacoes(f = {}) {
       return await sql`

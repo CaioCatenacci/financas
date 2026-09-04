@@ -231,3 +231,20 @@ test("listarPessoas retorna ativas ordenadas por nome", async () => {
   assert.equal(r[0].nome, "Alice");
   assert.match(sql.chamadas[0].text, /from pessoas where ativa/i);
 });
+
+test("pessoaPorNome casa nome case-insensitive só entre ativas", async () => {
+  const sql = fakeSql([{ id: "p1", nome: "Caio" }]);
+  const db = criarDb(sql);
+  const r = await db.pessoaPorNome("caio");
+  assert.equal(r.id, "p1");
+  assert.match(sql.chamadas[0].text, /from pessoas/i);
+  assert.match(sql.chamadas[0].text, /where ativa/i);
+  assert.match(sql.chamadas[0].text, /lower\(nome\)\s*=\s*lower/i);
+  assert.deepEqual(sql.chamadas[0].values, ["caio"]);
+});
+
+test("pessoaPorNome retorna null quando não acha", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  assert.equal(await db.pessoaPorNome("Xuxa"), null);
+});
