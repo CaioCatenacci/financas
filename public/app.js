@@ -85,13 +85,15 @@ const normalizarBusca = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g
 
 // filtra client-side; campo vazio/undefined = não filtra naquela dimensão.
 export function filtrarTransacoes(rows, filtro = {}) {
-  const { categoria, pessoa, origem, texto } = filtro;
+  const { categoria, pessoa, origem, texto, computa } = filtro;
   const txt = texto && texto.trim() ? normalizarBusca(texto.trim()) : "";
   return rows.filter(t => {
     if (categoria && t.categoria !== categoria) return false;
     if (pessoa === "__sem__") { if (t.pessoa_id) return false; }
     else if (pessoa && t.pessoa !== pessoa) return false;
     if (origem && t.origem_categoria !== origem) return false;
+    if (computa === "gasto" && !t.computa_resumo) return false;
+    if (computa === "naogasto" && t.computa_resumo) return false;
     if (txt) {
       const alvo = normalizarBusca((t.descricao ?? "") + " " + (t.contraparte_nome ?? ""));
       if (!alvo.includes(txt)) return false;
@@ -115,7 +117,7 @@ if (typeof document !== "undefined") {
   const estado = {
     periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
-    filtro: { categoria: "", pessoa: "", origem: "", texto: "" },
+    filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
   };
 
   // API
@@ -321,6 +323,7 @@ if (typeof document !== "undefined") {
     $("#fcategoria").value = estado.filtro.categoria;
     $("#fpessoa").value = estado.filtro.pessoa;
     $("#forigem").value = estado.filtro.origem;
+    $("#fcomputa").value = estado.filtro.computa;
     $("#ftexto").value = estado.filtro.texto;
   }
 
@@ -340,15 +343,21 @@ if (typeof document !== "undefined") {
         subsDaCat(estado.catalogo, t.categoria_id).map(s => `<option value="${esc(s.id)}" ${s.id === t.subcategoria_id ? "selected" : ""}>${esc(s.nome)}</option>`).join("");
       const pessoaOpts = `<option value="">—</option>` +
         estado.pessoas.map(p => `<option value="${esc(p.id)}" ${p.id === t.pessoa_id ? "selected" : ""}>${esc(p.nome)}</option>`).join("");
+      // fora do resumo (extrato/fatura não-gasto: transferência, pagamento de fatura etc.) — selo
+      // só aparece quando computa_resumo é false; o toggle (botão) inverte o valor nas duas direções.
+      const selo = !t.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : "";
       return `<tr data-id="${t.id}">
         <td class="dt">${fmtData(t.data)}</td>
-        <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—"></td>
+        <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—">${selo}</td>
         <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.categoria)})"></i><select class="edcat">${catOpts}</select></span></td>
         <td><select class="edsub">${subOpts}</select></td>
         <td><select class="edpessoa">${pessoaOpts}</select></td>
         <td class="val" style="color:${rec ? "var(--receita)" : "var(--ink)"}">${rec ? "+" : ""}R$ ${centavosBR(t.valor_total)}</td>
         <td class="val" style="color:var(--mut)">${+t.valor_reembolso ? "R$ " + centavosBR(t.valor_reembolso) : "—"}</td>
-        <td><button class="del" title="Apagar">✕</button></td>
+        <td>
+          <button class="toggle-computa" title="${t.computa_resumo ? "Marcar fora do resumo" : "Incluir no resumo"}">${t.computa_resumo ? "⊘" : "↩"}</button>
+          <button class="del" title="Apagar">✕</button>
+        </td>
       </tr>`;
     }).join("");
   }
@@ -506,13 +515,14 @@ if (typeof document !== "undefined") {
     if (e.target.id === "fcategoria") estado.filtro.categoria = e.target.value;
     else if (e.target.id === "fpessoa") estado.filtro.pessoa = e.target.value;
     else if (e.target.id === "forigem") estado.filtro.origem = e.target.value;
+    else if (e.target.id === "fcomputa") estado.filtro.computa = e.target.value;
     else return;
     drawRows();
   });
   $("#ftexto").addEventListener("input", e => { estado.filtro.texto = e.target.value; drawRows(); });
   $("#flimpar").addEventListener("click", () => {
-    estado.filtro = { categoria: "", pessoa: "", origem: "", texto: "" };
-    $("#fcategoria").value = ""; $("#fpessoa").value = ""; $("#forigem").value = ""; $("#ftexto").value = "";
+    estado.filtro = { categoria: "", pessoa: "", origem: "", texto: "", computa: "" };
+    $("#fcategoria").value = ""; $("#fpessoa").value = ""; $("#forigem").value = ""; $("#fcomputa").value = ""; $("#ftexto").value = "";
     drawRows();
   });
   // tabela: editar/apagar
@@ -539,10 +549,16 @@ if (typeof document !== "undefined") {
     } catch (err) { alert("Falha ao salvar: " + err.message); }
   });
   $("#rows").addEventListener("click", async e => {
-    if (!e.target.classList.contains("del")) return;
-    const tr = e.target.closest("tr");
-    try { await apiDelete(`/api/transacoes/${tr.dataset.id}`); carregar(); }
-    catch (err) { alert("Falha ao apagar: " + err.message); }
+    const tr = e.target.closest("tr"); if (!tr) return;
+    if (e.target.classList.contains("del")) {
+      try { await apiDelete(`/api/transacoes/${tr.dataset.id}`); carregar(); }
+      catch (err) { alert("Falha ao apagar: " + err.message); }
+    } else if (e.target.classList.contains("toggle-computa")) {
+      const t = estado.transacoes.find(x => String(x.id) === tr.dataset.id);
+      if (!t) return;
+      try { await apiPatch(`/api/transacoes/${tr.dataset.id}`, { computa_resumo: !t.computa_resumo }); carregar(); }
+      catch (err) { alert("Falha ao atualizar: " + err.message); }
+    }
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }

@@ -146,3 +146,13 @@ test("filtrarTransacoes combina dimensões por E (categoria + pessoa)", () => {
   assert.deepEqual(filtrarTransacoes(T, { categoria: "Casa", pessoa: "Caio" }).map(t => t.id), [1]);
   assert.deepEqual(filtrarTransacoes(T, { categoria: "Casa", pessoa: "__sem__" }).map(t => t.id), [3]);
 });
+
+test("filtrarTransacoes por computa: só gasto / só não-gasto / tudo", () => {
+  const rows = [
+    { id: 1, computa_resumo: true, descricao: "mercado" },
+    { id: 2, computa_resumo: false, descricao: "transf" },
+  ];
+  assert.deepEqual(filtrarTransacoes(rows, { computa: "gasto" }).map(t => t.id), [1]);
+  assert.deepEqual(filtrarTransacoes(rows, { computa: "naogasto" }).map(t => t.id), [2]);
+  assert.deepEqual(filtrarTransacoes(rows, { computa: "" }).map(t => t.id), [1, 2]);
+});
