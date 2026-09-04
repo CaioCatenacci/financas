@@ -269,3 +269,15 @@ test("resumoPorPessoa ignora não-gasto", async () => {
   await db.resumoPorPessoa("2026-01-01", "2026-12-31");
   assert.match(sql.chamadas[0].text, /computa_resumo/i);
 });
+
+test("atualizarTransacao alterna computa_resumo", async () => {
+  const existente = { id: "t1", data: "2026-01-01", categoria_id: "cCasa", subcategoria_id: null,
+    valor_total: "100.00", valor_reembolso: "0.00", pessoa_id: null, natureza: "despesa",
+    esfera: "pessoal", computa_resumo: true };
+  const sql = fakeSql([existente]);
+  const db = criarDb(sql);
+  await db.atualizarTransacao("t1", { computa_resumo: false });
+  const upd = sql.chamadas[1];
+  assert.match(upd.text, /computa_resumo/i);
+  assert.ok(upd.values.includes(false));
+});

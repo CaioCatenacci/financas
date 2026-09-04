@@ -82,12 +82,14 @@ export function criarDb(sql) {
       const esfera = c.esfera ?? t.esfera;
       const valor_total = c.valorCents != null ? centsToNumeric(c.valorCents) : t.valor_total;
       const valor_reembolso = c.reembolsoCents != null ? centsToNumeric(c.reembolsoCents) : t.valor_reembolso;
+      const computa_resumo = c.computa_resumo === undefined ? t.computa_resumo : !!c.computa_resumo;
       // edição manual reclassifica: o Inc 2 aprende dessas correções
       await sql`
         update transacoes set
           data = ${data}, categoria_id = ${categoria_id}, subcategoria_id = ${subcategoria_id},
           pessoa_id = ${pessoa_id}, descricao = ${descricao}, natureza = ${natureza}, esfera = ${esfera},
           valor_total = ${valor_total}, valor_reembolso = ${valor_reembolso},
+          computa_resumo = ${computa_resumo},
           origem_categoria = 'manual'
         where id = ${id}`;
       // aprende: correção de categoria vira regra pra aquela contraparte (por id)
