@@ -23,7 +23,7 @@ export function parseUpdate(update) {
 export async function downloadArquivo(token, fileId, fetchImpl = fetch) {
   const info = await (await fetchImpl(`https://api.telegram.org/bot${token}/getFile?file_id=${fileId}`)).json();
   const path = info.result.file_path;
-  const mime = path.endsWith(".png") ? "image/png" : "image/jpeg";
+  const mime = path.endsWith(".pdf") ? "application/pdf" : path.endsWith(".png") ? "image/png" : "image/jpeg";
   const resp = await fetchImpl(`https://api.telegram.org/file/bot${token}/${path}`);
   const bytes = new Uint8Array(await resp.arrayBuffer());
   return { bytes, mime };

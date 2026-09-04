@@ -65,7 +65,8 @@ export async function tratarUpdate(update, env, deps) {
   }
   if (ev.tipo !== "imagem" && ev.tipo !== "pdf") return;
 
-  const { bytes, mime } = await deps.baixar(ev.fileId);
+  const { bytes } = await deps.baixar(ev.fileId);
+  const mime = ev.mime;   // fonte autoritativa (parseUpdate); downloadArquivo derivava mime errado p/ pdf
 
   // catálogo por id (Fase B): alimenta o extrator (nomes genéricos) e resolve nome→id.
   const catalogo = await deps.db.catalogo();
