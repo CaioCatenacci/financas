@@ -166,14 +166,14 @@ export function criarDb(sql) {
         from transacoes t
         left join categorias c    on c.id = t.categoria_id
         left join subcategorias s on s.id = t.subcategoria_id
-        where t.data >= ${de} and t.data <= ${ate}
+        where t.data >= ${de} and t.data <= ${ate} and t.computa_resumo
         group by c.nome, s.nome, t.natureza order by total desc`;
     },
 
     async resumoMensal(de, ate) {
       return await sql`
         select to_char(data,'YYYY-MM') as mes, natureza, sum(valor_final) as total
-        from transacoes where data >= ${de} and data <= ${ate}
+        from transacoes where data >= ${de} and data <= ${ate} and computa_resumo
         group by 1, 2 order by 1`;
     },
 
@@ -183,7 +183,7 @@ export function criarDb(sql) {
           coalesce(sum(valor_final) filter (where natureza = 'receita'), 0) as receita,
           coalesce(sum(valor_final) filter (where natureza = 'despesa'), 0) as despesa,
           coalesce(sum(valor_reembolso), 0) as reembolso
-        from transacoes where data >= ${de} and data <= ${ate}`;
+        from transacoes where data >= ${de} and data <= ${ate} and computa_resumo`;
       return rows[0];
     },
 
@@ -196,7 +196,7 @@ export function criarDb(sql) {
           coalesce(sum(t.valor_final) filter (where date_trunc('month', t.data) = (select cur from m) - interval '1 month'), 0) as ant
         from transacoes t
         left join categorias c on c.id = t.categoria_id
-        where t.natureza = 'despesa'
+        where t.natureza = 'despesa' and t.computa_resumo
           and date_trunc('month', t.data) in ((select cur from m), (select cur from m) - interval '1 month')
         group by c.nome
         order by atual desc`;
@@ -208,7 +208,7 @@ export function criarDb(sql) {
                sum(t.valor_total) as bruto, sum(t.valor_reembolso) as reembolsado, sum(t.valor_final) as liquido
         from transacoes t
         left join categorias c on c.id = t.categoria_id
-        where t.valor_reembolso > 0
+        where t.valor_reembolso > 0 and t.computa_resumo
         group by 1, 2 order by 1, 2`;
     },
 
@@ -217,7 +217,7 @@ export function criarDb(sql) {
         select coalesce(p.nome, '—') as pessoa, t.natureza, sum(t.valor_final) as total
         from transacoes t
         left join pessoas p on p.id = t.pessoa_id
-        where t.data >= ${de} and t.data <= ${ate}
+        where t.data >= ${de} and t.data <= ${ate} and t.computa_resumo
         group by 1, 2
         order by 3 desc`;
     },

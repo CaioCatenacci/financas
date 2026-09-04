@@ -248,3 +248,24 @@ test("pessoaPorNome retorna null quando não acha", async () => {
   const db = criarDb(sql);
   assert.equal(await db.pessoaPorNome("Xuxa"), null);
 });
+
+test("resumoKPIs ignora não-gasto (computa_resumo)", async () => {
+  const sql = fakeSql([{ receita: "0", despesa: "0", reembolso: "0" }]);
+  const db = criarDb(sql);
+  await db.resumoKPIs("2026-01-01", "2026-12-31");
+  assert.match(sql.chamadas[0].text, /computa_resumo/i);
+});
+
+test("resumoPorCategoria ignora não-gasto", async () => {
+  const sql = fakeSql([{ macro: "Casa", total: "1" }]);
+  const db = criarDb(sql);
+  await db.resumoPorCategoria("2026-01-01", "2026-12-31");
+  assert.match(sql.chamadas[0].text, /computa_resumo/i);
+});
+
+test("resumoPorPessoa ignora não-gasto", async () => {
+  const sql = fakeSql([{ pessoa: "Caio", natureza: "despesa", total: "1" }]);
+  const db = criarDb(sql);
+  await db.resumoPorPessoa("2026-01-01", "2026-12-31");
+  assert.match(sql.chamadas[0].text, /computa_resumo/i);
+});
