@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsDaCat,
-  agruparPorPessoa, filtrarTransacoes,
+  agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto,
 } from "./app.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
@@ -158,6 +158,138 @@ test("filtrarTransacoes por computa: só gasto / só não-gasto / tudo", () => {
   assert.deepEqual(filtrarTransacoes(rows, { computa: "gasto" }).map(t => t.id), [1]);
   assert.deepEqual(filtrarTransacoes(rows, { computa: "naogasto" }).map(t => t.id), [2]);
   assert.deepEqual(filtrarTransacoes(rows, { computa: "" }).map(t => t.id), [1, 2]);
+});
+
+// ---------- montarDecisao / podeAplicar / resumoTexto (Task 9: aba Importar) ----------
+// catálogo fixture mínimo: "Outros" (fallback obrigatório), "Transferências" (não-gasto
+// típico) e "Mercado" com uma sub, pra exercitar a resolução nome→id igual worker/categorias.js.
+const CATALOGO_IMPORT = {
+  categorias: [
+    { id: "cOut", nome: "Outros" },
+    { id: "cTransf", nome: "Transferências" },
+    { id: "cMerc", nome: "Mercado" },
+  ],
+  subcategorias: [
+    { id: "sHorti", categoria_id: "cMerc", nome: "Hortifruti" },
+  ],
+};
+
+function previewFixture() {
+  return {
+    checksum: { ok: true, diferencaCents: 0 },
+    resumo: { novos: 1, casados: 1, naoGasto: 1, ambiguos: 1, jaTem: 1 },
+    itens: [
+      { // novo — categoria vem de categoriaNome (regra aprendida), com sub
+        status: "novo", data: "2026-08-01", descricao: "MERCADO XYZ", valorCents: 5000,
+        natureza: "despesa", linhaHash: "h1", matchId: null, computaResumo: true,
+        categoriaNome: "Mercado", subNome: "Hortifruti", categoriaOrg: null,
+        contraparteNome: "Mercado Xyz Ltda",
+      },
+      { // naoGasto — categoria vem de categoriaOrg (fatura pagamento/transferência), sem regra
+        status: "naoGasto", data: "2026-08-02", descricao: "TED PARA CONTA PROPRIA", valorCents: 100000,
+        natureza: "despesa", linhaHash: "h2", matchId: null, computaResumo: false,
+        categoriaNome: null, subNome: null, categoriaOrg: "Transferências",
+        contraparteNome: null,
+      },
+      { // casado — só matchId+linhaHash importam
+        status: "casado", data: "2026-08-03", descricao: "PIX RECEBIDO", valorCents: 2000,
+        natureza: "receita", linhaHash: "h3", matchId: "m1", computaResumo: true,
+        categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
+      },
+      { // ambiguo — não aplicado por padrão
+        status: "ambiguo", data: "2026-08-04", descricao: "TALVEZ CASE", valorCents: 3000,
+        natureza: "despesa", linhaHash: "h4", matchId: null, computaResumo: true,
+        categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
+      },
+      { // jaTem — idempotência, nunca reaplica
+        status: "jaTem", data: "2026-08-05", descricao: "JA IMPORTADO", valorCents: 900,
+        natureza: "despesa", linhaHash: "h5", matchId: null, computaResumo: null,
+        categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
+      },
+    ],
+  };
+}
+
+test("montarDecisao: item novo resolve categoria/sub por nome, marca fonte/origem/computa_resumo/linha_hash", () => {
+  const preview = previewFixture();
+  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato");
+  assert.equal(d.novos.length, 1);
+  const n = d.novos[0];
+  assert.equal(n.categoria_id, "cMerc");
+  assert.equal(n.subcategoria_id, "sHorti");
+  assert.equal(n.dataISO, "2026-08-01");
+  assert.equal(n.natureza, "despesa");
+  assert.equal(n.valorCents, 5000);
+  assert.equal(n.reembolsoCents, 0);
+  assert.equal(n.descricao, "MERCADO XYZ");
+  assert.equal(n.fonte, "extrato");
+  assert.equal(n.origem_categoria, "regra"); // categoriaNome presente = veio de associação aprendida
+  assert.equal(n.contraparte_nome, "Mercado Xyz Ltda");
+  assert.equal(n.computa_resumo, true);
+  assert.equal(n.linha_hash, "h1");
+});
+
+test("montarDecisao: item naoGasto resolve categoriaOrg (sem sub) e computa_resumo:false", () => {
+  const preview = previewFixture();
+  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato");
+  assert.equal(d.naoGasto.length, 1);
+  const ng = d.naoGasto[0];
+  assert.equal(ng.categoria_id, "cTransf");
+  assert.equal(ng.subcategoria_id, null);
+  assert.equal(ng.origem_categoria, "modelo"); // sem categoriaNome (não veio de regra)
+  assert.equal(ng.computa_resumo, false);
+  assert.equal(ng.linha_hash, "h2");
+  assert.equal(ng.fonte, "extrato");
+});
+
+test("montarDecisao: item casado vira {matchId,linhaHash}", () => {
+  const preview = previewFixture();
+  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato");
+  assert.deepEqual(d.casados, [{ matchId: "m1", linhaHash: "h3" }]);
+});
+
+test("montarDecisao: ambíguo e jáTem não são aplicados (fora de novos/naoGasto/casados)", () => {
+  const preview = previewFixture();
+  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato");
+  const todasDescricoes = [...d.novos, ...d.naoGasto].map(x => x.descricao);
+  assert.ok(!todasDescricoes.includes("TALVEZ CASE"));
+  assert.ok(!todasDescricoes.includes("JA IMPORTADO"));
+  assert.equal(d.casados.length, 1); // só o "casado" de verdade
+});
+
+test("montarDecisao: fatura usa descricaoFinal quando presente", () => {
+  const preview = {
+    checksum: { ok: true, diferencaCents: 0 },
+    resumo: { novos: 1, casados: 0, naoGasto: 0, ambiguos: 0, jaTem: 0 },
+    itens: [{
+      status: "novo", data: "2026-08-01", descricao: "LOJA X PARCELA 01/03", descricaoFinal: "LOJA X (parc 01/03)",
+      valorCents: 1000, natureza: "despesa", linhaHash: "hf1", matchId: null, computaResumo: true,
+      categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: "Loja X",
+    }],
+  };
+  const d = montarDecisao(preview, CATALOGO_IMPORT, "fatura");
+  assert.equal(d.novos[0].descricao, "LOJA X (parc 01/03)");
+  assert.equal(d.novos[0].fonte, "fatura");
+  assert.equal(d.novos[0].categoria_id, "cOut"); // sem categoriaNome/categoriaOrg -> fallback Outros
+});
+
+test("podeAplicar: true só quando checksum.ok===true", () => {
+  assert.equal(podeAplicar({ checksum: { ok: true } }), true);
+  assert.equal(podeAplicar({ checksum: { ok: false } }), false);
+  assert.equal(podeAplicar({ checksum: {} }), false);
+});
+
+test("resumoTexto: contém as contagens do resumo", () => {
+  const preview = previewFixture();
+  const txt = resumoTexto(preview);
+  assert.match(txt, /12|1/); // sanity: função roda
+  assert.match(txt, /novos/i);
+  assert.match(txt, /1/);
+  // conta exata de cada grupo aparece no texto
+  assert.match(txt, /novos.*1/i);
+  assert.match(txt, /conciliad.*1/i);
+  assert.match(txt, /ambígu.*1/i);
+  assert.match(txt, /já.*1/i);
 });
 
 // ---------- reconstruirTexto (Task 8: pdf.js -> texto compatível com parseExtrato/parseFatura) ----------

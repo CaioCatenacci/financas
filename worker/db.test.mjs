@@ -53,6 +53,32 @@ test("inserirTransacao grava contraparte", async () => {
   assert.ok(sql.chamadas[0].values.includes("5519995783408"));
 });
 
+test("inserirTransacao grava computa_resumo/linha_hash quando informados (fluxo de importação)", async () => {
+  const sql = fakeSql([{ id: "t1" }]);
+  const db = criarDb(sql);
+  await db.inserirTransacao({
+    dataISO: "2026-08-29", natureza: "despesa", esfera: "pessoal",
+    valorCents: 1550, reembolsoCents: 0, categoria_id: "cCasa", subcategoria_id: "sLimp",
+    descricao: "x", pessoa_id: null, fonte: "extrato", origem_categoria: "modelo",
+    computa_resumo: false, linha_hash: "abc",
+  });
+  assert.match(sql.chamadas[0].text, /computa_resumo, linha_hash/i);
+  assert.ok(sql.chamadas[0].values.includes(false));
+  assert.ok(sql.chamadas[0].values.includes("abc"));
+});
+
+test("inserirTransacao sem computa_resumo/linha_hash mantém o default (true/null) — não quebra a captura", async () => {
+  const sql = fakeSql([{ id: "t1" }]);
+  const db = criarDb(sql);
+  await db.inserirTransacao({
+    dataISO: "2026-08-29", natureza: "despesa", esfera: "pessoal",
+    valorCents: 1550, reembolsoCents: 0, categoria_id: "cCasa", subcategoria_id: "sLimp",
+    descricao: "x", pessoa_id: null, fonte: "imagem", origem_categoria: "modelo",
+  });
+  assert.ok(sql.chamadas[0].values.includes(true));
+  assert.ok(sql.chamadas[0].values.includes(null)); // linha_hash default null (entre outros nulls, ok)
+});
+
 test("catalogo consulta categorias e subcategorias ativas", async () => {
   const sql = fakeSql([{ id: "c1", nome: "Casa" }]);
   const db = criarDb(sql);

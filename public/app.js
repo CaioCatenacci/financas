@@ -102,8 +102,76 @@ export function filtrarTransacoes(rows, filtro = {}) {
   });
 }
 
+// ---------- importação (Task 9: aba Importar) ----------
+// resolve nome→id igual worker/categorias.js::resolverCategoria (reimplementado aqui porque o
+// browser não importa worker/*.js): categoria por nome exato, fallback "Outros"; sub só se
+// bater dentro da categoria resolvida.
+function resolverCategoriaImport(nomeMacro, nomeSub, catalogo) {
+  const cats = catalogo.categorias || [];
+  let cat = cats.find(c => c.nome === nomeMacro);
+  if (!cat) cat = cats.find(c => c.nome === "Outros");
+  const categoria_id = cat ? cat.id : null;
+
+  let subcategoria_id = null;
+  if (categoria_id && nomeSub) {
+    const sub = (catalogo.subcategorias || []).find(s => s.categoria_id === categoria_id && s.nome === nomeSub);
+    if (sub) subcategoria_id = sub.id;
+  }
+  return { categoria_id, subcategoria_id };
+}
+
+// monta a decisao revisada (novos/naoGasto/casados) a partir do preview + catálogo, espelhando
+// tools/importar_extrato.py::_gravar / importar_fatura.py: só "novo"/"naoGasto" viram linha de
+// inserirTransacao (categoria já resolvida por id); "casado" só carimba linha_hash; "ambiguo" e
+// "jaTem" não são aplicados por padrão (o app pode resolver um ambíguo mutando status antes).
+export function montarDecisao(preview, catalogo, fonte) {
+  const novos = [], naoGasto = [], casados = [];
+  for (const item of preview.itens) {
+    if (item.status === "casado") {
+      casados.push({ matchId: item.matchId, linhaHash: item.linhaHash });
+      continue;
+    }
+    if (item.status !== "novo" && item.status !== "naoGasto") continue; // ambiguo/jaTem: skip
+
+    const nomeCat = item.categoriaOrg || item.categoriaNome || "Outros";
+    const { categoria_id, subcategoria_id } = resolverCategoriaImport(nomeCat, item.subNome, catalogo);
+    const row = {
+      dataISO: item.data, natureza: item.natureza, esfera: "pessoal",
+      valorCents: item.valorCents, reembolsoCents: 0,
+      categoria_id, subcategoria_id,
+      descricao: item.descricaoFinal ?? item.descricao,
+      fonte, origem_categoria: item.categoriaNome ? "regra" : "modelo",
+      contraparte_nome: item.contraparteNome,
+      computa_resumo: item.computaResumo, linha_hash: item.linhaHash,
+    };
+    (item.status === "novo" ? novos : naoGasto).push(row);
+  }
+  return { novos, naoGasto, casados };
+}
+
+// "Aplicar" só habilita quando o checksum bateu — extrato/fatura com diferença é abortado
+// (mesmo critério dos scripts .py: não grava nada até o checksum bater).
+export function podeAplicar(preview) {
+  return preview?.checksum?.ok === true;
+}
+
+// rótulo curto das contagens do preview, pra mostrar acima da revisão.
+export function resumoTexto(preview) {
+  const r = preview.resumo || {};
+  return `novos ${r.novos ?? 0} · conciliados ${r.casados ?? 0} · fora do resumo ${r.naoGasto ?? 0} · ` +
+    `ambíguos ${r.ambiguos ?? 0} · já tinha ${r.jaTem ?? 0}`;
+}
+
 // ---------- app (só no browser) ----------
 if (typeof document !== "undefined") {
+  const { extrairTextoPDF } = await import("/pdf_extrair.js");
+  // pdf.js (CDN, carregado em index.html) precisa do worker configurado antes do 1º parse —
+  // mesma versão pinada do <script> em index.html.
+  if (window.pdfjsLib) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+      "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  }
+
   const $ = (s, r = document) => r.querySelector(s);
   const BRL = n => "R$ " + Math.round(n).toLocaleString("pt-BR");
   const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -118,6 +186,7 @@ if (typeof document !== "undefined") {
     periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
+    importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null },
   };
 
   // API
@@ -472,6 +541,133 @@ if (typeof document !== "undefined") {
     } catch (err) { alert("Falha: " + err.message); }
   });
 
+  // ----- Importar (upload PDF → preview → revisão → aplicar; Task 9) -----
+  function tabelaItens(titulo, itens, { comAmbiguo = false } = {}) {
+    if (!itens.length) return "";
+    const linhas = itens.map((it, i) => `
+      <tr data-i="${i}">
+        <td class="dt">${fmtData(it.data)}</td>
+        <td>${esc(it.descricaoFinal ?? it.descricao)}</td>
+        <td>${esc(it.categoriaOrg || it.categoriaNome || "Outros")}${it.subNome ? " › " + esc(it.subNome) : ""}</td>
+        <td class="val">${it.natureza === "receita" ? "+" : ""}R$ ${centavosBR(String(it.valorCents / 100))}</td>
+        ${comAmbiguo ? `<td><button class="chip impResolve" type="button" data-i="${i}">tratar como novo</button></td>` : "<td></td>"}
+      </tr>`).join("");
+    return `<div class="impgrupo">
+      <h3>${esc(titulo)} <span class="impcount">${itens.length}</span></h3>
+      <div class="tblwrap"><table><thead><tr>
+        <th>Data</th><th>Descrição</th><th>Categoria</th><th style="text-align:right">Valor</th><th></th>
+      </tr></thead><tbody>${linhas}</tbody></table></div>
+    </div>`;
+  }
+
+  function drawImportar() {
+    const st = estado.importar;
+    const preview = st.preview;
+    const isFatura = st.tipo === "fatura";
+
+    const controles = `
+      <div class="card" style="margin-bottom:16px">
+        <div class="cardhead"><div><h2>Importar extrato ou fatura (PDF)</h2><p class="sub">o PDF é lido no navegador; só o texto vai pro servidor</p></div></div>
+        <div class="impctl">
+          <select id="imptipo" aria-label="Tipo de importação">
+            <option value="extrato" ${!isFatura ? "selected" : ""}>Extrato (conta corrente)</option>
+            <option value="fatura" ${isFatura ? "selected" : ""}>Fatura (cartão)</option>
+          </select>
+          ${!isFatura
+            ? `<input id="impconta" type="text" placeholder="conta (ex.: itau)" value="itau">`
+            : `<input id="impano" type="text" inputmode="numeric" placeholder="ano" style="width:80px">
+               <input id="impmes" type="text" inputmode="numeric" placeholder="mês" style="width:60px">`}
+          <input id="imparquivo" type="file" accept="application/pdf">
+          <button id="imppreview" class="chip" type="button">${st.carregando ? "Lendo…" : "Pré-visualizar"}</button>
+        </div>
+      </div>`;
+
+    if (!preview) {
+      const resultado = st.ultimoResultado
+        ? `<p class="impresultado">✅ gravados ${st.ultimoResultado.gravados} (${st.ultimoResultado.naoGasto} fora do resumo) · conciliados ${st.ultimoResultado.conciliados}. Atualize Resumo/Lançamentos para ver.</p>`
+        : "";
+      $("#importar").innerHTML = controles + resultado;
+      return;
+    }
+
+    const ok = preview.checksum?.ok === true;
+    const checksumHtml = ok
+      ? `<span class="impchk impchk-ok">✓ checksum confere</span>`
+      : `<span class="impchk impchk-bad">✕ checksum não bate (diferença R$ ${centavosBR(String((preview.checksum?.diferencaCents ?? 0) / 100))}) — aplicar desabilitado</span>`;
+
+    const novos = preview.itens.filter(it => it.status === "novo");
+    const casados = preview.itens.filter(it => it.status === "casado");
+    const naoGasto = preview.itens.filter(it => it.status === "naoGasto");
+    const ambiguos = preview.itens.filter(it => it.status === "ambiguo");
+    const jaTem = preview.itens.filter(it => it.status === "jaTem");
+
+    const resultado = st.ultimoResultado
+      ? `<p class="impresultado">✅ gravados ${st.ultimoResultado.gravados} (${st.ultimoResultado.naoGasto} fora do resumo) · conciliados ${st.ultimoResultado.conciliados}. Atualize Resumo/Lançamentos para ver.</p>`
+      : "";
+
+    $("#importar").innerHTML = controles + `
+      <div class="card" style="margin-bottom:16px">
+        <div class="cardhead"><div><h2>Preview</h2><p class="sub">${esc(resumoTexto(preview))}</p></div></div>
+        ${checksumHtml}
+        ${resultado}
+        <div style="margin-top:14px">
+          <button id="impaplicar" class="chip" type="button" ${ok ? "" : "disabled"}>Aplicar</button>
+        </div>
+      </div>
+      ${tabelaItens("Novos", novos)}
+      ${tabelaItens("Conciliados (já existem no extrato)", casados)}
+      ${tabelaItens("Fora do resumo (transferência/pagamento de fatura)", naoGasto)}
+      ${tabelaItens("Ambíguos — não serão aplicados, a menos que você trate como novo", ambiguos, { comAmbiguo: true })}
+      ${tabelaItens("Já importados antes (ignorados)", jaTem)}
+    `;
+  }
+
+  $("#importar").addEventListener("click", async e => {
+    const st = estado.importar;
+    if (e.target.id === "imppreview") {
+      const arquivo = $("#imparquivo")?.files?.[0];
+      if (!arquivo) { alert("Escolha um arquivo PDF."); return; }
+      st.tipo = $("#imptipo").value;
+      st.carregando = true; st.ultimoResultado = null; drawImportar();
+      try {
+        const buf = await arquivo.arrayBuffer();
+        const modo = st.tipo === "fatura" ? "layout" : "simples";
+        const texto = await extrairTextoPDF(buf, modo);
+        const corpo = { tipo: st.tipo, texto };
+        if (st.tipo === "extrato") corpo.conta = $("#impconta").value || "conta";
+        else { corpo.ano = +$("#impano").value; corpo.mes = $("#impmes").value; }
+        st.preview = await apiPost("/api/importar/preview", corpo);
+      } catch (err) {
+        alert("Falha ao ler/pré-visualizar: " + err.message);
+      } finally {
+        st.carregando = false; drawImportar();
+      }
+      return;
+    }
+    if (e.target.id === "impaplicar") {
+      if (!podeAplicar(st.preview)) return;
+      try {
+        const decisao = montarDecisao(st.preview, estado.catalogo, st.tipo);
+        st.ultimoResultado = await apiPost("/api/importar/aplicar", { decisao });
+        st.preview = null; // evita reaplicar o mesmo lote sem novo preview
+        drawImportar();
+      } catch (err) {
+        alert("Falha ao aplicar: " + err.message);
+      }
+      return;
+    }
+    if (e.target.classList.contains("impResolve")) {
+      const tr = e.target.closest("tr"); if (!tr) return;
+      const ambiguos = st.preview.itens.filter(it => it.status === "ambiguo");
+      const item = ambiguos[+tr.dataset.i];
+      if (item) { item.status = "novo"; item.matchId = null; }
+      drawImportar();
+    }
+  });
+  $("#importar").addEventListener("change", e => {
+    if (e.target.id === "imptipo") { estado.importar.tipo = e.target.value; estado.importar.preview = null; drawImportar(); }
+  });
+
   // ----- carga e eventos -----
   async function carregar() {
     try {
@@ -495,8 +691,10 @@ if (typeof document !== "undefined") {
     const v = b.dataset.view;
     $("#resumo").classList.toggle("hidden", v !== "resumo");
     $("#lanc").classList.toggle("hidden", v !== "lanc");
+    $("#importar").classList.toggle("hidden", v !== "importar");
     $("#ajustes").classList.toggle("hidden", v !== "ajustes");
     if (v === "ajustes") drawAjustes();
+    if (v === "importar") drawImportar();
   }));
   document.querySelectorAll(".period").forEach(p => p.addEventListener("click", e => {
     if (!e.target.dataset.p) return;

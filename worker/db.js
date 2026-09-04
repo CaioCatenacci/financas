@@ -23,13 +23,14 @@ export function criarDb(sql) {
         insert into transacoes
           (data, natureza, esfera, valor_total, valor_reembolso, categoria_id, subcategoria_id,
            descricao, pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
-           contraparte_nome, contraparte_chave)
+           contraparte_nome, contraparte_chave, computa_resumo, linha_hash)
         values
           (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
            ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.categoria_id ?? null}, ${t.subcategoria_id ?? null},
            ${t.descricao}, ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria},
            ${t.extraido_por ?? null}, ${t.confianca ?? null}, ${t.documento_id ?? null},
-           ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null})
+           ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null},
+           ${t.computa_resumo ?? true}, ${t.linha_hash ?? null})
         returning id`;
       return { id: rows[0].id };
     },
