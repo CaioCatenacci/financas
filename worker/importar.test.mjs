@@ -103,6 +103,21 @@ test("preview fatura: itens novos, checksum ok (itens==total)", () => {
   assert.equal(p.resumo.casados, 0); // fatura não reconcilia contra existentes
 });
 
+test("preview fatura: item que casaria padrão de não-gasto continua gasto (invariante 'sempre gasto')", () => {
+  // "LOJA CDB MOVEIS" bate no padrão \bCDB\b de reconhecerNaoGasto; numa fatura, mesmo assim
+  // é gasto de cartão — só o pagamento da fatura (no extrato) é não-gasto. Sem linha de total
+  // → checksum trivialmente ok, o foco do teste é o status do item.
+  const txt = `                DATA       ESTABELECIMENTO                       VALOR EM R$
+                29/05      LOJA CDB MOVEIS                               200,00`;
+  const p = montarPreviewFatura(txt, 2025, "05", { catalogo, associacoes: {}, hashes: [] });
+  assert.equal(p.resumo.novos, 1);
+  assert.equal(p.resumo.naoGasto, 0);
+  const item = p.itens[0];
+  assert.equal(item.status, "novo");
+  assert.equal(item.computaResumo, true);
+  assert.equal(item.categoriaOrg, null);
+});
+
 test("preview fatura: dedup por hash (jaTem)", () => {
   const lh0 = linhaHash("fatura-202505", "2025-05-29", "PARK E CO ESTACIONAME", 1700, 0);
   const p = montarPreviewFatura(TXT_FATURA, 2025, "05", { catalogo, associacoes: {}, hashes: [lh0] });

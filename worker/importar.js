@@ -134,17 +134,19 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
     const descLimpo = item.descricao.replace(/\bPARCELA\s+\d{2}\/\d{2}\b/i, "").trim();
     const descricaoFinal = descLimpo + (item.parcela ? ` (parc ${item.parcela})` : "");
 
-    const status = info.computaResumo ? "novo" : "naoGasto";
-
+    // Item de fatura é SEMPRE gasto de cartão (invariante do brief e da docstring acima):
+    // mesmo que a descrição do estabelecimento bata num padrão de não-gasto (ex.: uma loja
+    // com "CDB"/"APLICACAO" no nome), ela NÃO vira não-gasto. O único não-gasto do cartão é o
+    // PAGAMENTO da fatura, que aparece no extrato — outro fluxo. Reaproveitamos `classificar`
+    // só pela categoria/contraparte aprendida; ignoramos o veredito de não-gasto dele.
     itens.push({
-      ...item, linhaHash: lh, status, matchId: null,
-      computaResumo: info.computaResumo,
-      categoriaNome: info.categoriaNome, subNome: info.subNome, categoriaOrg: info.categoriaOrg,
+      ...item, linhaHash: lh, status: "novo", matchId: null,
+      computaResumo: true,
+      categoriaNome: info.categoriaNome, subNome: info.subNome, categoriaOrg: null,
       contraparteNome: info.contraparteNome, natureza: "despesa", descricaoFinal,
     });
 
-    if (status === "novo") resumo.novos++;
-    else resumo.naoGasto++;
+    resumo.novos++;
   });
 
   return { checksum, itens, resumo };
