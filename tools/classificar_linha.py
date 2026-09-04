@@ -10,7 +10,7 @@ _NAO_GASTO = [
     (re.compile(r"PAGAMENTO.*(CARTAO|FATURA)|DEB.*CARTAO", re.I), "Fatura de cartão"),
 ]
 _DATA_SUFIXO = re.compile(r"\s*\d{2}/\d{2}\s*$")            # '…30/12' no fim
-_PREFIXOS = re.compile(r"^(PIX QRS|PIX TRANSF|PAG BOLETO|DA|TED|DOC)\b\s*", re.I)
+_PREFIXOS = re.compile(r"^(PIX QRS|PIX TRANSF|PAG BOLETO|DA|TED|DOC)\b\s*", re.I)  # DA = débito automático (Itaú)
 
 def normalizar_descritor(descricao):
     s = _DATA_SUFIXO.sub("", descricao.strip())
@@ -32,7 +32,8 @@ def classificar(descricao, catalogo, associacoes):
     if org:
         return {"contraparte_nome": descritor, "categoria_nome": None, "sub_nome": None,
                 "computa_resumo": False, "categoria_org": org}
-    a = associacoes.get(descritor)
+    # Lookup associação usa normalizar_nome para casar a chave (tipo='nome') na tabela
+    a = associacoes.get(normalizar_nome(descritor))
     return {"contraparte_nome": descritor,
             "categoria_nome": a["categoria_nome"] if a else None,
             "sub_nome": a["sub_nome"] if a else None,
