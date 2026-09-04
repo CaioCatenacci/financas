@@ -55,12 +55,15 @@ create table transacoes (
   pessoa_id        uuid references pessoas(id), -- quem (Lucca/Manuela/...) — Inc 2.5
   categoria_id     uuid not null references categorias(id),  -- Inc 2.5 Fase B
   subcategoria_id  uuid references subcategorias(id),         -- Inc 2.5 Fase B
+  computa_resumo   boolean not null default true,            -- Inc 3 b2: false = não entra no Resumo
+  linha_hash       text,                                      -- Inc 3 b2: chave estável da linha de extrato/fatura
   criado_em        timestamptz not null default now()
 );
 
 create index idx_transacoes_data on transacoes (data);
 create index idx_transacoes_macro on transacoes (macro);
 create index idx_transacoes_fonte on transacoes (fonte);
+create unique index idx_transacoes_linha_hash on transacoes (linha_hash) where linha_hash is not null;
 
 -- Inc 2: conhecimento aprendido (contraparte → categoria), alimentado pelas correções
 create table associacoes (
