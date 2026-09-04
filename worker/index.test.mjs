@@ -6,7 +6,18 @@ function dbFake() {
   const estado = { inseridos: [], docs: [], apagados: [] };
   return {
     estado,
-    listarCategorias: async () => [{ macro: "Casa", sub: "Limpeza" }],
+    // catálogo por id (Fase B): cobre os pares usados nos testes de captura
+    catalogo: async () => ({
+      categorias: [
+        { id: "cCasa", nome: "Casa", natureza: "despesa" },
+        { id: "cEdu", nome: "Educação", natureza: "despesa" },
+        { id: "cOut", nome: "Outros", natureza: "despesa" },
+      ],
+      subcategorias: [
+        { id: "sLimp", categoria_id: "cCasa", nome: "Limpeza" },
+        { id: "sIng", categoria_id: "cEdu", nome: "Inglês Particular" },
+      ],
+    }),
     documentoPorHash: async () => null,
     inserirDocumento: async (d) => { estado.docs.push(d); return { id: "doc1" }; },
     inserirTransacao: async (t) => { estado.inseridos.push(t); return { id: "tx1" }; },
@@ -68,7 +79,7 @@ test("regra aprendida sobrepõe o chute do modelo", async () => {
   const db = dbFake();
   db.buscarAssociacao = async (chave, tipo) =>
     (chave === "5519995783408" && tipo === "pix_cpf")
-      ? { macro: "Educação", sub: "Inglês Particular" } : null;
+      ? { categoria_id: "cEdu", subcategoria_id: "sIng" } : null;
   const deps = {
     db,
     baixar: async () => ({ bytes: new Uint8Array([1]), mime: "image/jpeg" }),
@@ -84,8 +95,8 @@ test("regra aprendida sobrepõe o chute do modelo", async () => {
   const update = { message: { chat: { id: 7 }, message_id: 1, photo: [{ file_id: "b", width: 800 }] } };
   await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
   const ins = db.estado.inseridos[0];
-  assert.equal(ins.macro, "Educação");           // veio da regra, não "Pessoal"
-  assert.equal(ins.sub, "Inglês Particular");
+  assert.equal(ins.categoria_id, "cEdu");          // veio da regra, não "Pessoal"
+  assert.equal(ins.subcategoria_id, "sIng");
   assert.equal(ins.origem_categoria, "regra");
   assert.equal(ins.contraparte_chave, "+5519995783408"); // guarda a contraparte
   assert.ok(enviados.some(t => /aprendido/i.test(t)));
@@ -94,7 +105,6 @@ test("regra aprendida sobrepõe o chute do modelo", async () => {
 test("teach: foto com /aprender grava associação e NÃO cria transação", async () => {
   const db = dbFake();
   const aprendidas = [];
-  db.listarCategorias = async () => [{ macro: "Educação", sub: null }];
   db.upsertAssociacao = async (a) => aprendidas.push(a);
   const deps = {
     db,
@@ -108,7 +118,8 @@ test("teach: foto com /aprender grava associação e NÃO cria transação", asy
     photo: [{ file_id: "b", width: 800 }] } };
   await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
   assert.equal(db.estado.inseridos.length, 0);           // dry-run: nada gravado como transação
-  assert.equal(aprendidas[0].macro, "Educação");
+  assert.equal(aprendidas[0].categoria_id, "cEdu");      // resolveu nome→id
+  assert.equal(aprendidas[0].subcategoria_id, "sIng");
   assert.equal(aprendidas[0].tipo, "pix_cpf");
 });
 
@@ -116,7 +127,6 @@ test("teach: /aprender aprende mesmo em comprovante duplicado (dedup não bloque
   const db = dbFake();
   const aprendidas = [];
   db.documentoPorHash = async () => ({ id: "jaexiste" }); // duplicado
-  db.listarCategorias = async () => [{ macro: "Educação", sub: null }];
   db.upsertAssociacao = async (a) => aprendidas.push(a);
   const deps = {
     db,
@@ -138,6 +148,8 @@ function dbApiFake() {
       { id: 1, nome: "Alice" },
       { id: 2, nome: "Bob" },
     ],
+    catalogo: async () => ({ categorias: [{ id: "c1", nome: "Casa", natureza: "despesa" }], subcategorias: [{ id: "s1", categoria_id: "c1", nome: "Limpeza" }] }),
+    criarCategoria: async (nome, natureza) => ({ id: "cNova", nome, natureza }),
     listarCategorias: async () => [{ macro: "Casa", sub: "Limpeza" }],
     resumoKPIs: async () => ({ receita: 1000, despesa: 500, reembolso: 0 }),
     resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
@@ -165,6 +177,28 @@ test("GET /api/pessoas retorna lista de pessoas", async () => {
     { id: 1, nome: "Alice" },
     { id: 2, nome: "Bob" },
   ]);
+});
+
+test("GET /api/catalogo devolve categorias + subcategorias", async () => {
+  const db = dbApiFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/catalogo", { headers: { "Cookie": "token=token123" } });
+  const response = await handleApi(request, env, new URL(request.url), db);
+  const data = await response.json();
+  assert.ok(Array.isArray(data.categorias) && Array.isArray(data.subcategorias));
+  assert.equal(data.categorias[0].nome, "Casa");
+});
+
+test("POST /api/categorias cria categoria", async () => {
+  const db = dbApiFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/categorias", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ nome: "Viagem", natureza: "despesa" }),
+  });
+  const response = await handleApi(request, env, new URL(request.url), db);
+  const data = await response.json();
+  assert.equal(data.nome, "Viagem");
 });
 
 test("/api/resumo inclui porPessoa", async () => {

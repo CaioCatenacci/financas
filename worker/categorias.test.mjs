@@ -1,13 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolverCategoria, subsDaCategoria } from "./categorias.js";
+import { resolverCategoria, subsDaCategoria, catalogoParaLista, nomesDeCategoria } from "./categorias.js";
 
 // catálogo de teste: 2 categorias + 2 subs + fallback Outros
 const catalogo = {
   categorias: [
-    { id: "cE", nome: "Educação" },
-    { id: "cS", nome: "Saúde" },
-    { id: "cO", nome: "Outros" },
+    { id: "cE", nome: "Educação", natureza: "despesa" },
+    { id: "cS", nome: "Saúde", natureza: "despesa" },
+    { id: "cO", nome: "Outros", natureza: "despesa" },
   ],
   subcategorias: [
     { id: "sEsc", categoria_id: "cE", nome: "Escola" },
@@ -47,4 +47,20 @@ test("subsDaCategoria: devolve só as subs da categoria, como {id,nome}", () => 
   assert.deepEqual(subsDaCategoria(catalogo, "cE"), [{ id: "sEsc", nome: "Escola" }, { id: "sIdi", nome: "Idiomas" }]);
   assert.deepEqual(subsDaCategoria(catalogo, "cS"), [{ id: "sPla", nome: "Plano de saúde" }]);
   assert.deepEqual(subsDaCategoria(catalogo, "cO"), []);
+});
+
+test("catalogoParaLista: uma linha por sub; categoria sem sub vira sub null", () => {
+  const lista = catalogoParaLista(catalogo);
+  assert.deepEqual(lista, [
+    { macro: "Educação", sub: "Escola", natureza: "despesa" },
+    { macro: "Educação", sub: "Idiomas", natureza: "despesa" },
+    { macro: "Saúde", sub: "Plano de saúde", natureza: "despesa" },
+    { macro: "Outros", sub: null, natureza: "despesa" },
+  ]);
+});
+
+test("nomesDeCategoria: resolve ids -> nomes; ids ausentes -> null", () => {
+  assert.deepEqual(nomesDeCategoria(catalogo, "cE", "sEsc"), { categoria: "Educação", subcategoria: "Escola" });
+  assert.deepEqual(nomesDeCategoria(catalogo, "cS", null), { categoria: "Saúde", subcategoria: null });
+  assert.deepEqual(nomesDeCategoria(catalogo, "xxx", "yyy"), { categoria: null, subcategoria: null });
 });
