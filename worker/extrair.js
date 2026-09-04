@@ -5,7 +5,7 @@ export function PROMPT(categorias) {
     .map((c) => (c.sub ? `${c.macro} > ${c.sub}` : c.macro))
     .join("; ");
   return [
-    "Você lê um comprovante de pagamento (pix/transferência) em imagem.",
+    "Você lê um comprovante de pagamento (pix/transferência) em imagem ou PDF.",
     "Responda SOMENTE um JSON com as chaves:",
     '{ "data": "AAAA-MM-DD", "valor": número, "descricao": string,',
     '  "natureza": "despesa"|"receita", "macro": string, "sub": string|null,',
@@ -73,6 +73,14 @@ function b64(bytes) {
   return btoa(s);
 }
 
+// Claude usa bloco `document` p/ PDF e `image` p/ imagem (o Gemini aceita o mime direto no inline_data).
+export function blocoConteudoClaude(mime, dataB64) {
+  if (mime === "application/pdf") {
+    return { type: "document", source: { type: "base64", media_type: mime, data: dataB64 } };
+  }
+  return { type: "image", source: { type: "base64", media_type: mime, data: dataB64 } };
+}
+
 export async function callGeminiHTTP(bytes, mime, categorias, key) {
   // gemini-flash-latest: alias estável do flash atual (barato). O 'gemini-2.5-flash'
   // foi descontinuado p/ novos usuários (404), o que jogava tudo no fallback Claude.
@@ -100,7 +108,7 @@ export async function callClaudeHTTP(bytes, mime, categorias, key) {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 400,
       messages: [{ role: "user", content: [
-        { type: "image", source: { type: "base64", media_type: mime, data: b64(bytes) } },
+        blocoConteudoClaude(mime, b64(bytes)),
         { type: "text", text: PROMPT(categorias) + "\nResponda só o JSON." },
       ] }],
     }),

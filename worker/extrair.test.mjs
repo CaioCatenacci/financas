@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { extrair } from "./extrair.js";
+import { extrair, blocoConteudoClaude } from "./extrair.js";
 
 const CATS = [{ macro: "Casa", sub: "Limpeza" }, { macro: "Saúde", sub: null }];
 const bom = { data: "2026-08-29", valor: "15,50", descricao: "x", natureza: "despesa", macro: "Casa", sub: "Limpeza" };
@@ -60,4 +60,19 @@ test("falha quando ambos inválidos", async () => {
   const r = await extrair(new Uint8Array(), "image/jpeg", CATS, deps);
   assert.equal(r.ok, false);
   assert.ok(r.erros.length > 0);
+});
+
+test("blocoConteudoClaude: imagem usa bloco image", () => {
+  const b = blocoConteudoClaude("image/jpeg", "AAAA");
+  assert.equal(b.type, "image");
+  assert.equal(b.source.media_type, "image/jpeg");
+  assert.equal(b.source.data, "AAAA");
+});
+
+test("blocoConteudoClaude: pdf usa bloco document", () => {
+  const b = blocoConteudoClaude("application/pdf", "AAAA");
+  assert.equal(b.type, "document");
+  assert.equal(b.source.type, "base64");
+  assert.equal(b.source.media_type, "application/pdf");
+  assert.equal(b.source.data, "AAAA");
 });
