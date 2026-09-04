@@ -95,20 +95,36 @@ def main(caminho_xlsx, database_url, min_ocorrencias=3):
     Idempotência: deleta registros com fonte='importacao' antes de inserir.
     """
     import psycopg
+    from tools.categorias import carregar_catalogo, resolver_categoria
     rows = _ler_xlsx(caminho_xlsx)
     txs, cats, rel = montar_import(rows, min_ocorrencias)
+    # natureza por macro (p/ criar a categoria com a natureza certa; default despesa)
+    natureza_macro = {}
+    for t in txs:
+        natureza_macro.setdefault(t["macro"], t["natureza"])
     with psycopg.connect(database_url) as conn, conn.cursor() as cur:
         cur.execute("delete from transacoes where fonte = 'importacao'")  # idempotência
-        for c in cats:
+        # Fase B: cria categorias/subcategorias no modelo por id (nome único)
+        for macro in sorted(natureza_macro):
             cur.execute(
-                "insert into categorias (macro, sub) values (%s, %s) on conflict (macro, sub) do nothing",
-                (c["macro"], c["sub"]))
+                "insert into categorias (nome, natureza) values (%s,%s) on conflict (nome) do nothing",
+                (macro, natureza_macro[macro]))
+        catalogo = carregar_catalogo(cur)
+        for c in cats:
+            if not c["sub"]:
+                continue
+            cat_id, _ = resolver_categoria(c["macro"], None, catalogo)
+            cur.execute(
+                "insert into subcategorias (categoria_id, nome) values (%s,%s) on conflict (categoria_id, nome) do nothing",
+                (cat_id, c["sub"]))
+        catalogo = carregar_catalogo(cur)  # recarrega c/ as subs criadas
         for t in txs:
+            categoria_id, subcategoria_id = resolver_categoria(t["macro"], t["sub"], catalogo)
             cur.execute(
                 """insert into transacoes
-                   (data, natureza, esfera, valor_total, valor_reembolso, macro, sub, descricao, pessoa, fonte, origem_categoria)
-                   values (%(data)s,%(natureza)s,%(esfera)s,%(valor_total)s,%(valor_reembolso)s,%(macro)s,%(sub)s,%(descricao)s,%(pessoa)s,%(fonte)s,%(origem_categoria)s)""",
-                t)
+                   (data, natureza, esfera, valor_total, valor_reembolso, categoria_id, subcategoria_id, descricao, pessoa, fonte, origem_categoria)
+                   values (%(data)s,%(natureza)s,%(esfera)s,%(valor_total)s,%(valor_reembolso)s,%(categoria_id)s,%(subcategoria_id)s,%(descricao)s,%(pessoa)s,%(fonte)s,%(origem_categoria)s)""",
+                {**t, "categoria_id": categoria_id, "subcategoria_id": subcategoria_id})
         conn.commit()
     print("Import concluído:", rel)
     return rel
