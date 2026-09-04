@@ -219,6 +219,7 @@ test("montarDecisao: item novo resolve categoria/sub por nome, marca fonte/orige
   assert.equal(n.subcategoria_id, "sHorti");
   assert.equal(n.dataISO, "2026-08-01");
   assert.equal(n.natureza, "despesa");
+  assert.equal(n.esfera, "pessoal");
   assert.equal(n.valorCents, 5000);
   assert.equal(n.reembolsoCents, 0);
   assert.equal(n.descricao, "MERCADO XYZ");
@@ -279,17 +280,24 @@ test("podeAplicar: true só quando checksum.ok===true", () => {
   assert.equal(podeAplicar({ checksum: {} }), false);
 });
 
-test("resumoTexto: contém as contagens do resumo", () => {
+test("resumoTexto: conta cada grupo (inclui 'fora do resumo') a partir dos itens", () => {
   const preview = previewFixture();
   const txt = resumoTexto(preview);
-  assert.match(txt, /12|1/); // sanity: função roda
-  assert.match(txt, /novos/i);
-  assert.match(txt, /1/);
-  // conta exata de cada grupo aparece no texto
-  assert.match(txt, /novos.*1/i);
-  assert.match(txt, /conciliad.*1/i);
-  assert.match(txt, /ambígu.*1/i);
-  assert.match(txt, /já.*1/i);
+  assert.match(txt, /novos 1/i);
+  assert.match(txt, /conciliad\w* 1/i);
+  assert.match(txt, /fora do resumo 1/i); // naoGasto — o grupo que faltava cobrir
+  assert.match(txt, /ambígu\w* 1/i);
+  assert.match(txt, /já tinha 1/i);
+});
+
+test("resumoTexto: recontagem AO VIVO acompanha a resolução de ambíguo (não fica preso no resumo do servidor)", () => {
+  const preview = previewFixture();
+  // resolve o ambíguo virando novo (mesma mutação que o handler 'tratar como novo' faz)
+  const amb = preview.itens.find(i => i.status === "ambiguo");
+  amb.status = "novo";
+  const txt = resumoTexto(preview);
+  assert.match(txt, /novos 2/i);      // 1 original + o ambíguo promovido
+  assert.match(txt, /ambígu\w* 0/i);  // não sobrou ambíguo
 });
 
 // ---------- reconstruirTexto (Task 8: pdf.js -> texto compatível com parseExtrato/parseFatura) ----------

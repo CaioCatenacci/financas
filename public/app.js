@@ -155,9 +155,19 @@ export function podeAplicar(preview) {
   return preview?.checksum?.ok === true;
 }
 
-// rótulo curto das contagens do preview, pra mostrar acima da revisão.
+// rótulo curto das contagens do preview, pra mostrar acima da revisão. Conta AO VIVO a partir
+// de preview.itens (por status) — não do preview.resumo estático do servidor: assim, quando o
+// usuário resolve um ambíguo (muta item.status), o resumo acompanha as tabelas de grupo em vez
+// de mostrar a contagem original. Cai pra preview.resumo se não houver itens (defensivo).
 export function resumoTexto(preview) {
-  const r = preview.resumo || {};
+  const itens = preview.itens;
+  let r;
+  if (Array.isArray(itens)) {
+    const n = st => itens.filter(i => i.status === st).length;
+    r = { novos: n("novo"), casados: n("casado"), naoGasto: n("naoGasto"), ambiguos: n("ambiguo"), jaTem: n("jaTem") };
+  } else {
+    r = preview.resumo || {};
+  }
   return `novos ${r.novos ?? 0} · conciliados ${r.casados ?? 0} · fora do resumo ${r.naoGasto ?? 0} · ` +
     `ambíguos ${r.ambiguos ?? 0} · já tinha ${r.jaTem ?? 0}`;
 }
@@ -590,10 +600,10 @@ if (typeof document !== "undefined") {
       return;
     }
 
-    const ok = preview.checksum?.ok === true;
+    const ok = podeAplicar(preview);
     const checksumHtml = ok
       ? `<span class="impchk impchk-ok">✓ checksum confere</span>`
-      : `<span class="impchk impchk-bad">✕ checksum não bate (diferença R$ ${centavosBR(String((preview.checksum?.diferencaCents ?? 0) / 100))}) — aplicar desabilitado</span>`;
+      : `<span class="impchk impchk-bad">✕ checksum não bate (diferença R$ ${centavosBR(String(Math.abs(preview.checksum?.diferencaCents ?? 0) / 100))}) — aplicar desabilitado</span>`;
 
     const novos = preview.itens.filter(it => it.status === "novo");
     const casados = preview.itens.filter(it => it.status === "casado");
