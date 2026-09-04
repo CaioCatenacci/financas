@@ -59,3 +59,31 @@ test("faltando descrição → ok:false", () => {
 test("texto vazio → ok:false", () => {
   assert.equal(parseLancamentoTexto("").ok, false);
 });
+
+test("data impossível: 31/02/2026 → ok:false", () => {
+  // Fevereiro nunca tem 31 dias
+  const r = parseLancamentoTexto("padaria 10,00 31/02/2026");
+  assert.equal(r.ok, false);
+  assert.match(r.erro, /obrigat/i);
+});
+
+test("data impossível: 30/02/2026 (não bissexto) → ok:false", () => {
+  // 2026 não é bissexto; fevereiro tem 28 dias
+  const r = parseLancamentoTexto("padaria 10,00 29/02/2026");
+  assert.equal(r.ok, false);
+  assert.match(r.erro, /obrigat/i);
+});
+
+test("data válida: 29/02/2024 (bissexto) → ok:true", () => {
+  // 2024 é bissexto (divisível por 4, não por 100 ou sim por 400)
+  const r = parseLancamentoTexto("padaria 10,00 29/02/2024");
+  assert.equal(r.ok, true);
+  assert.equal(r.dados.dataISO, "2024-02-29");
+});
+
+test("data inválida: 31/04/2026 (abril tem 30) → ok:false", () => {
+  // Abril tem 30 dias
+  const r = parseLancamentoTexto("padaria 10,00 31/04/2026");
+  assert.equal(r.ok, false);
+  assert.match(r.erro, /obrigat/i);
+});

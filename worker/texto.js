@@ -9,6 +9,7 @@ const reData = /^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/;
 const pad = (n) => String(n).padStart(2, "0");
 
 // token de data dd/mm[/aaaa] → ISO; ano omitido = ano atual; aaaa de 2 dígitos → 20aa.
+// Valida dias no mês, incluindo ano bissexto.
 function parseData(tok) {
   const m = tok.match(reData);
   if (!m) return null;
@@ -16,6 +17,13 @@ function parseData(tok) {
   let yyyy = m[3] ? +m[3] : new Date().getUTCFullYear();
   if (m[3] && m[3].length === 2) yyyy = 2000 + yyyy;
   if (dd < 1 || dd > 31 || mm < 1 || mm > 12) return null;
+
+  // Validar dias no mês, incluindo ano bissexto
+  const diasNoMes = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const bissexto = (yyyy % 4 === 0 && yyyy % 100 !== 0) || yyyy % 400 === 0;
+  if (mm === 2 && bissexto) diasNoMes[1] = 29;
+  if (dd > diasNoMes[mm - 1]) return null;
+
   return `${yyyy}-${pad(mm)}-${pad(dd)}`;
 }
 
