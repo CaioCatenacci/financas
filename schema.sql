@@ -55,7 +55,7 @@ create table transacoes (
   valor_total      numeric(12,2) not null check (valor_total >= 0),
   valor_reembolso  numeric(12,2) not null default 0 check (valor_reembolso >= 0),
   valor_final      numeric(12,2) generated always as (valor_total - valor_reembolso) stored,
-  macro            text not null,
+  macro            text,             -- Fase B: vestigial (NOT NULL solto na 0004); sai na 0005
   sub              text,
   descricao        text,
   pessoa           text,
@@ -80,7 +80,7 @@ create index idx_transacoes_fonte on transacoes (fonte);
 create table associacoes (
   chave         text not null,
   tipo_chave    text not null check (tipo_chave in ('pix_cpf','nome')),
-  macro         text not null,
+  macro         text,               -- Fase B: vestigial (NOT NULL solto na 0004); sai na 0005
   sub           text,
   n             integer not null default 1,
   atualizado_em timestamptz not null default now(),

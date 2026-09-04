@@ -36,6 +36,12 @@ alter table associacoes add column if not exists subcategoria_id uuid references
 insert into categorias (nome, natureza) values ('Outros', 'despesa')
   on conflict (nome) do nothing;
 
+-- 4b) cutover: o código Fase B grava só por id; solta o NOT NULL das colunas string
+-- (transacoes.macro, associacoes.macro) p/ novos inserts não precisarem mais delas.
+-- Não-destrutivo (dados existentes ficam); as colunas saem de vez na 0005.
+alter table transacoes  alter column macro drop not null;
+alter table associacoes alter column macro drop not null;
+
 -- 5) backfill: feito pelo script apply_0004.mjs, que lê docs/genericizacao-map.csv (aprovado):
 --    - insere categorias/subcategorias genéricas;
 --    - mapeia (macro,sub) de transacoes/associacoes -> categoria_id/subcategoria_id;
