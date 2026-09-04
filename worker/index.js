@@ -138,7 +138,6 @@ export async function handleApi(request, env, url, dbOpt = null) {
   }
 
   // ---- gestão de categorias ----
-  if (url.pathname === "/api/categorias" && request.method === "GET") return j(await db.listarCategorias());
   if (url.pathname === "/api/categorias" && request.method === "POST") { const b = await body(); return j(await db.criarCategoria(b.nome, b.natureza)); }
   if (url.pathname.startsWith("/api/categorias/") && request.method === "PATCH") { const b = await body(); await db.renomearCategoria(id(), b.nome); return j({ ok: true }); }
   if (url.pathname.startsWith("/api/categorias/") && request.method === "DELETE") { await db.desativarCategoria(id()); return j({ ok: true }); }
