@@ -4,13 +4,30 @@
 
 create extension if not exists pgcrypto;  -- gen_random_uuid
 
-create table categorias (
+-- Modelo antigo (macro/sub). Inc 2.5 Fase B renomeou de `categorias` p/ `categorias_legacy`
+-- (migração 0004); ainda alimenta o dropdown/extração até o cutover; sai na limpeza (0005).
+create table categorias_legacy (
   id       uuid primary key default gen_random_uuid(),
   macro    text not null,
   sub      text,
   natureza text not null default 'despesa',
   ativa    boolean not null default true,
   unique (macro, sub)
+);
+
+-- Inc 2.5 Fase B: modelo normalizado por id (migração 0004, aditiva).
+create table categorias (
+  id       uuid primary key default gen_random_uuid(),
+  nome     text not null unique,
+  natureza text not null default 'despesa' check (natureza in ('despesa','receita')),
+  ativa    boolean not null default true
+);
+create table subcategorias (
+  id           uuid primary key default gen_random_uuid(),
+  categoria_id uuid not null references categorias(id),
+  nome         text not null,
+  ativa        boolean not null default true,
+  unique (categoria_id, nome)
 );
 
 create table documentos (
@@ -50,6 +67,8 @@ create table transacoes (
   contraparte_nome  text,                     -- destinatário/pagador lido do comprovante (Inc 2)
   contraparte_chave text,                     -- chave Pix / CPF normalizável (Inc 2)
   pessoa_id        uuid references pessoas(id), -- quem (Lucca/Manuela/...) — Inc 2.5
+  categoria_id     uuid references categorias(id),     -- Inc 2.5 Fase B (convive c/ macro/sub até 0005)
+  subcategoria_id  uuid references subcategorias(id),  -- Inc 2.5 Fase B
   criado_em        timestamptz not null default now()
 );
 
@@ -65,5 +84,7 @@ create table associacoes (
   sub           text,
   n             integer not null default 1,
   atualizado_em timestamptz not null default now(),
+  categoria_id    uuid references categorias(id),    -- Inc 2.5 Fase B (convive c/ macro/sub até 0005)
+  subcategoria_id uuid references subcategorias(id), -- Inc 2.5 Fase B
   primary key (chave, tipo_chave)
 );

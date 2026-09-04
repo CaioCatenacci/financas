@@ -33,7 +33,10 @@ export function criarDb(sql) {
     },
 
     async listarCategorias() {
-      return await sql`select macro, sub, natureza from categorias where ativa order by macro, sub`;
+      // Fase B (transição): o modelo por id vive em `categorias`(id,nome)+`subcategorias`;
+      // a lista macro/sub que o app e a extração ainda consomem segue na `categorias_legacy`
+      // até o cutover (B5/B6). Colunas e comportamento idênticos ao de antes do rename.
+      return await sql`select macro, sub, natureza from categorias_legacy where ativa order by macro, sub`;
     },
 
     async listarPessoas() {
