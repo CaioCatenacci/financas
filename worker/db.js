@@ -1,5 +1,5 @@
 import { centsToNumeric } from "./money.js";
-import { derivarChave } from "./contraparte.js";
+import { derivarChave, normalizarNome } from "./contraparte.js";
 
 export function criarDb(sql) {
   return {
@@ -240,6 +240,28 @@ export function criarDb(sql) {
         from transacoes
         where data between ${de} and ${ate} and linha_hash is not null`;
       return rows.map(r => r.linha_hash);
+    },
+
+    // carimba a linha_hash na transação já existente que casou (reconciliação) — só se ainda
+    // não tiver sido carimbada, senão mascararia um bug de duplo-match (espelha
+    // tools/importar_extrato.py::_gravar).
+    async carimbarLinhaHash(id, hash) {
+      await sql`update transacoes set linha_hash = ${hash} where id = ${id} and linha_hash is null`;
+    },
+
+    // associações aprendidas por nome, no formato que classificar() espera: dict chaveado por
+    // normalizarNome(chave) -> { categoriaNome, subNome } (camelCase — espelha
+    // tools/importar_extrato.py::carregar_associacoes, mas com chaves de valor em camelCase).
+    async associacoesPorNome() {
+      const rows = await sql`
+        select a.chave, c.nome as categoria_nome, s.nome as sub_nome
+        from associacoes a
+        left join categorias c    on c.id = a.categoria_id
+        left join subcategorias s on s.id = a.subcategoria_id
+        where a.tipo_chave = 'nome'`;
+      const dict = {};
+      for (const r of rows) dict[normalizarNome(r.chave)] = { categoriaNome: r.categoria_nome, subNome: r.sub_nome };
+      return dict;
     },
   };
 }

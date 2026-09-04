@@ -10,6 +10,9 @@ import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js"
 import { parseAprender } from "./teach.js";
 import { resolverCategoria, catalogoParaLista, nomesDeCategoria } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
+import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.js";
+import { parseExtrato } from "./extrato.js";
+import { parseFatura } from "./fatura.js";
 
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
@@ -208,6 +211,44 @@ export async function handleApi(request, env, url, dbOpt = null) {
       porPessoa: await db.resumoPorPessoa(de, ate),
     });
   }
+  // ---- importar extrato/fatura (Incremento 3) ----
+  if (url.pathname === "/api/importar/preview" && request.method === "POST") {
+    const b = await body();
+    const catalogo = await db.catalogo();
+    const associacoes = await db.associacoesPorNome();
+
+    if (b.tipo === "extrato") {
+      const { linhas } = parseExtrato(b.texto);
+      const hoje = new Date().toISOString().slice(0, 10);
+      let de = hoje, ate = hoje;
+      if (linhas.length) {
+        de = linhas.reduce((min, l) => (l.data < min ? l.data : min), linhas[0].data);
+        ate = linhas.reduce((max, l) => (l.data > max ? l.data : max), linhas[0].data);
+      }
+      const existentes = await db.transacoesNaJanela(de, ate);
+      const hashes = await db.hashesNaJanela(de, ate);
+      return j(montarPreviewExtrato(b.texto, b.conta, { catalogo, associacoes, existentes, hashes }));
+    }
+
+    if (b.tipo === "fatura") {
+      const { itens } = parseFatura(b.texto, b.ano);
+      const hoje = new Date().toISOString().slice(0, 10);
+      let de = hoje, ate = hoje;
+      if (itens.length) {
+        de = itens.reduce((min, i) => (i.data < min ? i.data : min), itens[0].data);
+        ate = itens.reduce((max, i) => (i.data > max ? i.data : max), itens[0].data);
+      }
+      const hashes = await db.hashesNaJanela(de, ate);
+      return j(montarPreviewFatura(b.texto, b.ano, b.mes, { catalogo, associacoes, hashes }));
+    }
+
+    return new Response(JSON.stringify({ erro: `tipo inválido: ${b.tipo}` }), { status: 400, headers: { "content-type": "application/json" } });
+  }
+  if (url.pathname === "/api/importar/aplicar" && request.method === "POST") {
+    const b = await body();
+    return j(await aplicar(db, b.decisao));
+  }
+
   return new Response("not found", { status: 404 });
 }
 

@@ -272,6 +272,56 @@ test("POST /api/categorias cria categoria", async () => {
   assert.equal(data.nome, "Viagem");
 });
 
+// ---- import de extrato/fatura ----
+function dbImportarFake() {
+  const estado = { inseridos: [], carimbados: [] };
+  return {
+    estado,
+    catalogo: async () => ({ categorias: [{ id: "cO", nome: "Outros" }], subcategorias: [] }),
+    associacoesPorNome: async () => ({}),
+    transacoesNaJanela: async () => [],
+    hashesNaJanela: async () => [],
+    inserirTransacao: async (t) => { estado.inseridos.push(t); return { id: "novo-id" }; },
+    carimbarLinhaHash: async (id, hash) => { estado.carimbados.push({ id, hash }); },
+  };
+}
+
+const TXT_EXTRATO = `10/12/2025 SALDO DO DIA 8.876,46
+10/12/2025 PIX QRS LOJA X10/12 -100,00
+09/12/2025 SALDO DO DIA 8.976,46`;
+
+test("POST /api/importar/preview (extrato) devolve checksum e resumo", async () => {
+  const db = dbImportarFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/importar/preview", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ tipo: "extrato", texto: TXT_EXTRATO, conta: "c1" }),
+  });
+  const response = await handleApi(request, env, new URL(request.url), db);
+  const data = await response.json();
+  assert.ok(data.checksum, "resposta deve trazer checksum");
+  assert.ok(data.resumo, "resposta deve trazer resumo");
+  assert.equal(data.resumo.novos, 1);
+});
+
+test("POST /api/importar/aplicar grava novos e retorna as contagens", async () => {
+  const db = dbImportarFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const decisao = {
+    novos: [{ descricao: "a", categoria_id: "cO" }],
+    naoGasto: [],
+    casados: [],
+  };
+  const request = new Request("http://localhost/api/importar/aplicar", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ decisao }),
+  });
+  const response = await handleApi(request, env, new URL(request.url), db);
+  const data = await response.json();
+  assert.equal(db.estado.inseridos.length, 1);
+  assert.equal(data.gravados, 1);
+});
+
 test("/api/resumo inclui porPessoa", async () => {
   const db = dbApiFake();
   const env = { APP_TOKEN: "token123", DATABASE_URL: "" };

@@ -298,3 +298,24 @@ test("hashesNaJanela devolve os hashes não-nulos", async () => {
   assert.deepEqual(r, ["abc"]);
   assert.match(sql.chamadas[0].text, /linha_hash is not null/i);
 });
+
+test("carimbarLinhaHash carimba só se ainda não conciliada (linha_hash is null)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.carimbarLinhaHash("t9", "abc123");
+  assert.match(sql.chamadas[0].text, /update transacoes set linha_hash/i);
+  assert.match(sql.chamadas[0].text, /linha_hash is null/i);
+  assert.deepEqual(sql.chamadas[0].values, ["abc123", "t9"]);
+});
+
+test("associacoesPorNome monta dict camelCase chaveado por normalizarNome, só tipo_chave=nome", async () => {
+  const sql = fakeSql([
+    { chave: "loja x", categoria_nome: "Casa", sub_nome: "Limpeza" },
+  ]);
+  const db = criarDb(sql);
+  const r = await db.associacoesPorNome();
+  assert.match(sql.chamadas[0].text, /tipo_chave = 'nome'/i);
+  assert.match(sql.chamadas[0].text, /left join categorias/i);
+  assert.match(sql.chamadas[0].text, /left join subcategorias/i);
+  assert.deepEqual(r, { "LOJA X": { categoriaNome: "Casa", subNome: "Limpeza" } });
+});
