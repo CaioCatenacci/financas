@@ -141,6 +141,49 @@ test("teach: /aprender aprende mesmo em comprovante duplicado (dedup não bloque
   assert.equal(db.estado.inseridos.length, 0);     // dry-run
 });
 
+test("texto estruturado vira transação manual, resolvendo categoria e pessoa", async () => {
+  const enviados = [];
+  const db = dbFake();
+  db.pessoaPorNome = async (n) => (n.toLowerCase() === "casa" ? { id: "p2", nome: "Casa" } : null);
+  const deps = {
+    db,
+    confirmar: async (chat, texto, id) => enviados.push(texto),
+    responderImpl: async () => {},
+  };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "padaria 57,50 29/03/2026 categoria=Casa pessoa=Casa" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  const ins = db.estado.inseridos[0];
+  assert.equal(ins.fonte, "manual");
+  assert.equal(ins.origem_categoria, "manual");
+  assert.equal(ins.categoria_id, "cCasa");   // resolvido do catálogo do dbFake
+  assert.equal(ins.pessoa_id, "p2");
+  assert.equal(ins.valorCents, 5750);
+  assert.ok(enviados.some((t) => /57,50/.test(t)));
+});
+
+test("texto sem categoria cai em Outros e avisa pessoa inexistente", async () => {
+  const enviados = [];
+  const db = dbFake();
+  db.pessoaPorNome = async () => null; // ninguém casa
+  const deps = { db, confirmar: async (c, t) => enviados.push(t), responderImpl: async () => {} };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "mercado 30,00 01/03/2026 pessoa=Xuxa" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  const ins = db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cOut");    // Outros (fallback do resolverCategoria)
+  assert.equal(ins.pessoa_id, null);
+  assert.ok(enviados.some((t) => /Xuxa/.test(t)));  // avisou o não-encontrado
+});
+
+test("texto inválido responde com o formato e não grava", async () => {
+  const respostas = [];
+  const db = dbFake();
+  const deps = { db, confirmar: async () => {}, responderImpl: async (c, t) => respostas.push(t) };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "só uma descrição sem valor nem data" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.estado.inseridos.length, 0);
+  assert.ok(respostas.some((t) => /ex\.:/i.test(t)));
+});
+
 // Testes da API /api/*
 function dbApiFake() {
   return {

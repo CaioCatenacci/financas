@@ -9,6 +9,7 @@ import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
 import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
 import { parseAprender } from "./teach.js";
 import { resolverCategoria, catalogoParaLista, nomesDeCategoria } from "./categorias.js";
+import { parseLancamentoTexto } from "./texto.js";
 
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
@@ -25,7 +26,44 @@ export async function tratarUpdate(update, env, deps) {
     return;
   }
   if (ev.tipo === "pdf") { await deps.responderImpl(ev.chatId, "PDF de extrato/fatura é do próximo incremento — por ora, mande foto de comprovante.", env); return; }
-  if (ev.tipo === "texto") { await deps.responderImpl(ev.chatId, "Lançamento por texto vem logo. Por enquanto, mande a foto do comprovante.", env); return; }
+  if (ev.tipo === "texto") {
+    const p = parseLancamentoTexto(ev.texto);
+    if (!p.ok) {
+      await deps.responderImpl(ev.chatId, `Não entendi. ex.: padaria 57,50 29/03/2026 pessoa=Caio categoria=Casa`, env);
+      return;
+    }
+    const d = p.dados;
+    const catalogo = await deps.db.catalogo();
+    // resolve categoria/sub por nome (case-insensitive) contra o catálogo; fallback Outros
+    const avisos = [];
+    let macroNome = null, subNome = null;
+    if (d.categoria) {
+      const c = catalogo.categorias.find((x) => x.nome.toLowerCase() === d.categoria.toLowerCase());
+      if (c) { macroNome = c.nome; if (d.subcategoria) {
+        const s = catalogo.subcategorias.find((x) => x.categoria_id === c.id && x.nome.toLowerCase() === d.subcategoria.toLowerCase());
+        if (s) subNome = s.nome; else avisos.push(`subcategoria "${d.subcategoria}" não existe`);
+      } }
+      else avisos.push(`categoria "${d.categoria}" não existe — usei Outros`);
+    }
+    const { categoria_id, subcategoria_id } = resolverCategoria(macroNome, subNome, catalogo);
+    // resolve pessoa por nome
+    let pessoa_id = null;
+    if (d.pessoa) { const pe = await deps.db.pessoaPorNome(d.pessoa); if (pe) pessoa_id = pe.id; else avisos.push(`pessoa "${d.pessoa}" não existe — deixei sem pessoa`); }
+
+    const tx = await deps.db.inserirTransacao({
+      dataISO: d.dataISO, natureza: d.natureza, esfera: "pessoal",
+      valorCents: d.valorCents, reembolsoCents: 0, categoria_id, subcategoria_id,
+      descricao: d.descricao, pessoa_id, fonte: "manual", origem_categoria: "manual",
+      extraido_por: null, confianca: null, documento_id: null,
+      contraparte_nome: null, contraparte_chave: null,
+    });
+    const nm = nomesDeCategoria(catalogo, categoria_id, subcategoria_id);
+    const cat = nm.subcategoria ? `${nm.categoria} › ${nm.subcategoria}` : nm.categoria;
+    const [aa, mm, dd] = d.dataISO.split("-");
+    const selo = avisos.length ? `\n⚠ ${avisos.join("; ")}` : "";
+    await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(d.valorCents)} · ${dd}/${mm} · ${cat} · "${d.descricao}"${selo}`, tx.id);
+    return;
+  }
   if (ev.tipo !== "imagem") return;
 
   const { bytes, mime } = await deps.baixar(ev.fileId);

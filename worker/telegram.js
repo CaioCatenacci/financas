@@ -16,7 +16,7 @@ export function parseUpdate(update) {
     if (mime === "application/pdf") return { tipo: "pdf", chatId };
     return { tipo: "ignorar", chatId };
   }
-  if (m.text) return { tipo: "texto", chatId };
+  if (m.text) return { tipo: "texto", chatId, texto: m.text, messageId: m.message_id };
   return { tipo: "ignorar", chatId };
 }
 
