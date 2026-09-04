@@ -11,7 +11,9 @@ from tools.categorias import carregar_catalogo, resolver_categoria
 from tools.importar_extrato import carregar_associacoes
 
 def ler_texto(caminho):
-    return "\n".join((p.extract_text() or "") for p in PdfReader(caminho).pages)
+    # modo layout preserva colunas (data/estabelecimento/valor na mesma linha);
+    # o modo padrão do pypdf embaralha o layout de 2 colunas da fatura Itaú.
+    return "\n".join((p.extract_text(extraction_mode="layout") or "") for p in PdfReader(caminho).pages)
 
 def main(caminho, ano, mes, commit):
     import psycopg
