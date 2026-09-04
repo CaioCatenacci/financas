@@ -165,6 +165,14 @@ Grande — dá pra fasear no plano:
   `Outros` exista); logar quando cair no fallback.
 - **Pessoa em imagem:** o comprovante não diz de quem é → `pessoa_id` fica manual (editar no app).
 
+## 12. Fase A.5 — UX pós-Fase A (filtros, preset, fix de gráficos)
+
+Após ver a Fase A ao vivo, o Caio pediu 3 itens de UX (só front, sem backend), a fazer **antes da Fase B**:
+
+1. **Filtro na tela de Lançamentos** — pra achar rápido os itens a corrigir. Dimensões (todas): **Categoria**, **Pessoa** (incl. "Sem pessoa", pra atacar os históricos sem pessoa), **Origem da categoria** (modelo/manual/regra — achar os automáticos suspeitos), **Busca por texto** (descrição/contraparte). Client-side sobre `estado.transacoes` (função pura `filtrarTransacoes`, testada).
+2. **Preset de tempo "Mês passado"** — novo chip + caso em `periodoRange` (cuidar virada de ano).
+3. **Fix de gráficos** — "Evolução mensal" e "De onde vem, pra onde vai" estouram o card: SVG `width="100%"` sem `height` + `.two` grid stretch + `svg{overflow:visible}`. Dar altura previsível aos dois SVGs responsivos, reproduzindo o bug antes.
+
 ## 11. Perguntas em aberto (resolver no início da execução)
 - Semente da lista de **pessoas** (confirmar: Caio, Paola, Lucca, Manuela, Casa?).
 - O **mapa de genericização** exato (gerado das categorias vivas, Caio aprova).

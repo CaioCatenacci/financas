@@ -89,7 +89,36 @@ update transacoes t set pessoa_id = p.id from pessoas p
 ### Task A5: Docs Fase A
 - [ ] Atualizar CLAUDE.md (tabela `pessoas`, `pessoa_id`) e CONTEXTO.md (decisão dropdown fixo + corte por pessoa). Commit.
 
-**Checkpoint infra Fase A:** aplicar 0003 no Neon (A1), `npm test`+`pytest`, deploy, conferir dropdown/edição/corte no app ao vivo.
+**Checkpoint infra Fase A:** aplicar 0003 no Neon (A1), `npm test`+`pytest`, deploy, conferir dropdown/edição/corte no app ao vivo. ✅ FEITO (deploy 42a7e4a0).
+
+---
+
+## FASE A.5 — UX: filtros, preset "Mês passado", fix de gráficos
+
+Melhorias pedidas pelo Caio após ver a Fase A ao vivo. Só front (public/), sem backend — o app já carrega `estado.transacoes` do período; filtrar é client-side. Entra antes da Fase B.
+
+### Task A6: Fix overflow dos gráficos (evolução mensal + waterfall)
+**Bug:** `#evo` e `#waterfall` usam SVG `width="100%"` sem `height`; com `.two` (grid stretch) + `svg{overflow:visible}` (shell.css:125) o SVG estica e as barras vazam do card (só nesses dois; donut/dumbbell têm dimensão fixa).
+**Files:** `public/shell.css` (e `public/app.js` se precisar de attr no SVG).
+- [ ] **Reproduzir** o bug (harness com mock, cenário "Mês atual"/1 mês, receita 0) antes de mexer.
+- [ ] Dar altura previsível aos dois SVGs responsivos (ex.: `aspect-ratio` do viewBox, ou `height:auto` + conter o card) e garantir que não estiquem com o grid; manter `preserveAspectRatio`.
+- [ ] Verificar visualmente (mock) que evo e waterfall ficam dentro do card em 1 mês, vários meses e mobile (<860px).
+
+### Task A7: Preset de período "Mês passado"
+**Files:** `public/index.html` (chip), `public/app.js` (`periodoRange`), `public/app.test.mjs`.
+- [ ] **RED:** teste de `periodoRange("mespassado", hoje)` → intervalo do mês anterior (cuidar virada de ano em janeiro).
+- [ ] **GREEN:** implementar o preset; chip `data-p="mespassado"` "Mês passado" entre "Mês atual" e "Ano".
+- [ ] `npm test` PASS.
+
+### Task A8: Filtro na tela de Lançamentos
+**Files:** `public/index.html` (toolbar de filtros na `#lanc`), `public/app.js` (`filtrarTransacoes` puro + wiring), `public/app.test.mjs`, `public/shell.css`.
+**Interface:** `filtrarTransacoes(rows, {categoria, pessoa, origem, texto})` (puro, testado) → linhas filtradas. `pessoa: "__sem__"` = sem pessoa (pessoa_id null); vazio/undefined em qualquer campo = não filtra; `texto` casa (case-insensitive) em `descricao` + `contraparte_nome`; `origem` casa `origem_categoria` ∈ {modelo,manual,regra}; `categoria` casa `macro`.
+- [ ] **RED:** testes de `filtrarTransacoes` (cada dimensão isolada, combinação, "sem pessoa", texto acento-insensível se viável, campos vazios não filtram).
+- [ ] **GREEN:** toolbar acima da tabela: select Categoria (de `estado.cores`/categorias), select Pessoa (de `estado.pessoas` + opção "Sem pessoa"), select Origem, input de busca. Guardar em `estado.filtro`; `drawRows` renderiza `filtrarTransacoes(estado.transacoes, estado.filtro)`. Botão "limpar".
+- [ ] Contador "N de M" e estado vazio ("nenhum lançamento com esses filtros").
+- [ ] `npm test` PASS. Verificação visual (mock).
+
+**Checkpoint infra Fase A.5:** `npm test`+`pytest`, deploy, Caio confere gráficos/filtro/preset ao vivo.
 
 ---
 
