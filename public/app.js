@@ -71,14 +71,13 @@ export function construirWaterfall(receita, cats) {
   return steps;
 }
 
-// categorias [{macro, sub}] → agrupa subs por macro, ignorando nulos e duplicados
-export function subsPorCategoria(cats) {
-  const g = {};
-  for (const c of cats) {
-    if (!g[c.macro]) g[c.macro] = [];
-    if (c.sub && !g[c.macro].includes(c.sub)) g[c.macro].push(c.sub);
-  }
-  return g;
+// catálogo ({categorias,subcategorias}, ambas por id — Fase B) + categoria_id → subs
+// daquela categoria, só {id,nome} (o select de Subcategoria usa isso pra repopular
+// quando a Categoria da linha muda).
+export function subsDaCat(catalogo, categoria_id) {
+  return (catalogo.subcategorias || [])
+    .filter(s => s.categoria_id === categoria_id)
+    .map(s => ({ id: s.id, nome: s.nome }));
 }
 
 // remove acentos p/ busca acento-insensível ("sao paulo" acha "São Paulo").
@@ -89,7 +88,7 @@ export function filtrarTransacoes(rows, filtro = {}) {
   const { categoria, pessoa, origem, texto } = filtro;
   const txt = texto && texto.trim() ? normalizarBusca(texto.trim()) : "";
   return rows.filter(t => {
-    if (categoria && t.macro !== categoria) return false;
+    if (categoria && t.categoria !== categoria) return false;
     if (pessoa === "__sem__") { if (t.pessoa_id) return false; }
     else if (pessoa && t.pessoa !== pessoa) return false;
     if (origem && t.origem_categoria !== origem) return false;
@@ -115,17 +114,22 @@ if (typeof document !== "undefined") {
 
   const estado = {
     periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
+    catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "" },
   };
 
   // API
   const apiGet = p => fetch(p).then(r => { if (!r.ok) throw new Error(`GET ${p} ${r.status}`); return r.json(); });
+  const apiPost = (p, body) => fetch(p, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => { if (!r.ok) throw new Error(`POST ${p} ${r.status}`); return r.json(); });
   const apiPatch = (p, body) => fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => { if (!r.ok) throw new Error(`PATCH ${p} ${r.status}`); return r; });
   const apiDelete = p => fetch(p, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error(`DELETE ${p} ${r.status}`); return r; });
 
-  function corDe(macro) { return estado.cores[macro] || "--dim"; }
-  function construirCores(macros) {
-    const uniq = [...new Set(macros)].sort();
+  // corDe é keyed pelo NOME da categoria (não pelo id): os gráficos do Resumo recebem
+  // nomes via resumo.porCategoria/mesVsAnterior (macro apelidado no backend), e a tabela
+  // de Lançamentos recebe t.categoria (nome, via join). Um único mapa nome→cor serve os dois.
+  function corDe(nome) { return estado.cores[nome] || "--dim"; }
+  function construirCores(nomes) {
+    const uniq = [...new Set(nomes)].sort();
     const m = {}; uniq.forEach((nm, i) => m[nm] = CAT[i % CAT.length]); return m;
   }
 
@@ -307,9 +311,11 @@ if (typeof document !== "undefined") {
   // opções de Categoria/Pessoa dependem dos dados carregados; repopula em carregar()
   // preservando a seleção atual (o filtro não é resetado ao trocar de período).
   function popularFiltros() {
-    const macros = [...new Set(Object.keys(estado.cores))].sort();
+    // lista as categorias do catálogo (ativas), não as chaves de estado.cores: cores pode
+    // conter nomes de categorias já desativadas que ainda aparecem em transações antigas.
+    const nomes = estado.catalogo.categorias.map(c => c.nome);
     $("#fcategoria").innerHTML = `<option value="">Categoria</option>` +
-      macros.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
+      nomes.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join("");
     $("#fpessoa").innerHTML = `<option value="">Pessoa</option><option value="__sem__">Sem pessoa</option>` +
       estado.pessoas.map(p => `<option value="${esc(p.nome)}">${esc(p.nome)}</option>`).join("");
     $("#fcategoria").value = estado.filtro.categoria;
@@ -319,7 +325,7 @@ if (typeof document !== "undefined") {
   }
 
   function drawRows() {
-    const macros = [...new Set(Object.keys(estado.cores))].sort();
+    const cats = estado.catalogo.categorias;
     const linhas = filtrarTransacoes(estado.transacoes, estado.filtro);
     const contador = $("#fcontador");
     if (contador) contador.textContent = `${linhas.length} de ${estado.transacoes.length}`;
@@ -327,19 +333,18 @@ if (typeof document !== "undefined") {
       $("#rows").innerHTML = `<tr><td colspan="8" class="vazio">nenhum lançamento com esses filtros</td></tr>`;
       return;
     }
-    $("#rows").innerHTML = linhas.map((t, i) => {
+    $("#rows").innerHTML = linhas.map(t => {
       const rec = t.natureza === "receita";
-      const opts = macros.map(mm => `<option ${mm === t.macro ? "selected" : ""}>${esc(mm)}</option>`).join("");
-      const subs = (estado.subs && estado.subs[t.macro]) || [];
-      const dlId = `subs-${i}`;
-      const dlOpts = subs.map(s => `<option value="${esc(s)}"></option>`).join("");
+      const catOpts = cats.map(c => `<option value="${esc(c.id)}" ${c.id === t.categoria_id ? "selected" : ""}>${esc(c.nome)}</option>`).join("");
+      const subOpts = `<option value="">—</option>` +
+        subsDaCat(estado.catalogo, t.categoria_id).map(s => `<option value="${esc(s.id)}" ${s.id === t.subcategoria_id ? "selected" : ""}>${esc(s.nome)}</option>`).join("");
       const pessoaOpts = `<option value="">—</option>` +
         estado.pessoas.map(p => `<option value="${esc(p.id)}" ${p.id === t.pessoa_id ? "selected" : ""}>${esc(p.nome)}</option>`).join("");
-      return `<tr data-id="${t.id}" data-i="${i}">
+      return `<tr data-id="${t.id}">
         <td class="dt">${fmtData(t.data)}</td>
         <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—"></td>
-        <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.macro)})"></i><select class="edmacro">${opts}</select></span></td>
-        <td><input class="edsub" list="${dlId}" value="${esc(t.sub || "")}" placeholder="—"><datalist id="${dlId}">${dlOpts}</datalist></td>
+        <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.categoria)})"></i><select class="edcat">${catOpts}</select></span></td>
+        <td><select class="edsub">${subOpts}</select></td>
         <td><select class="edpessoa">${pessoaOpts}</select></td>
         <td class="val" style="color:${rec ? "var(--receita)" : "var(--ink)"}">${rec ? "+" : ""}R$ ${centavosBR(t.valor_total)}</td>
         <td class="val" style="color:var(--mut)">${+t.valor_reembolso ? "R$ " + centavosBR(t.valor_reembolso) : "—"}</td>
@@ -348,18 +353,129 @@ if (typeof document !== "undefined") {
     }).join("");
   }
 
+  // ----- Ajustes (gestão de categorias/subcategorias/pessoas) -----
+  // 1ª versão: prompt()/confirm() nativos — funcional, não bonito; o Caio refina depois.
+  function drawAjustes() {
+    const cats = estado.catalogo.categorias;
+    const catBlocos = cats.map(c => {
+      const subChips = subsDaCat(estado.catalogo, c.id).map(s => `
+        <span class="subchip" data-id="${esc(s.id)}">
+          ${esc(s.nome)}
+          <button class="miniBtn" data-act="renomeiasub" data-id="${esc(s.id)}" title="Renomear">✎</button>
+          <button class="miniBtn" data-act="mesclarsub" data-id="${esc(s.id)}" title="Mesclar em outra sub">⇄</button>
+          <button class="miniBtn" data-act="apagarsub" data-id="${esc(s.id)}" title="Desativar">✕</button>
+        </span>`).join("");
+      return `<div class="ajcat">
+        <div class="ajcathead">
+          <b>${esc(c.nome)}</b><span class="ajnat">${esc(c.natureza)}</span>
+          <span class="ajactions">
+            <button class="miniBtn" data-act="renomeiacat" data-id="${esc(c.id)}">renomear</button>
+            <button class="miniBtn" data-act="apagarcat" data-id="${esc(c.id)}">desativar</button>
+          </span>
+        </div>
+        <div class="ajsubs">${subChips}<button class="chip" data-act="novasub" data-id="${esc(c.id)}" type="button">＋ sub</button></div>
+      </div>`;
+    }).join("");
+    const pessoaBlocos = estado.pessoas.map(p => `<div class="ajrow">
+        <span>${esc(p.nome)}</span>
+        <span class="ajactions">
+          <button class="miniBtn" data-act="renomeiapessoa" data-id="${esc(p.id)}">renomear</button>
+          <button class="miniBtn" data-act="apagarpessoa" data-id="${esc(p.id)}">desativar</button>
+        </span>
+      </div>`).join("");
+    $("#ajustes").innerHTML = `
+      <div class="card" style="margin-bottom:16px">
+        <div class="cardhead">
+          <div><h2>Categorias</h2><p class="sub">categorias e subcategorias usadas na classificação</p></div>
+          <button class="chip" id="ajnovacat" type="button">＋ categoria</button>
+        </div>
+        <div id="ajcats">${catBlocos || `<p class="vazio">sem categorias</p>`}</div>
+      </div>
+      <div class="card">
+        <div class="cardhead">
+          <div><h2>Pessoas</h2><p class="sub">quem aparece no corte "gasto por pessoa"</p></div>
+          <button class="chip" id="ajnovapessoa" type="button">＋ pessoa</button>
+        </div>
+        <div id="ajpessoas">${pessoaBlocos || `<p class="vazio">sem pessoas</p>`}</div>
+      </div>`;
+  }
+
+  $("#ajustes").addEventListener("click", async e => {
+    const b = e.target.closest("button"); if (!b) return;
+    const cats = estado.catalogo.categorias, subs = estado.catalogo.subcategorias;
+    try {
+      if (b.id === "ajnovacat") {
+        const nome = prompt("Nome da nova categoria:");
+        if (!nome || !nome.trim()) return;
+        let natureza = (prompt("Natureza (despesa/receita):", "despesa") || "despesa").trim().toLowerCase();
+        if (natureza !== "despesa" && natureza !== "receita") natureza = "despesa";
+        await apiPost("/api/categorias", { nome: nome.trim(), natureza });
+      } else if (b.id === "ajnovapessoa") {
+        const nome = prompt("Nome da nova pessoa:");
+        if (!nome || !nome.trim()) return;
+        await apiPost("/api/pessoas", { nome: nome.trim() });
+      } else if (b.dataset.act === "novasub") {
+        const nome = prompt("Nome da nova subcategoria:");
+        if (!nome || !nome.trim()) return;
+        await apiPost("/api/subcategorias", { categoria_id: b.dataset.id, nome: nome.trim() });
+      } else if (b.dataset.act === "renomeiacat") {
+        const c = cats.find(x => x.id === b.dataset.id); if (!c) return;
+        const nome = prompt("Novo nome:", c.nome);
+        if (!nome || !nome.trim() || nome.trim() === c.nome) return;
+        await apiPatch(`/api/categorias/${c.id}`, { nome: nome.trim() });
+      } else if (b.dataset.act === "apagarcat") {
+        const c = cats.find(x => x.id === b.dataset.id); if (!c) return;
+        if (!confirm(`Desativar a categoria "${c.nome}"? Lançamentos existentes mantêm a referência.`)) return;
+        await apiDelete(`/api/categorias/${c.id}`);
+      } else if (b.dataset.act === "renomeiasub") {
+        const s = subs.find(x => x.id === b.dataset.id); if (!s) return;
+        const nome = prompt("Novo nome:", s.nome);
+        if (!nome || !nome.trim() || nome.trim() === s.nome) return;
+        await apiPatch(`/api/subcategorias/${s.id}`, { nome: nome.trim() });
+      } else if (b.dataset.act === "mesclarsub") {
+        const s = subs.find(x => x.id === b.dataset.id); if (!s) return;
+        const destNome = prompt(`Mesclar "${s.nome}" em qual subcategoria (nome exato, mesma categoria)?`);
+        if (!destNome || !destNome.trim()) return;
+        const destino = subs.find(x => x.categoria_id === s.categoria_id && x.nome === destNome.trim());
+        if (!destino) { alert("Subcategoria de destino não encontrada nessa categoria."); return; }
+        if (destino.id === s.id) return;
+        if (!confirm(`Mover os lançamentos de "${s.nome}" para "${destino.nome}" e desativar "${s.nome}"?`)) return;
+        await apiPost("/api/subcategorias/merge", { origem_id: s.id, destino_id: destino.id });
+      } else if (b.dataset.act === "apagarsub") {
+        const s = subs.find(x => x.id === b.dataset.id); if (!s) return;
+        if (!confirm(`Desativar a subcategoria "${s.nome}"?`)) return;
+        await apiDelete(`/api/subcategorias/${s.id}`);
+      } else if (b.dataset.act === "renomeiapessoa") {
+        const p = estado.pessoas.find(x => x.id === b.dataset.id); if (!p) return;
+        const nome = prompt("Novo nome:", p.nome);
+        if (!nome || !nome.trim() || nome.trim() === p.nome) return;
+        await apiPatch(`/api/pessoas/${p.id}`, { nome: nome.trim() });
+      } else if (b.dataset.act === "apagarpessoa") {
+        const p = estado.pessoas.find(x => x.id === b.dataset.id); if (!p) return;
+        if (!confirm(`Desativar a pessoa "${p.nome}"?`)) return;
+        await apiDelete(`/api/pessoas/${p.id}`);
+      } else {
+        return;
+      }
+      // recarrega tudo (catálogo, pessoas, cores, tabela) e redesenha a própria aba
+      await carregar();
+      drawAjustes();
+    } catch (err) { alert("Falha: " + err.message); }
+  });
+
   // ----- carga e eventos -----
   async function carregar() {
     try {
       const { de, ate } = periodoRange(estado.periodo);
       const qs = `?de=${de}&ate=${ate}`;
-      const [resumo, transacoes, categorias, pessoas] = await Promise.all([
-        apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/categorias"), apiGet("/api/pessoas"),
+      const [resumo, transacoes, catalogo, pessoas] = await Promise.all([
+        apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
       ]);
-      estado.resumo = resumo; estado.transacoes = transacoes; estado.pessoas = pessoas;
-      estado.subs = subsPorCategoria(categorias);
-      const macros = categorias.map(c => c.macro).concat(transacoes.map(t => t.macro));
-      estado.cores = construirCores(macros);
+      estado.resumo = resumo; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
+      // cores por nome de categoria: catálogo (pra sempre ter cor definida no select da Ajustes/filtro)
+      // + nomes vindos das transações (cobre categoria já desativada que ainda aparece no histórico)
+      const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
+      estado.cores = construirCores(nomes);
       popularFiltros();
       drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
@@ -370,6 +486,8 @@ if (typeof document !== "undefined") {
     const v = b.dataset.view;
     $("#resumo").classList.toggle("hidden", v !== "resumo");
     $("#lanc").classList.toggle("hidden", v !== "lanc");
+    $("#ajustes").classList.toggle("hidden", v !== "ajustes");
+    if (v === "ajustes") drawAjustes();
   }));
   document.querySelectorAll(".period").forEach(p => p.addEventListener("click", e => {
     if (!e.target.dataset.p) return;
@@ -401,17 +519,20 @@ if (typeof document !== "undefined") {
   $("#rows").addEventListener("change", async e => {
     const tr = e.target.closest("tr"); if (!tr) return; const id = tr.dataset.id;
     try {
-      if (e.target.classList.contains("edmacro")) {
-        await apiPatch(`/api/transacoes/${id}`, { macro: e.target.value });
-        // repopula as subs da nova categoria no datalist da linha
-        const dl = tr.querySelector("datalist");
-        const subs = (estado.subs && estado.subs[e.target.value]) || [];
-        if (dl) dl.innerHTML = subs.map(s => `<option value="${esc(s)}"></option>`).join("");
+      if (e.target.classList.contains("edcat")) {
+        const categoria_id = e.target.value;
+        // "" no PATCH vira null no backend: limpa a sub antiga, que pode não pertencer
+        // mais à categoria nova (ela é filtrada por categoria_id no select de Subcategoria)
+        await apiPatch(`/api/transacoes/${id}`, { categoria_id, subcategoria_id: "" });
+        const subSel = tr.querySelector(".edsub");
+        if (subSel) subSel.innerHTML = `<option value="">—</option>` +
+          subsDaCat(estado.catalogo, categoria_id).map(s => `<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join("");
         // atualiza a cor do chip
+        const cat = estado.catalogo.categorias.find(c => c.id === categoria_id);
         const dot = tr.querySelector(".macrochip .dot");
-        if (dot) dot.style.background = `var(${corDe(e.target.value)})`;
+        if (dot && cat) dot.style.background = `var(${corDe(cat.nome)})`;
       }
-      if (e.target.classList.contains("edsub")) await apiPatch(`/api/transacoes/${id}`, { sub: e.target.value });
+      if (e.target.classList.contains("edsub")) await apiPatch(`/api/transacoes/${id}`, { subcategoria_id: e.target.value || null });
       if (e.target.classList.contains("eddesc")) await apiPatch(`/api/transacoes/${id}`, { descricao: e.target.value });
       // select vazio ("—") vira null: transação sem pessoa vinculada
       if (e.target.classList.contains("edpessoa")) await apiPatch(`/api/transacoes/${id}`, { pessoa_id: e.target.value || null });

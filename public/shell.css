@@ -138,4 +138,22 @@ svg{display:block;overflow:visible}
 .axis{fill:var(--dim);font-size:11px;font-family:var(--mono)}
 .grid-l{stroke:var(--line-soft);stroke-width:1}
 
+
+/* aba Ajustes (gestão de categorias/subcategorias/pessoas) */
+.ajcat{padding:12px 0;border-top:1px solid var(--line-soft)}
+.ajcat:first-child{padding-top:0;border-top:0}
+.ajcathead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ajcathead b{font-size:14px}
+.ajnat{font-size:11px;color:var(--mut);background:var(--sunk);padding:2px 8px;border-radius:999px;text-transform:uppercase;letter-spacing:.04em}
+.ajactions{margin-left:auto;display:flex;gap:2px}
+.ajsubs{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.subchip{display:inline-flex;align-items:center;gap:2px;font-size:12.5px;color:var(--ink);
+  background:var(--sunk);padding:4px 4px 4px 10px;border-radius:999px}
+.miniBtn{border:0;background:transparent;color:var(--mut);cursor:pointer;font:inherit;font-size:12px;
+  padding:3px 7px;border-radius:7px}
+.miniBtn:hover{color:var(--ink);background:var(--accent-soft)}
+.ajrow{display:flex;align-items:center;gap:8px;padding:9px 0;border-top:1px solid var(--line-soft)}
+.ajrow:first-child{padding-top:0;border-top:0}
+.ajrow>span:first-child{font-size:13.5px}
+
 @media (max-width:860px){.kpis{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}

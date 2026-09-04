@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsPorCategoria,
+  agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes,
 } from "./app.js";
 
@@ -73,24 +73,30 @@ test("agruparPorPessoa dobra receita/despesa da mesma pessoa numa linha, ordenad
   ]);
 });
 
-test("subsPorCategoria agrupa subs por categoria, ignorando nulos e duplicados", () => {
-  const cats = [
-    { macro: "Casa", sub: "Luz" }, { macro: "Casa", sub: "Água" }, { macro: "Casa", sub: null },
-    { macro: "Casa", sub: "Luz" }, { macro: "Saúde", sub: "Plano" },
-  ];
-  const g = subsPorCategoria(cats);
-  assert.deepEqual(g["Casa"], ["Luz", "Água"]);
-  assert.deepEqual(g["Saúde"], ["Plano"]);
+test("subsDaCat filtra subcategorias do catálogo por categoria_id, devolvendo só {id,nome}", () => {
+  const catalogo = {
+    categorias: [{ id: "c1", nome: "Casa" }, { id: "c2", nome: "Saúde" }],
+    subcategorias: [
+      { id: "s1", categoria_id: "c1", nome: "Luz" },
+      { id: "s2", categoria_id: "c1", nome: "Água" },
+      { id: "s3", categoria_id: "c2", nome: "Plano" },
+    ],
+  };
+  assert.deepEqual(subsDaCat(catalogo, "c1"), [{ id: "s1", nome: "Luz" }, { id: "s2", nome: "Água" }]);
+  assert.deepEqual(subsDaCat(catalogo, "c2"), [{ id: "s3", nome: "Plano" }]);
+  // categoria sem subs (ou id inexistente) devolve lista vazia, nunca undefined
+  assert.deepEqual(subsDaCat(catalogo, "c9"), []);
 });
 
 // ---------- filtrarTransacoes (Task A8: toolbar de filtro em Lançamentos) ----------
 
 // fixture com as 4 dimensões variando, pra cada teste isolar uma delas.
+// categoria = t.categoria (nome via join, Fase B — não é mais t.macro).
 const T = [
-  { id: 1, macro: "Casa", pessoa: "Caio", pessoa_id: 1, origem_categoria: "modelo", descricao: "Supermercado", contraparte_nome: "Mercado Extra Ltda" },
-  { id: 2, macro: "Lazer", pessoa: "Ana", pessoa_id: 2, origem_categoria: "manual", descricao: "Cinema", contraparte_nome: null },
-  { id: 3, macro: "Casa", pessoa: null, pessoa_id: null, origem_categoria: "regra", descricao: "Conta de luz", contraparte_nome: "Cia Energia" },
-  { id: 4, macro: "Saúde", pessoa: "Caio", pessoa_id: 1, origem_categoria: "modelo", descricao: "Remédio", contraparte_nome: "Drogaria São Paulo" },
+  { id: 1, categoria: "Casa", pessoa: "Caio", pessoa_id: 1, origem_categoria: "modelo", descricao: "Supermercado", contraparte_nome: "Mercado Extra Ltda" },
+  { id: 2, categoria: "Lazer", pessoa: "Ana", pessoa_id: 2, origem_categoria: "manual", descricao: "Cinema", contraparte_nome: null },
+  { id: 3, categoria: "Casa", pessoa: null, pessoa_id: null, origem_categoria: "regra", descricao: "Conta de luz", contraparte_nome: "Cia Energia" },
+  { id: 4, categoria: "Saúde", pessoa: "Caio", pessoa_id: 1, origem_categoria: "modelo", descricao: "Remédio", contraparte_nome: "Drogaria São Paulo" },
 ];
 
 test("filtrarTransacoes sem filtro (objeto vazio ou omitido) devolve tudo", () => {
@@ -98,7 +104,7 @@ test("filtrarTransacoes sem filtro (objeto vazio ou omitido) devolve tudo", () =
   assert.deepEqual(filtrarTransacoes(T), T);
 });
 
-test("filtrarTransacoes por categoria casa t.macro exatamente; vazio ignora a dimensão", () => {
+test("filtrarTransacoes por categoria casa t.categoria exatamente; vazio ignora a dimensão", () => {
   assert.deepEqual(filtrarTransacoes(T, { categoria: "Casa" }).map(t => t.id), [1, 3]);
   assert.deepEqual(filtrarTransacoes(T, { categoria: "" }), T);
 });
