@@ -16,41 +16,46 @@ export function criarDb(sql) {
       return { id: rows[0].id };
     },
 
+    // Fase B: grava por categoria_id/subcategoria_id. As colunas string macro/sub
+    // saíram (0004 soltou o NOT NULL de macro); ficam null e são removidas na 0005.
     async inserirTransacao(t) {
       const rows = await sql`
         insert into transacoes
-          (data, natureza, esfera, valor_total, valor_reembolso, macro, sub, descricao,
-           pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
+          (data, natureza, esfera, valor_total, valor_reembolso, categoria_id, subcategoria_id,
+           descricao, pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
            contraparte_nome, contraparte_chave)
         values
           (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
-           ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.macro}, ${t.sub}, ${t.descricao},
-           ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria}, ${t.extraido_por ?? null},
-           ${t.confianca ?? null}, ${t.documento_id ?? null},
+           ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.categoria_id ?? null}, ${t.subcategoria_id ?? null},
+           ${t.descricao}, ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria},
+           ${t.extraido_por ?? null}, ${t.confianca ?? null}, ${t.documento_id ?? null},
            ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null})
         returning id`;
       return { id: rows[0].id };
     },
 
-    async listarCategorias() {
-      // Fase B (transição): o modelo por id vive em `categorias`(id,nome)+`subcategorias`;
-      // a lista macro/sub que o app e a extração ainda consomem segue na `categorias_legacy`
-      // até o cutover (B5/B6). Colunas e comportamento idênticos ao de antes do rename.
-      return await sql`select macro, sub, natureza from categorias_legacy where ativa order by macro, sub`;
+    // catálogo do modelo por id (categorias + subcategorias ativas). Alimenta selects e resolução.
+    async catalogo() {
+      const categorias = await sql`select id, nome, natureza, ativa from categorias where ativa order by nome`;
+      const subcategorias = await sql`select id, categoria_id, nome, ativa from subcategorias where ativa order by nome`;
+      return { categorias, subcategorias };
     },
 
     async listarPessoas() {
       return await sql`select id, nome from pessoas where ativa order by nome`;
     },
 
+    // join p/ devolver os NOMES (categoria/subcategoria/pessoa) além dos ids; o app usa os nomes.
     async listarTransacoes(f = {}) {
-      // filtros opcionais; usa coalesce p/ ignorar quando nulos
       return await sql`
-        select t.*, p.nome as pessoa from transacoes t
-        left join pessoas p on p.id = t.pessoa_id
+        select t.*, c.nome as categoria, s.nome as subcategoria, p.nome as pessoa
+        from transacoes t
+        left join categorias c    on c.id = t.categoria_id
+        left join subcategorias s on s.id = t.subcategoria_id
+        left join pessoas p       on p.id = t.pessoa_id
         where (${f.de ?? null}::date is null or t.data >= ${f.de ?? null})
           and (${f.ate ?? null}::date is null or t.data <= ${f.ate ?? null})
-          and (${f.macro ?? null}::text is null or t.macro = ${f.macro ?? null})
+          and (${f.categoria_id ?? null}::uuid is null or t.categoria_id = ${f.categoria_id ?? null})
           and (${f.natureza ?? null}::text is null or t.natureza = ${f.natureza ?? null})
           and (${f.esfera ?? null}::text is null or t.esfera = ${f.esfera ?? null})
         order by t.data desc, t.criado_em desc
@@ -58,17 +63,14 @@ export function criarDb(sql) {
     },
 
     async atualizarTransacao(id, c) {
-      // read-modify-write: o driver HTTP do Neon não compõe fragmentos `sql`
-      // aninhados (só postgres.js faz isso) — então em vez de tentar manter
-      // uma coluna "como está" via referência ao próprio nome dentro do
-      // template, lemos a linha e mesclamos os campos em JS antes de gravar.
+      // read-modify-write: o driver HTTP do Neon não compõe fragmentos aninhados,
+      // então lemos a linha e mesclamos em JS. undefined = manter; '' = limpar (null).
       const rows = await sql`select * from transacoes where id = ${id}`;
       const t = rows[0];
       if (!t) return;
-      // undefined = manter o valor atual; para sub/pessoa_id, string vazia vira null (limpar)
       const data = c.dataISO ?? t.data;
-      const macro = c.macro ?? t.macro;
-      const sub = c.sub === undefined ? t.sub : (c.sub || null);
+      const categoria_id = c.categoria_id === undefined ? t.categoria_id : (c.categoria_id || null);
+      const subcategoria_id = c.subcategoria_id === undefined ? t.subcategoria_id : (c.subcategoria_id || null);
       const pessoa_id = c.pessoa_id === undefined ? t.pessoa_id : (c.pessoa_id || null);
       const descricao = c.descricao === undefined ? t.descricao : (c.descricao || null);
       const natureza = c.natureza ?? t.natureza;
@@ -78,15 +80,15 @@ export function criarDb(sql) {
       // edição manual reclassifica: o Inc 2 aprende dessas correções
       await sql`
         update transacoes set
-          data = ${data}, macro = ${macro}, sub = ${sub}, pessoa_id = ${pessoa_id},
-          descricao = ${descricao}, natureza = ${natureza}, esfera = ${esfera},
+          data = ${data}, categoria_id = ${categoria_id}, subcategoria_id = ${subcategoria_id},
+          pessoa_id = ${pessoa_id}, descricao = ${descricao}, natureza = ${natureza}, esfera = ${esfera},
           valor_total = ${valor_total}, valor_reembolso = ${valor_reembolso},
           origem_categoria = 'manual'
         where id = ${id}`;
-      // aprende: correção de categoria vira regra pra aquela contraparte
-      if (c.macro !== undefined || c.sub !== undefined) {
+      // aprende: correção de categoria vira regra pra aquela contraparte (por id)
+      if (c.categoria_id !== undefined || c.subcategoria_id !== undefined) {
         const d = derivarChave({ contraparte_nome: t.contraparte_nome, contraparte_chave: t.contraparte_chave });
-        if (d) await this.upsertAssociacao({ chave: d.chave, tipo: d.tipo, macro, sub });
+        if (d) await this.upsertAssociacao({ chave: d.chave, tipo: d.tipo, categoria_id, subcategoria_id });
       }
     },
 
@@ -99,20 +101,68 @@ export function criarDb(sql) {
       return rows[0] ?? null;
     },
 
-    async upsertAssociacao({ chave, tipo, macro, sub }) {
+    async upsertAssociacao({ chave, tipo, categoria_id, subcategoria_id }) {
       await sql`
-        insert into associacoes (chave, tipo_chave, macro, sub, n, atualizado_em)
-        values (${chave}, ${tipo}, ${macro}, ${sub ?? null}, 1, now())
+        insert into associacoes (chave, tipo_chave, categoria_id, subcategoria_id, n, atualizado_em)
+        values (${chave}, ${tipo}, ${categoria_id ?? null}, ${subcategoria_id ?? null}, 1, now())
         on conflict (chave, tipo_chave) do update
-          set macro = excluded.macro, sub = excluded.sub,
+          set categoria_id = excluded.categoria_id, subcategoria_id = excluded.subcategoria_id,
               n = associacoes.n + 1, atualizado_em = now()`;
     },
 
+    // ---- CRUD de categorias/subcategorias/pessoas (tela de gestão) ----
+    async criarCategoria(nome, natureza = "despesa") {
+      const rows = await sql`insert into categorias (nome, natureza) values (${nome}, ${natureza})
+        on conflict (nome) do update set ativa = true returning id`;
+      return { id: rows[0].id };
+    },
+    async renomearCategoria(id, nome) {
+      await sql`update categorias set nome = ${nome} where id = ${id}`;
+    },
+    async desativarCategoria(id) {
+      await sql`update categorias set ativa = false where id = ${id}`;
+    },
+    async criarSub(categoria_id, nome) {
+      const rows = await sql`insert into subcategorias (categoria_id, nome) values (${categoria_id}, ${nome})
+        on conflict (categoria_id, nome) do update set ativa = true returning id`;
+      return { id: rows[0].id };
+    },
+    async renomearSub(id, nome) {
+      await sql`update subcategorias set nome = ${nome} where id = ${id}`;
+    },
+    async moverSub(id, categoria_id) {
+      await sql`update subcategorias set categoria_id = ${categoria_id} where id = ${id}`;
+    },
+    async desativarSub(id) {
+      await sql`update subcategorias set ativa = false where id = ${id}`;
+    },
+    // merge: as transacoes/associacoes da sub origem passam a apontar p/ a destino; origem sai.
+    async mergeSub(origem_id, destino_id) {
+      await sql`update transacoes  set subcategoria_id = ${destino_id} where subcategoria_id = ${origem_id}`;
+      await sql`update associacoes  set subcategoria_id = ${destino_id} where subcategoria_id = ${origem_id}`;
+      await sql`update subcategorias set ativa = false where id = ${origem_id}`;
+    },
+    async criarPessoa(nome) {
+      const rows = await sql`insert into pessoas (nome) values (${nome})
+        on conflict (nome) do update set ativa = true returning id`;
+      return { id: rows[0].id };
+    },
+    async renomearPessoa(id, nome) {
+      await sql`update pessoas set nome = ${nome} where id = ${id}`;
+    },
+    async desativarPessoa(id) {
+      await sql`update pessoas set ativa = false where id = ${id}`;
+    },
+
+    // ---- resumos (join p/ nomes; apelidam c.nome as macro p/ manter a forma que os gráficos usam) ----
     async resumoPorCategoria(de, ate) {
       return await sql`
-        select macro, sub, natureza, sum(valor_final) as total, count(*) as n
-        from transacoes where data >= ${de} and data <= ${ate}
-        group by macro, sub, natureza order by total desc`;
+        select c.nome as macro, s.nome as sub, t.natureza, sum(t.valor_final) as total, count(*) as n
+        from transacoes t
+        left join categorias c    on c.id = t.categoria_id
+        left join subcategorias s on s.id = t.subcategoria_id
+        where t.data >= ${de} and t.data <= ${ate}
+        group by c.nome, s.nome, t.natureza order by total desc`;
     },
 
     async resumoMensal(de, ate) {
@@ -132,26 +182,28 @@ export function criarDb(sql) {
       return rows[0];
     },
 
-    // dumbbell: despesa por macro no último mês com dados vs o mês anterior.
-    // Ancorado em max(data) (e não em "hoje") p/ ser útil mesmo sem lançamentos no mês corrente.
+    // dumbbell: despesa por categoria no último mês com dados vs o anterior. Ancorado em max(data).
     async resumoMesVsAnterior() {
       return await sql`
         with m as (select date_trunc('month', max(data)) as cur from transacoes)
-        select macro,
-          coalesce(sum(valor_final) filter (where date_trunc('month', data) = (select cur from m)), 0) as atual,
-          coalesce(sum(valor_final) filter (where date_trunc('month', data) = (select cur from m) - interval '1 month'), 0) as ant
-        from transacoes
-        where natureza = 'despesa'
-          and date_trunc('month', data) in ((select cur from m), (select cur from m) - interval '1 month')
-        group by macro
+        select c.nome as macro,
+          coalesce(sum(t.valor_final) filter (where date_trunc('month', t.data) = (select cur from m)), 0) as atual,
+          coalesce(sum(t.valor_final) filter (where date_trunc('month', t.data) = (select cur from m) - interval '1 month'), 0) as ant
+        from transacoes t
+        left join categorias c on c.id = t.categoria_id
+        where t.natureza = 'despesa'
+          and date_trunc('month', t.data) in ((select cur from m), (select cur from m) - interval '1 month')
+        group by c.nome
         order by atual desc`;
     },
 
     async resumoReembolsoAno() {
       return await sql`
-        select extract(year from data)::int as ano, macro,
-               sum(valor_total) as bruto, sum(valor_reembolso) as reembolsado, sum(valor_final) as liquido
-        from transacoes where valor_reembolso > 0
+        select extract(year from t.data)::int as ano, c.nome as macro,
+               sum(t.valor_total) as bruto, sum(t.valor_reembolso) as reembolsado, sum(t.valor_final) as liquido
+        from transacoes t
+        left join categorias c on c.id = t.categoria_id
+        where t.valor_reembolso > 0
         group by 1, 2 order by 1, 2`;
     },
 
