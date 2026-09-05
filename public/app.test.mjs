@@ -274,10 +274,10 @@ test("montarDecisao: fatura usa descricaoFinal quando presente", () => {
   assert.equal(d.novos[0].categoria_id, "cOut"); // sem categoriaNome/categoriaOrg -> fallback Outros
 });
 
-test("podeAplicar: true só quando checksum.ok===true", () => {
-  assert.equal(podeAplicar({ checksum: { ok: true } }), true);
-  assert.equal(podeAplicar({ checksum: { ok: false } }), false);
-  assert.equal(podeAplicar({ checksum: {} }), false);
+test("podeAplicar: bloqueia só quando checksum.bloqueiaAplicar===true (extrato); fatura é aviso", () => {
+  assert.equal(podeAplicar({ checksum: { ok: true, bloqueiaAplicar: false } }), true);   // extrato ok
+  assert.equal(podeAplicar({ checksum: { ok: false, bloqueiaAplicar: true } }), false);  // extrato não bate → bloqueia
+  assert.equal(podeAplicar({ checksum: { ok: false, bloqueiaAplicar: false } }), true);  // fatura c/ diferença (IOF) → aplica
 });
 
 test("resumoTexto: conta cada grupo (inclui 'fora do resumo') a partir dos itens", () => {

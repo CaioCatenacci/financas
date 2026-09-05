@@ -149,10 +149,11 @@ export function montarDecisao(preview, catalogo, fonte) {
   return { novos, naoGasto, casados };
 }
 
-// "Aplicar" só habilita quando o checksum bateu — extrato/fatura com diferença é abortado
-// (mesmo critério dos scripts .py: não grava nada até o checksum bater).
+// "Aplicar" bloqueia só quando o checksum manda bloquear (extrato com diferença — o saldo não
+// fecha, algo foi mal lido). A fatura é AVISO (bloqueiaAplicar=false): IOF/encargos entram no
+// total sem serem lançamentos, então a diferença é esperada e não impede aplicar.
 export function podeAplicar(preview) {
-  return preview?.checksum?.ok === true;
+  return preview?.checksum?.bloqueiaAplicar !== true;
 }
 
 // rótulo curto das contagens do preview, pra mostrar acima da revisão. Conta AO VIVO a partir
@@ -619,9 +620,13 @@ if (typeof document !== "undefined") {
     }
 
     const ok = podeAplicar(preview);
-    const checksumHtml = ok
+    const chk = preview.checksum || {};
+    const diff = centavosBR(String(Math.abs(chk.diferencaCents ?? 0) / 100));
+    const checksumHtml = chk.ok
       ? `<span class="impchk impchk-ok">✓ checksum confere</span>`
-      : `<span class="impchk impchk-bad">✕ checksum não bate (diferença R$ ${centavosBR(String(Math.abs(preview.checksum?.diferencaCents ?? 0) / 100))}) — aplicar desabilitado</span>`;
+      : chk.bloqueiaAplicar
+        ? `<span class="impchk impchk-bad">✕ checksum não bate (diferença R$ ${diff}) — aplicar desabilitado</span>`
+        : `<span class="impchk impchk-warn">⚠ diferença de R$ ${diff} — provável IOF/encargos da fatura (não bloqueia)</span>`;
 
     const novos = preview.itens.filter(it => it.status === "novo");
     const casados = preview.itens.filter(it => it.status === "casado");

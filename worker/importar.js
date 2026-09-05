@@ -29,7 +29,9 @@ function resumoVazio() {
 export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {}, existentes = [], hashes = [] } = {}) {
   void catalogo; // não usado aqui — ver docstring
   const { linhas, saldos } = parseExtrato(texto);
-  const checksum = conferirChecksum(linhas, saldos);
+  // extrato: o checksum é exato (saldos batem com os lançamentos) → se não bater, BLOQUEIA aplicar.
+  const chk = conferirChecksum(linhas, saldos);
+  const checksum = { ...chk, bloqueiaAplicar: !chk.ok };
 
   // cópia local, consumida ao casar: uma linha que já casou não pode "casar" de novo com a
   // MESMA candidata para uma segunda linha do lote (mesma data/valor) — spec §6.2.
@@ -103,9 +105,12 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
   const soma = itensBrutos.reduce((s, i) => s + i.valorCents, 0);
   // totalCents=0 quando a fatura não trouxe "Total dos lançamentos atuais" — sem total pra
   // comparar não há o que checar (mesmo critério do tools/importar_fatura.py).
+  // fatura: o "Total dos lançamentos atuais" inclui IOF/encargos que NÃO são lançamentos com data,
+  // então a soma dos itens pode ficar um pouco abaixo do total. O checksum é AVISO (bloqueiaAplicar
+  // = false): mostra a diferença mas não impede aplicar.
   const checksum = totalCents
-    ? { ok: soma === totalCents, diferencaCents: totalCents - soma }
-    : { ok: true, diferencaCents: 0 };
+    ? { ok: soma === totalCents, diferencaCents: totalCents - soma, bloqueiaAplicar: false }
+    : { ok: true, diferencaCents: 0, bloqueiaAplicar: false };
 
   const conta = `fatura-${ano}${mes}`;
   const hashesSet = new Set(hashes);

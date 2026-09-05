@@ -1,41 +1,46 @@
 /**
- * Parser da fatura Itaú (texto do PDF, extraído em modo layout).
- * A fatura tem layout de 2 colunas; em modo layout cada linha de lançamento vira
- * 'DATA   ESTABELECIMENTO   VALOR   [ruído da coluna da direita: juros etc]'.
- * Regra: uma linha de item é a que COMEÇA (após strip) com 'DD/MM'; o valor do
- * lançamento é o PRIMEIRO token de dinheiro que aparece depois da data — ruído da
- * coluna da direita (ex.: juros) vem depois e tem que ser ignorado. O estabelecimento
- * é o texto entre a data e esse primeiro valor. Ano vem do período da fatura (parâmetro).
- * Parcela 'x/y' extraída do texto do estabelecimento.
+ * Parser da fatura Itaú (texto do PDF extraído no navegador via pdf.js e reconstruído por linhas).
+ *
+ * Uma fatura real é DENSA e em 2 COLUNAS: a reconstrução por linha (y) às vezes junta um
+ * lançamento da coluna esquerda e outro da direita na MESMA linha. Por isso capturamos TODOS os
+ * lançamentos de cada linha (regex global), não só o primeiro.
+ *
+ * Como distinguir um lançamento do ruído:
+ * - Um lançamento do período começa com `DD/MM` seguido de ESPAÇO (ex.: "16/06  LOJA  100,00").
+ *   Datas de cabeçalho são `DD/MM/AAAA` (barra depois do MM) — o `\s+` exigido após o dia/mês as
+ *   exclui naturalmente (inclusive "Pagamento efetuado em 06/06/2025 - 17,00").
+ * - O valor é o PRIMEIRO token de dinheiro após a data (a categoria/ruído vem depois).
+ * - Estornos vêm com "-" antes do valor → valor negativo.
+ * - PARAMOS de capturar ao encontrar "Total dos lançamentos atuais": o que vem depois é
+ *   parcelamento de PRÓXIMAS faturas, simulação de saque, etc. — não é gasto do período.
+ *
+ * Observação de checksum: o "Total dos lançamentos atuais" inclui IOF/encargos (ex.: IOF de
+ * transação internacional) que NÃO são lançamentos com data. Então a soma dos itens pode ficar
+ * um pouco abaixo do total — quem consome (montarPreviewFatura) trata isso como AVISO, não erro.
  */
 
-const _LINHA_DATA = /^(\d{2})\/(\d{2})\s+(.*)$/;
-const _MONEY = /\d{1,3}(?:\.\d{3})*,\d{2}/;
-const _PARCELA = /PARCELA\s+(\d{2}\/\d{2})/i;
-// ".", não "ç"/"ã" diretamente: o texto extraído pode carregar acentuação estranha
+const _MONEY = /-?\s*\d{1,3}(?:\.\d{3})*,\d{2}/;
+// lançamento: DD/MM + ESPAÇO + estabelecimento (não-guloso) + ESPAÇO + valor (opcional "-").
+// global: pega os 2 lançamentos quando a linha juntou as duas colunas.
+const _ITEM = /(\d{2})\/(\d{2})\s+(.+?)\s+(-?\s*\d{1,3}(?:\.\d{3})*,\d{2})/g;
 const _TOTAL_LABEL = /total\s+dos\s+lan.amentos\s+atuais/i;
-const _IGNORAR = /total\s+dos\s+lan.amentos|lan.amentos\s+no\s+cart.o|^data\s+estabelecimento/i;
+// sufixo de parcela (DD/MM) colado/solto no fim do estabelecimento (ex.: "GIULIANA MARKET IN01/03").
+const _PARCELA_FIM = /(\d{2}\/\d{2})\s*$/;
 
 /**
- * Converte string de dinheiro brasileiro para centavos (inteiro).
- * Remove pontos de milhar e converte vírgula decimal.
+ * Converte string de dinheiro brasileiro (com sinal opcional) para centavos (inteiro).
+ * '- 17,40' -> -1740 ; '1.007,56' -> 100756 ; '411,48' -> 41148
  */
 function _cents(v) {
-  return parseInt(v.replace(/\./g, "").replace(",", ""), 10);
-}
-
-/**
- * Extrai a primeira ocorrência de um padrão regex em uma string.
- */
-function _searchRegex(regex, text) {
-  const match = regex.exec(text);
-  return match ? { index: match.index, match } : null;
+  const neg = /^\s*-/.test(v);
+  const n = parseInt(v.replace(/[^\d]/g, ""), 10);
+  return neg ? -n : n;
 }
 
 /**
  * Parser da fatura Itaú.
- * @param {string} texto - Texto da fatura (PDF em modo layout)
- * @param {number} ano - Ano do período da fatura
+ * @param {string} texto - Texto da fatura (pdf.js reconstruído por linhas)
+ * @param {number} ano - Ano do período da fatura (a fatura só traz DD/MM)
  * @returns {{itens: Array, totalCents: number}}
  */
 export function parseFatura(texto, ano) {
@@ -44,59 +49,45 @@ export function parseFatura(texto, ano) {
 
   for (const raw of texto.split("\n")) {
     const linha = raw.trim();
-
     if (!linha) {
       continue;
     }
 
-    // Procura pelo total
-    const mtTotal = _TOTAL_LABEL.exec(linha);
-    if (mtTotal) {
-      const restoDaLinha = linha.substring(mtTotal.index + mtTotal[0].length);
-      const mvTotal = _MONEY.exec(restoDaLinha);
-      if (mvTotal) {
-        totalCents = _cents(mvTotal[0]);
+    // Total do período: captura o valor e PARA de ler itens (o que vem depois é parcelamento
+    // futuro / simulações, não gasto do período).
+    const mt = _TOTAL_LABEL.exec(linha);
+    if (mt) {
+      const resto = linha.substring(mt.index + mt[0].length);
+      const mv = _MONEY.exec(resto);
+      if (mv) {
+        totalCents = _cents(mv[0]);
       }
-      continue;
+      break;
     }
 
-    // Ignora linhas de subtotal, header, título
-    if (_IGNORAR.test(linha)) {
-      continue;
+    // Captura TODOS os lançamentos da linha (fatura de 2 colunas pode trazer 2 por linha).
+    _ITEM.lastIndex = 0;
+    let m;
+    while ((m = _ITEM.exec(linha)) !== null) {
+      const dd = m[1];
+      const mm = m[2];
+      let est = m[3].replace(/\s{2,}/g, " ").trim();
+
+      // sufixo de parcela (DD/MM) no fim do estabelecimento — separa e limpa a descrição.
+      let parcela = null;
+      const pm = est.match(_PARCELA_FIM);
+      if (pm) {
+        parcela = pm[1];
+        est = est.slice(0, pm.index).replace(/[\s*]+$/, "").trim();
+      }
+
+      itens.push({
+        data: `${ano}-${mm}-${dd}`,
+        descricao: est,
+        valorCents: _cents(m[4]),
+        parcela,
+      });
     }
-
-    // Tenta extrair data (DD/MM)
-    const mdData = _LINHA_DATA.exec(linha);
-    if (!mdData) {
-      continue;
-    }
-
-    const dd = mdData[1];
-    const mm = mdData[2];
-    const resto = mdData[3];
-
-    // Procura pelo primeiro valor de dinheiro após a data
-    const mvDinheiro = _MONEY.exec(resto);
-    if (!mvDinheiro) {
-      // linha começa com data mas não tem valor reconhecível — ignora
-      continue;
-    }
-
-    // Extrai estabelecimento (texto entre data e primeiro valor)
-    // Colapsa múltiplos espaços em branco
-    const estabelecimento = resto.substring(0, mvDinheiro.index)
-      .replace(/\s{2,}/g, " ")
-      .trim();
-
-    // Procura por parcela no estabelecimento
-    const parcMatch = _PARCELA.exec(estabelecimento);
-
-    itens.push({
-      data: `${ano}-${mm}-${dd}`,
-      descricao: estabelecimento,
-      valorCents: _cents(mvDinheiro[0]),
-      parcela: parcMatch ? parcMatch[1] : null,
-    });
   }
 
   return { itens, totalCents };
