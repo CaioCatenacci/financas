@@ -10,6 +10,8 @@ function fakeSql(resultado = []) {
     return Promise.resolve(resultado);
   };
   fn.chamadas = chamadas;
+  // sql.transaction([...]) do driver Neon: roda várias queries num POST só (1 subrequest, atômico).
+  fn.transaction = (queries) => { fn.transacao = queries; return Promise.resolve(queries.map(() => resultado)); };
   return fn;
 }
 
@@ -375,4 +377,30 @@ test("marcarPagamentoFaturaNaoGasto não marca com >1 candidato (ambíguo, deixa
   const r = await db.marcarPagamentoFaturaNaoGasto(16700, "2025-05-01", "2025-07-02");
   assert.equal(sql.chamadas.length, 1); // só o select, sem update
   assert.deepEqual(r, { marcados: 0, candidatos: 2 });
+});
+
+test("aplicarImportacao grava tudo numa ÚNICA transação (1 subrequest, atômica)", async () => {
+  const sql = fakeSql([{ id: "x" }]);
+  const db = criarDb(sql);
+  const r = await db.aplicarImportacao({
+    novos: [{ dataISO: "2026-02-01", natureza: "despesa", esfera: "pessoal", valorCents: 1000, fonte: "extrato", origem_categoria: "modelo", linha_hash: "h1" }],
+    naoGasto: [{ dataISO: "2026-02-02", natureza: "despesa", esfera: "pessoal", valorCents: 2000, fonte: "extrato", origem_categoria: "modelo", computa_resumo: false, linha_hash: "h2" }],
+    casados: [{ matchId: "t9", linhaHash: "h3" }],
+  });
+  // 2 inserts + 1 update, todos numa transação só
+  assert.equal(sql.transacao.length, 3);
+  assert.deepEqual(r, { gravados: 2, conciliados: 1, naoGasto: 1 });
+  assert.ok(sql.chamadas.some(c => /insert into transacoes/i.test(c.text)), "deve construir insert");
+  const upd = sql.chamadas.find(c => /update transacoes set linha_hash/i.test(c.text));
+  assert.ok(upd, "deve construir update de carimbo");
+  assert.match(upd.text, /linha_hash is null/i); // guard de não re-carimbar
+  assert.deepEqual(upd.values, ["h3", "t9"]);
+});
+
+test("aplicarImportacao com decisão vazia não abre transação", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const r = await db.aplicarImportacao({ novos: [], naoGasto: [], casados: [] });
+  assert.equal(sql.transacao, undefined); // não chamou sql.transaction
+  assert.deepEqual(r, { gravados: 0, conciliados: 0, naoGasto: 0 });
 });

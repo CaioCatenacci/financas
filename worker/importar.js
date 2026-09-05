@@ -155,32 +155,23 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
 }
 
 /**
- * Aplica a decisão já revisada (pelo usuário, no app) no banco: novos + não-gasto viram
- * `db.inserirTransacao`; casados só carimbam a linha_hash na transação existente (não duplicam).
- * `db` é injetado — é o único efeito colateral deste módulo, e só existe aqui porque é o
- * propósito da função.
+ * Aplica a decisão já revisada (pelo usuário, no app) no banco, delegando pro
+ * `db.aplicarImportacao`, que grava novos+não-gasto (insert) e carimba a linha_hash dos casados
+ * numa ÚNICA transação HTTP (1 subrequest, atômica). `db` é injetado — único efeito colateral.
  *
  * `decisao.novos`/`decisao.naoGasto` já devem chegar com `categoria_id`/`subcategoria_id`
  * resolvidos (nome→id) por quem monta a decisão — este módulo não resolve categoria.
  *
- * ATENÇÃO (Task 7): `db.carimbarLinhaHash(id, hash)` ainda NÃO existe em worker/db.js — precisa
- * ser adicionado (equivalente ao `update transacoes set linha_hash=%s where id=%s and
- * linha_hash is null` do tools/importar_extrato.py) para este fluxo funcionar de ponta a ponta.
- *
- * @param {Object} db - objeto com inserirTransacao(t) e carimbarLinhaHash(id, hash)
+ * @param {Object} db - objeto com aplicarImportacao({novos, naoGasto, casados})
  * @param {{novos:Array, naoGasto:Array, casados:Array}} decisao
  */
 export async function aplicar(db, decisao) {
-  const novos = decisao.novos || [];
-  const naoGasto = decisao.naoGasto || [];
-  const casados = decisao.casados || [];
-
-  for (const item of [...novos, ...naoGasto]) {
-    await db.inserirTransacao(item);
-  }
-  for (const item of casados) {
-    await db.carimbarLinhaHash(item.matchId, item.linhaHash);
-  }
-
-  return { gravados: novos.length + naoGasto.length, conciliados: casados.length, naoGasto: naoGasto.length };
+  // delega o lote inteiro pro db.aplicarImportacao, que grava tudo numa única transação HTTP
+  // (1 subrequest, atômica). O loop antigo (1 db.inserirTransacao por linha) estourava o limite
+  // de subrequests do Worker num extrato grande e podia gravar pela metade.
+  return await db.aplicarImportacao({
+    novos: decisao.novos || [],
+    naoGasto: decisao.naoGasto || [],
+    casados: decisao.casados || [],
+  });
 }

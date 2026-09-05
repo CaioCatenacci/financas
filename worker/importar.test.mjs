@@ -128,11 +128,16 @@ test("preview fatura: dedup por hash (jaTem)", () => {
 
 // ---- aplicar ----
 
-test("aplicar: grava novos+não-gasto via inserirTransacao e carimba casados via carimbarLinhaHash", async () => {
-  const chamadas = { inseridos: [], carimbados: [] };
+test("aplicar: delega o lote inteiro p/ db.aplicarImportacao (uma transação, não linha a linha)", async () => {
+  let recebido = null;
   const db = {
-    async inserirTransacao(t) { chamadas.inseridos.push(t); return { id: "novo-id" }; },
-    async carimbarLinhaHash(id, hash) { chamadas.carimbados.push({ id, hash }); },
+    async aplicarImportacao(d) {
+      recebido = d;
+      return { gravados: d.novos.length + d.naoGasto.length, conciliados: d.casados.length, naoGasto: d.naoGasto.length };
+    },
+    // se aplicar voltasse a chamar linha a linha, estes explodiriam o teste
+    async inserirTransacao() { throw new Error("não deve inserir linha a linha"); },
+    async carimbarLinhaHash() { throw new Error("não deve carimbar linha a linha"); },
   };
   const decisao = {
     novos: [{ descricao: "a", categoria_id: "cO" }],
@@ -140,9 +145,6 @@ test("aplicar: grava novos+não-gasto via inserirTransacao e carimba casados via
     casados: [{ matchId: "t9", linhaHash: "abc123" }],
   };
   const r = await aplicar(db, decisao);
-  assert.equal(r.gravados, 2);
-  assert.equal(r.naoGasto, 1);
-  assert.equal(r.conciliados, 1);
-  assert.equal(chamadas.inseridos.length, 2);
-  assert.deepEqual(chamadas.carimbados, [{ id: "t9", hash: "abc123" }]);
+  assert.deepEqual(recebido, decisao);                 // passou a decisão inteira
+  assert.deepEqual(r, { gravados: 2, conciliados: 1, naoGasto: 1 });
 });

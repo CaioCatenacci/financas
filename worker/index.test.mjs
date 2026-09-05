@@ -281,8 +281,10 @@ function dbImportarFake() {
     associacoesPorNome: async () => ({}),
     transacoesNaJanela: async () => [],
     hashesNaJanela: async () => [],
-    inserirTransacao: async (t) => { estado.inseridos.push(t); return { id: "novo-id" }; },
-    carimbarLinhaHash: async (id, hash) => { estado.carimbados.push({ id, hash }); },
+    aplicarImportacao: async (d) => {
+      estado.aplicado = d;
+      return { gravados: (d.novos || []).length + (d.naoGasto || []).length, conciliados: (d.casados || []).length, naoGasto: (d.naoGasto || []).length };
+    },
     marcarPagamentoFaturaNaoGasto: async (totalCents, de, ate) => {
       estado.pagamento = { totalCents, de, ate };
       return { marcados: 1, candidatos: 1 };
@@ -322,7 +324,7 @@ test("POST /api/importar/aplicar grava novos e retorna as contagens", async () =
   });
   const response = await handleApi(request, env, new URL(request.url), db);
   const data = await response.json();
-  assert.equal(db.estado.inseridos.length, 1);
+  assert.equal(db.estado.aplicado.novos.length, 1); // a decisão chegou no lote transacional
   assert.equal(data.gravados, 1);
 });
 

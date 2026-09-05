@@ -2,6 +2,21 @@ import { centsToNumeric } from "./money.js";
 import { derivarChave, normalizarNome } from "./contraparte.js";
 
 export function criarDb(sql) {
+  // Builder da query de insert de transação. Reusado no insert único (captura) e no lote
+  // transacional da importação — retorna a query SEM await (o await/transaction executa).
+  const qInserirTransacao = (t) => sql`
+    insert into transacoes
+      (data, natureza, esfera, valor_total, valor_reembolso, categoria_id, subcategoria_id,
+       descricao, pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
+       contraparte_nome, contraparte_chave, computa_resumo, linha_hash)
+    values
+      (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
+       ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.categoria_id ?? null}, ${t.subcategoria_id ?? null},
+       ${t.descricao}, ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria},
+       ${t.extraido_por ?? null}, ${t.confianca ?? null}, ${t.documento_id ?? null},
+       ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null},
+       ${t.computa_resumo ?? true}, ${t.linha_hash ?? null})
+    returning id`;
   return {
     async documentoPorHash(hash) {
       const rows = await sql`select * from documentos where hash = ${hash} limit 1`;
@@ -19,19 +34,7 @@ export function criarDb(sql) {
     // Fase B: grava por categoria_id/subcategoria_id. As colunas string macro/sub
     // saíram (0004 soltou o NOT NULL de macro); ficam null e são removidas na 0005.
     async inserirTransacao(t) {
-      const rows = await sql`
-        insert into transacoes
-          (data, natureza, esfera, valor_total, valor_reembolso, categoria_id, subcategoria_id,
-           descricao, pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
-           contraparte_nome, contraparte_chave, computa_resumo, linha_hash)
-        values
-          (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
-           ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.categoria_id ?? null}, ${t.subcategoria_id ?? null},
-           ${t.descricao}, ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria},
-           ${t.extraido_por ?? null}, ${t.confianca ?? null}, ${t.documento_id ?? null},
-           ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null},
-           ${t.computa_resumo ?? true}, ${t.linha_hash ?? null})
-        returning id`;
+      const rows = await qInserirTransacao(t);
       return { id: rows[0].id };
     },
 
@@ -241,6 +244,20 @@ export function criarDb(sql) {
         from transacoes
         where data between ${de} and ${ate} and linha_hash is not null`;
       return rows.map(r => r.linha_hash);
+    },
+
+    // Aplica a importação inteira numa ÚNICA transação HTTP (1 subrequest, atômica). O driver do
+    // Neon faz 1 subrequest por query, então o loop antigo (1 await por linha) estourava o limite
+    // de subrequests do Worker num extrato grande (~236 linhas). sql.transaction manda todas as
+    // queries num POST só — e, sendo atômica, ou grava tudo ou nada (nunca import pela metade).
+    async aplicarImportacao({ novos = [], naoGasto = [], casados = [] }) {
+      const queries = [];
+      for (const t of [...novos, ...naoGasto]) queries.push(qInserirTransacao(t));
+      for (const c of casados) {
+        queries.push(sql`update transacoes set linha_hash = ${c.linhaHash} where id = ${c.matchId} and linha_hash is null`);
+      }
+      if (queries.length) await sql.transaction(queries);
+      return { gravados: novos.length + naoGasto.length, conciliados: casados.length, naoGasto: naoGasto.length };
     },
 
     // Marca o pagamento da fatura no extrato como fora do resumo (computa_resumo=false): procura
