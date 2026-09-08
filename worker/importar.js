@@ -121,13 +121,20 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
   itensBrutos.forEach((item, i) => {
     // ordinal = índice do item na fatura (não há "várias por dia" a distinguir como no
     // extrato — o índice já é estável e único dentro da fatura).
+    // linhaHash usa o valor COM sinal (estável/único: compra +X e estorno -X do mesmo lugar/data
+    // ficam distintos).
     const lh = linhaHash(conta, item.data, item.descricao, item.valorCents, i);
+
+    // estorno (valor negativo na fatura) vira RECEITA com valor positivo — igual ao extrato trata
+    // crédito. valor_total no banco é sempre >= 0 (check constraint); o net entra em receita−despesa.
+    const natureza = item.valorCents < 0 ? "receita" : "despesa";
+    const valorCents = Math.abs(item.valorCents);
 
     if (hashesSet.has(lh)) {
       itens.push({
-        ...item, linhaHash: lh, status: "jaTem", matchId: null, computaResumo: null,
+        ...item, valorCents, linhaHash: lh, status: "jaTem", matchId: null, computaResumo: null,
         categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
-        natureza: "despesa", descricaoFinal: item.descricao,
+        natureza, descricaoFinal: item.descricao,
       });
       resumo.jaTem++;
       return;
@@ -145,10 +152,10 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
     // PAGAMENTO da fatura, que aparece no extrato — outro fluxo. Reaproveitamos `classificar`
     // só pela categoria/contraparte aprendida; ignoramos o veredito de não-gasto dele.
     itens.push({
-      ...item, linhaHash: lh, status: "novo", matchId: null,
+      ...item, valorCents, linhaHash: lh, status: "novo", matchId: null,
       computaResumo: true,
       categoriaNome: info.categoriaNome, subNome: info.subNome, categoriaOrg: null,
-      contraparteNome: info.contraparteNome, natureza: "despesa", descricaoFinal,
+      contraparteNome: info.contraparteNome, natureza, descricaoFinal,
     });
 
     resumo.novos++;

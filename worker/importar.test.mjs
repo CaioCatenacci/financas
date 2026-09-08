@@ -126,6 +126,22 @@ test("preview fatura: dedup por hash (jaTem)", () => {
   assert.equal(p.resumo.novos, 1);
 });
 
+test("preview fatura: estorno (valor negativo) vira receita com valor POSITIVO (não viola check >= 0)", () => {
+  const txt = `                DATA       ESTABELECIMENTO                       VALOR EM R$
+                05/06      LOJA X                          100,00
+                06/06      LOJA X ESTORNO                          - 30,00
+                Total dos lançamentos atuais                             70,00`;
+  const p = montarPreviewFatura(txt, 2025, "06", { catalogo, associacoes: {}, hashes: [] });
+  assert.equal(p.checksum.ok, true);           // net 100 - 30 == total 70
+  assert.equal(p.checksum.diferencaCents, 0);
+  const compra = p.itens.find(i => i.descricao === "LOJA X");
+  const estorno = p.itens.find(i => i.descricao.includes("ESTORNO"));
+  assert.equal(compra.natureza, "despesa");
+  assert.equal(compra.valorCents, 10000);
+  assert.equal(estorno.natureza, "receita");   // crédito
+  assert.equal(estorno.valorCents, 3000);      // POSITIVO — valor_total no banco é sempre >= 0
+});
+
 // ---- aplicar ----
 
 test("aplicar: delega o lote inteiro p/ db.aplicarImportacao (uma transação, não linha a linha)", async () => {
