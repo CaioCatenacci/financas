@@ -13,6 +13,7 @@ import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
 import { parseFatura } from "./fatura.js";
+import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
@@ -219,6 +220,102 @@ export async function handleApi(request, env, url, dbOpt = null) {
       porPessoa: await db.resumoPorPessoa(de, ate),
     });
   }
+
+  // ---- Inc 4: planejamento (metas) ----
+  const mesValido = (m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m || "");
+
+  if (url.pathname === "/api/metas" && request.method === "GET") {
+    const mes = url.searchParams.get("mes");
+    if (!mesValido(mes)) return erroJson("mes inválido (use YYYY-MM)", 400);
+    const dia01 = primeiroDiaDoMes(mes);
+    const de = dia01, ateExcl = primeiroDiaDoMes(mesAnterior(mes, -1)); // [mês, mês+1)
+    const [catalogo, baselines, excecoes, realizado] = await Promise.all([
+      db.catalogo(), db.metasBaselines(), db.metasExcecoes(), db.realizadoPorCategoriaMes(de, ateExcl),
+    ]);
+    const realPorCat = {};
+    for (const r of realizado) realPorCat[r.categoria_id] = r.realizado_cents;
+    const linhas = catalogo.categorias
+      .filter((c) => c.natureza === "despesa")
+      .map((c) => {
+        const { valorCents, origem } = alvoEfetivo(baselines, excecoes, c.id, dia01);
+        const realizado_cents = realPorCat[c.id] || 0;
+        const diff_cents = valorCents == null ? null : valorCents - realizado_cents;
+        return { categoria_id: c.id, categoria: c.nome, alvo_cents: valorCents, realizado_cents,
+                 diff_cents, origem, status: statusMeta(realizado_cents, valorCents) };
+      });
+    const total = linhas.reduce((acc, l) => {
+      if (l.alvo_cents != null) acc.alvo_cents += l.alvo_cents;
+      acc.realizado_cents += l.realizado_cents;
+      return acc;
+    }, { alvo_cents: 0, realizado_cents: 0 });
+    total.diff_cents = total.alvo_cents - total.realizado_cents;
+    return j({ mes, linhas, total });
+  }
+
+  if (url.pathname === "/api/metas/sugestao" && request.method === "GET") {
+    const mes = url.searchParams.get("mes");
+    if (!mesValido(mes)) return erroJson("mes inválido (use YYYY-MM)", 400);
+    const de = primeiroDiaDoMes(mesAnterior(mes, 3)), ateExcl = primeiroDiaDoMes(mes); // [mês-3, mês)
+    const [catalogo, realizado] = await Promise.all([db.catalogo(), db.realizadoPorCategoriaMes(de, ateExcl)]);
+    const porCat = {};
+    for (const r of realizado) (porCat[r.categoria_id] ||= {})[r.mes] = r.realizado_cents;
+    const linhas = catalogo.categorias
+      .filter((c) => c.natureza === "despesa")
+      .map((c) => ({ categoria_id: c.id, sugestao_cents: mediaSugestao(porCat[c.id] || {}, mes, 3) }));
+    return j({ mes, linhas });
+  }
+
+  if (url.pathname === "/api/metas" && request.method === "PUT") {
+    const b = await body();
+    if (!mesValido(b.mes)) return erroJson("mes inválido (use YYYY-MM)", 400);
+    if (!Number.isInteger(b.valor_cents) || b.valor_cents < 0) return erroJson("valor_cents inválido", 400);
+    if (!b.categoria_id) return erroJson("categoria_id obrigatório", 400);
+    const dia01 = primeiroDiaDoMes(b.mes);
+    if (b.escopo === "baseline") await db.setBaseline(b.categoria_id, dia01, b.valor_cents);
+    else if (b.escopo === "excecao") await db.setExcecao(b.categoria_id, dia01, b.valor_cents);
+    else return erroJson("escopo inválido (baseline|excecao)", 400);
+    return j({ ok: true });
+  }
+
+  if (url.pathname === "/api/metas" && request.method === "DELETE") {
+    const p = url.searchParams;
+    if (!mesValido(p.get("mes"))) return erroJson("mes inválido (use YYYY-MM)", 400);
+    if (!p.get("categoria_id")) return erroJson("categoria_id obrigatório", 400);
+    const dia01 = primeiroDiaDoMes(p.get("mes"));
+    if (p.get("escopo") === "baseline") await db.apagarBaseline(p.get("categoria_id"), dia01);
+    else if (p.get("escopo") === "excecao") await db.apagarExcecao(p.get("categoria_id"), dia01);
+    else return erroJson("escopo inválido (baseline|excecao)", 400);
+    return j({ ok: true });
+  }
+
+  if (url.pathname === "/api/metas/grade" && request.method === "GET") {
+    const p = url.searchParams;
+    const hoje = new Date().toISOString().slice(0, 7);
+    let de = p.get("de"), ate = p.get("ate");
+    if (!mesValido(de)) de = mesAnterior(hoje, 3);    // 3 meses atrás
+    if (!mesValido(ate)) ate = mesAnterior(hoje, -8); // 8 à frente
+    const meses = [];
+    for (let m = de; ; m = mesAnterior(m, -1)) { meses.push(m); if (m === ate || meses.length >= 60) break; }
+    const deDia = primeiroDiaDoMes(de), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+    const [catalogo, baselines, excecoes, realizado] = await Promise.all([
+      db.catalogo(), db.metasBaselines(), db.metasExcecoes(), db.realizadoPorCategoriaMes(deDia, ateExcl),
+    ]);
+    const realMap = {};
+    for (const r of realizado) realMap[`${r.categoria_id}|${r.mes}`] = r.realizado_cents;
+    const categorias = catalogo.categorias
+      .filter((c) => c.natureza === "despesa")
+      .map((c) => ({
+        categoria_id: c.id, categoria: c.nome,
+        celulas: meses.map((m) => {
+          const { valorCents, origem } = alvoEfetivo(baselines, excecoes, c.id, primeiroDiaDoMes(m));
+          const passadoOuCorrente = m <= hoje;
+          return { mes: m, alvo_cents: valorCents, origem,
+                   realizado_cents: passadoOuCorrente ? (realMap[`${c.id}|${m}`] || 0) : null };
+        }),
+      }));
+    return j({ meses, categorias });
+  }
+
   // ---- importar extrato/fatura (Incremento 3) ----
   if (url.pathname === "/api/importar/preview" && request.method === "POST") {
    try {

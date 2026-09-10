@@ -274,6 +274,61 @@ export function criarDb(sql) {
         order by 3 desc`;
     },
 
+    // ---- Inc 4: planejamento (metas) ----
+    async metasBaselines() {
+      const rows = await sql`
+        select categoria_id, to_char(vigente_desde,'YYYY-MM-01') as vigente_desde,
+               (round(valor_alvo*100))::bigint as valor_cents
+        from metas`;
+      // driver do Neon devolve ::bigint como string — converte na borda (mesmo padrão de
+      // transacoesNaJanela), senão os acumuladores += de index.js concatenam texto.
+      return rows.map(r => ({ ...r, valor_cents: Number(r.valor_cents) }));
+    },
+
+    async metasExcecoes() {
+      const rows = await sql`
+        select categoria_id, to_char(mes,'YYYY-MM-01') as mes,
+               (round(valor_alvo*100))::bigint as valor_cents
+        from metas_excecao`;
+      return rows.map(r => ({ ...r, valor_cents: Number(r.valor_cents) }));
+    },
+
+    // realizado (despesa, no resumo) por categoria e mês na janela meio-aberta [de, ateExcl).
+    async realizadoPorCategoriaMes(de, ateExcl) {
+      const rows = await sql`
+        select t.categoria_id, to_char(t.data,'YYYY-MM') as mes,
+               (round(sum(t.valor_final)*100))::bigint as realizado_cents
+        from transacoes t
+        where t.natureza = 'despesa' and t.computa_resumo
+          and t.data >= ${de} and t.data < ${ateExcl}
+        group by t.categoria_id, to_char(t.data,'YYYY-MM')`;
+      return rows.map(r => ({ ...r, realizado_cents: Number(r.realizado_cents) }));
+    },
+
+    async setBaseline(categoria_id, mesDia01, valorCents) {
+      await sql`
+        insert into metas (categoria_id, vigente_desde, valor_alvo)
+        values (${categoria_id}, ${mesDia01}, ${centsToNumeric(valorCents)})
+        on conflict (categoria_id, vigente_desde)
+        do update set valor_alvo = excluded.valor_alvo, criado_em = now()`;
+    },
+
+    async setExcecao(categoria_id, mesDia01, valorCents) {
+      await sql`
+        insert into metas_excecao (categoria_id, mes, valor_alvo)
+        values (${categoria_id}, ${mesDia01}, ${centsToNumeric(valorCents)})
+        on conflict (categoria_id, mes)
+        do update set valor_alvo = excluded.valor_alvo, criado_em = now()`;
+    },
+
+    async apagarBaseline(categoria_id, mesDia01) {
+      await sql`delete from metas where categoria_id = ${categoria_id} and vigente_desde = ${mesDia01}`;
+    },
+
+    async apagarExcecao(categoria_id, mesDia01) {
+      await sql`delete from metas_excecao where categoria_id = ${categoria_id} and mes = ${mesDia01}`;
+    },
+
     // ---- apoio à importação: consultas de reconciliação ----
     async transacoesNaJanela(de, ate) {
       const rows = await sql`

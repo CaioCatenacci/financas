@@ -42,7 +42,7 @@ CLAUDE.md, CONTEXTO.md       MODIFICAR — status do Inc 4 + decisões
 
 ## FASE A — Tela do mês
 
-### Task A1: `worker/metas.js` (módulo puro) + testes
+### Task 1: `worker/metas.js` (módulo puro) + testes
 
 **Files:**
 - Create: `worker/metas.js`
@@ -212,7 +212,7 @@ git commit -m "feat: metas.js — resolução de alvo, média de sugestão e sta
 
 ---
 
-### Task A2: Migração `0007_metas.sql` + `schema.sql`
+### Task 2: Migração `0007_metas.sql` + `schema.sql`
 
 **Files:**
 - Create: `migrations/0007_metas.sql`
@@ -261,7 +261,7 @@ git commit -m "feat: migração 0007 (metas + metas_excecao)"
 
 ---
 
-### Task A3: `db.js` — leituras e escritas de metas + testes
+### Task 3: `db.js` — leituras e escritas de metas + testes
 
 **Files:**
 - Modify: `worker/db.js` (adicionar métodos ao objeto retornado por `criarDb`)
@@ -403,14 +403,14 @@ git commit -m "feat: db — leituras/escritas de metas (baseline, exceção, rea
 
 ---
 
-### Task A4: Rotas `/api/metas` (mês, sugestão, PUT, DELETE) + testes
+### Task 4: Rotas `/api/metas` (mês, sugestão, PUT, DELETE) + testes
 
 **Files:**
 - Modify: `worker/index.js` (dentro de `handleApi`, e o import no topo)
 - Test: `worker/index.test.mjs`
 
 **Interfaces:**
-- Consumes: `alvoEfetivo`, `mediaSugestao`, `statusMeta`, `primeiroDiaDoMes`, `mesAnterior` (Task A1); `db.catalogo`, `db.metasBaselines`, `db.metasExcecoes`, `db.realizadoPorCategoriaMes`, `db.setBaseline`, `db.setExcecao`, `db.apagarBaseline`, `db.apagarExcecao` (Task A3).
+- Consumes: `alvoEfetivo`, `mediaSugestao`, `statusMeta`, `primeiroDiaDoMes`, `mesAnterior` (Task 1); `db.catalogo`, `db.metasBaselines`, `db.metasExcecoes`, `db.realizadoPorCategoriaMes`, `db.setBaseline`, `db.setExcecao`, `db.apagarBaseline`, `db.apagarExcecao` (Task 3).
 - Produces:
   - `GET /api/metas?mes=YYYY-MM` → `{ mes, linhas:[{categoria_id, categoria, alvo_cents, realizado_cents, diff_cents, origem, status}], total:{alvo_cents, realizado_cents, diff_cents} }`
   - `GET /api/metas/sugestao?mes=YYYY-MM` → `{ mes, linhas:[{categoria_id, sugestao_cents}] }`
@@ -624,14 +624,14 @@ git commit -m "feat: rotas /api/metas (mês, sugestão, PUT/DELETE de alvo)"
 
 ---
 
-### Task A5: UI — aba "Planejamento" (tela do mês)
+### Task 5: UI — aba "Planejamento" (tela do mês)
 
 **Files:**
 - Modify: `public/index.html` (botão de aba + `<section>`)
 - Modify: `public/app.js` (troca de aba + render + edição)
 
 **Interfaces:**
-- Consumes: `GET /api/metas?mes=`, `GET /api/metas/sugestao?mes=`, `PUT /api/metas`, `DELETE /api/metas` (Task A4); helpers `apiGet`/`apiPost`(via fetch PUT)/`apiDelete` já em `app.js` (linhas ~224–236).
+- Consumes: `GET /api/metas?mes=`, `GET /api/metas/sugestao?mes=`, `PUT /api/metas`, `DELETE /api/metas` (Task 4); helpers `apiGet`/`apiPost`(via fetch PUT)/`apiDelete` já em `app.js` (linhas ~224–236).
 - Produces: aba funcional; nenhuma nova função exportada obrigatória (o render é interno). Reusa `centavosBR` para exibir centavos.
 
 - [ ] **Step 1: HTML** — em `public/index.html`, adicionar o botão de aba após o de Ajustes (linha ~24):
@@ -757,7 +757,7 @@ git commit -m "feat: aba Planejamento — tela do mês (alvo vs realizado, edita
 
 ---
 
-### Task A6: Docs + checkpoint de infra (Fase A)
+### Task 6: Docs + checkpoint de infra (Fase A)
 
 **Files:**
 - Modify: `CLAUDE.md` (roadmap: Inc 4 → "implementado (Fase A)"; nota das tabelas `metas`/`metas_excecao`)
@@ -780,7 +780,7 @@ git commit -m "docs: Inc 4 Fase A — planejamento (roadmap + contexto)"
 
 ## FASE B — Grade categorias × meses
 
-### Task B1: Rota `GET /api/metas/grade` + testes
+### Task 7: Rota `GET /api/metas/grade` + testes
 
 **Files:**
 - Modify: `worker/index.js`
@@ -866,7 +866,7 @@ git commit -m "feat: rota /api/metas/grade (categorias × meses)"
 
 ---
 
-### Task B2: UI — grade secundária
+### Task 8: UI — grade secundária
 
 **Files:**
 - Modify: `public/index.html` (um contêiner da grade dentro de `#planejamento`)
@@ -926,7 +926,7 @@ git commit -m "feat: grade categorias × meses (edição grava baseline a partir
 
 ---
 
-### Task B3: Docs + checkpoint de infra (Fase B)
+### Task 9: Docs + checkpoint de infra (Fase B)
 
 - [ ] **Step 1:** Atualizar `CLAUDE.md` (Inc 4 completo: mês + grade) e `CONTEXTO.md` (nota da grade: edição = baseline "daqui pra frente").
 - [ ] **Step 2:** `npm test` verde; deploy; conferir grade ao vivo.
@@ -940,7 +940,7 @@ git commit -m "feat: grade categorias × meses (edição grava baseline a partir
 ## Self-Review (contra a spec)
 
 **Cobertura da spec:**
-- §3 modelo de dados → Task A2. §4 resolução pura → Task A1. §5 API (mês, grade, sugestão, PUT, DELETE) → A4 (+ B1 grade). §6 UI (mês + grade) → A5, B2. §7 faseamento → Fases A/B. §8 testes → testes em A1/A3/A4/B1 + verificação manual do front. §9 fora de escopo → respeitado (só despesa/macro, sem pessoa/receita/sub/Telegram/rollover).
+- §3 modelo de dados → Task 2. §4 resolução pura → Task 1. §5 API (mês, grade, sugestão, PUT, DELETE) → A4 (+ B1 grade). §6 UI (mês + grade) → A5, B2. §7 faseamento → Fases A/B. §8 testes → testes em A1/A3/A4/B1 + verificação manual do front. §9 fora de escopo → respeitado (só despesa/macro, sem pessoa/receita/sub/Telegram/rollover).
 - Semear por média (decisão da conversa) → `mediaSugestao` (A1) + `/api/metas/sugestao` (A4) + "Sugerir pra todas" (A5). "Sugerir pra todas" pré-preenche sem gravar (default aprovado).
 - Estouro (vermelho) / aviso 80% (amarelo) → `statusMeta` (A1), devolvido em `status` (A4), pintado no front (A5).
 

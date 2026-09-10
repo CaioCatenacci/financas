@@ -9,6 +9,40 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/shell.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  /* Inc 4: Planejamento — cores semânticas de status (aviso ≈ 80%+, estouro > alvo).
+     Vive aqui (e não em shell.css) porque esta task só pode tocar index.html/app.js. */
+  :root{ --aviso:#ad7a1a; }
+  .planhead{display:flex;align-items:center;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .planhead label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut)}
+  .planhead input[type="month"]{border:1px solid var(--line);background:var(--surface);color:var(--ink);
+    font:inherit;font-size:13px;border-radius:8px;padding:6px 8px}
+  .planAlvo{border:1px solid transparent;background:transparent;color:var(--ink);font:inherit;font-size:13.5px;
+    width:110px;padding:4px 6px;border-radius:6px;text-align:right}
+  .planAlvo:hover,.planAlvo:focus{border-color:var(--line);background:var(--ground);outline:none}
+  .planAlvo::placeholder{color:var(--dim)}
+  .planbar{display:inline-block;width:80px;height:6px;background:var(--sunk);border-radius:4px;
+    overflow:hidden;vertical-align:middle;margin-right:8px}
+  .planbar>i{display:block;height:100%;background:var(--accent)}
+  .status-normal{color:var(--ink)}
+  .status-aviso{color:var(--aviso)}
+  .status-aviso .planbar>i{background:var(--aviso)}
+  .status-estouro{color:var(--neg);font-weight:600}
+  .status-estouro .planbar>i{background:var(--neg)}
+  .selo-excecao{font-size:11px;padding:2px 7px;border-radius:999px;background:var(--accent-soft);
+    color:var(--accent);margin-left:6px;white-space:nowrap;font-weight:500}
+  /* Inc 4 Tarefa 8: grade categorias × meses — rola na horizontal sem estourar o body. */
+  #planGradeWrap{margin-top:18px}
+  #planGradeWrap summary{cursor:pointer;font-size:13px;color:var(--mut);margin-bottom:10px}
+  .planGradeScroll{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow)}
+  #planGrade{border-collapse:collapse;width:100%}
+  #planGrade th,#planGrade td{padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:13px}
+  #planGrade th:first-child,#planGrade td:first-child{position:sticky;left:0;background:var(--surface);text-align:left}
+  #planGrade .gAlvo{border:1px solid transparent;background:transparent;color:var(--ink);font:inherit;font-size:13.5px;
+    width:90px;padding:4px 6px;border-radius:6px;text-align:right}
+  #planGrade .gAlvo:hover,#planGrade .gAlvo:focus{border-color:var(--line);background:var(--ground);outline:none}
+  #planGrade small{display:block;color:var(--mut);font-size:11px;text-align:right}
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -22,6 +56,7 @@
       <button class="tab" data-view="lanc">Lançamentos</button>
       <button class="tab" data-view="importar">Importar</button>
       <button class="tab" data-view="ajustes">Ajustes</button>
+      <button class="tab" data-view="planejamento">Planejamento</button>
     </div>
     <button class="iconbtn" id="theme" title="Alternar tema">◐</button>
   </div>
@@ -127,6 +162,24 @@
   <section id="importar" class="hidden"></section>
 
   <section id="ajustes" class="hidden"></section>
+
+  <section id="planejamento" class="hidden">
+    <div class="planhead">
+      <label>Mês <input type="month" id="planMes"></label>
+      <button id="planSugerir" class="chip" type="button">Sugerir pra todas</button>
+    </div>
+    <div class="tblwrap">
+      <table id="planTabela">
+        <thead><tr><th>Categoria</th><th>Alvo</th><th>Realizado</th><th>Falta / Estourou</th></tr></thead>
+        <tbody></tbody>
+        <tfoot></tfoot>
+      </table>
+    </div>
+    <details id="planGradeWrap">
+      <summary>Planejar vários meses (grade)</summary>
+      <div class="planGradeScroll"><table id="planGrade"></table></div>
+    </details>
+  </section>
 </div>
 <div class="tip" id="tip"></div>
 <script type="module" src="/app.js"></script>
