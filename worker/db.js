@@ -276,28 +276,33 @@ export function criarDb(sql) {
 
     // ---- Inc 4: planejamento (metas) ----
     async metasBaselines() {
-      return await sql`
+      const rows = await sql`
         select categoria_id, to_char(vigente_desde,'YYYY-MM-01') as vigente_desde,
                (round(valor_alvo*100))::bigint as valor_cents
         from metas`;
+      // driver do Neon devolve ::bigint como string — converte na borda (mesmo padrão de
+      // transacoesNaJanela), senão os acumuladores += de index.js concatenam texto.
+      return rows.map(r => ({ ...r, valor_cents: Number(r.valor_cents) }));
     },
 
     async metasExcecoes() {
-      return await sql`
+      const rows = await sql`
         select categoria_id, to_char(mes,'YYYY-MM-01') as mes,
                (round(valor_alvo*100))::bigint as valor_cents
         from metas_excecao`;
+      return rows.map(r => ({ ...r, valor_cents: Number(r.valor_cents) }));
     },
 
     // realizado (despesa, no resumo) por categoria e mês na janela meio-aberta [de, ateExcl).
     async realizadoPorCategoriaMes(de, ateExcl) {
-      return await sql`
+      const rows = await sql`
         select t.categoria_id, to_char(t.data,'YYYY-MM') as mes,
                (round(sum(t.valor_final)*100))::bigint as realizado_cents
         from transacoes t
         where t.natureza = 'despesa' and t.computa_resumo
           and t.data >= ${de} and t.data < ${ateExcl}
         group by t.categoria_id, to_char(t.data,'YYYY-MM')`;
+      return rows.map(r => ({ ...r, realizado_cents: Number(r.realizado_cents) }));
     },
 
     async setBaseline(categoria_id, mesDia01, valorCents) {

@@ -222,7 +222,7 @@ export async function handleApi(request, env, url, dbOpt = null) {
   }
 
   // ---- Inc 4: planejamento (metas) ----
-  const mesValido = (m) => /^\d{4}-\d{2}$/.test(m || "");
+  const mesValido = (m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m || "");
 
   if (url.pathname === "/api/metas" && request.method === "GET") {
     const mes = url.searchParams.get("mes");

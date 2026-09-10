@@ -468,6 +468,31 @@ test("realizadoPorCategoriaMes: só despesa+computa_resumo, janela meio-aberta",
   assert.deepEqual(c.values, ["2026-06-01", "2026-09-01"]);
 });
 
+test("metasBaselines converte valor_cents (bigint) de string p/ number — regressão Neon", async () => {
+  // o driver do Neon devolve coluna ::bigint como STRING; sem Number(), o += de index.js concatena
+  const sql = fakeSql([{ categoria_id: "c1", vigente_desde: "2026-01-01", valor_cents: "100000" }]);
+  const db = criarDb(sql);
+  const r = await db.metasBaselines();
+  assert.equal(typeof r[0].valor_cents, "number");
+  assert.equal(r[0].valor_cents, 100000);
+});
+
+test("metasExcecoes converte valor_cents (bigint) de string p/ number — regressão Neon", async () => {
+  const sql = fakeSql([{ categoria_id: "c1", mes: "2026-08-01", valor_cents: "50000" }]);
+  const db = criarDb(sql);
+  const r = await db.metasExcecoes();
+  assert.equal(typeof r[0].valor_cents, "number");
+  assert.equal(r[0].valor_cents, 50000);
+});
+
+test("realizadoPorCategoriaMes converte realizado_cents (bigint) de string p/ number — regressão Neon", async () => {
+  const sql = fakeSql([{ categoria_id: "c1", mes: "2026-06", realizado_cents: "75000" }]);
+  const db = criarDb(sql);
+  const r = await db.realizadoPorCategoriaMes("2026-06-01", "2026-09-01");
+  assert.equal(typeof r[0].realizado_cents, "number");
+  assert.equal(r[0].realizado_cents, 75000);
+});
+
 test("setBaseline faz upsert convertendo centavos → numeric", async () => {
   const sql = fakeSql([]);
   const db = criarDb(sql);
