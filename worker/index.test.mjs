@@ -564,3 +564,24 @@ test("DELETE /api/metas escopo excecao chama apagarExcecao", async () => {
   await handleApi(req, envTok, new URL(req.url), db);
   assert.deepEqual(db.estado.apagados, [{ tipo: "excecao", cat: "c1", mes: "2026-08-01" }]);
 });
+
+test("GET /api/metas/grade monta meses e células com alvo e realizado", async () => {
+  const db = dbMetasFake({
+    baselines: [{ categoria_id: "c1", vigente_desde: "2026-01-01", valor_cents: 100000 }],
+    realizado: [{ categoria_id: "c1", mes: "2026-08", realizado_cents: 90000 }],
+  });
+  const req = new Request("http://localhost/api/metas/grade?de=2026-08&ate=2026-10", { headers: cook });
+  const data = await (await handleApi(req, envTok, new URL(req.url), db)).json();
+  assert.deepEqual(data.meses, ["2026-08", "2026-09", "2026-10"]);
+  const c1 = data.categorias.find(c => c.categoria_id === "c1");
+  assert.equal(c1.celulas.length, 3);
+  assert.equal(c1.celulas[0].alvo_cents, 100000);       // baseline propaga
+  assert.equal(c1.celulas[0].realizado_cents, 90000);   // ago (passado) tem realizado
+});
+
+test("GET /api/metas/grade: default de/ate = 12 meses (−3..+8) do mês corrente", async () => {
+  const db = dbMetasFake({ baselines: [], realizado: [] });
+  const req = new Request("http://localhost/api/metas/grade", { headers: cook });
+  const data = await (await handleApi(req, envTok, new URL(req.url), db)).json();
+  assert.equal(data.meses.length, 12);
+});

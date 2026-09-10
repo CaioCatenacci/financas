@@ -288,6 +288,34 @@ export async function handleApi(request, env, url, dbOpt = null) {
     return j({ ok: true });
   }
 
+  if (url.pathname === "/api/metas/grade" && request.method === "GET") {
+    const p = url.searchParams;
+    const hoje = new Date().toISOString().slice(0, 7);
+    let de = p.get("de"), ate = p.get("ate");
+    if (!mesValido(de)) de = mesAnterior(hoje, 3);    // 3 meses atrás
+    if (!mesValido(ate)) ate = mesAnterior(hoje, -8); // 8 à frente
+    const meses = [];
+    for (let m = de; ; m = mesAnterior(m, -1)) { meses.push(m); if (m === ate || meses.length >= 60) break; }
+    const deDia = primeiroDiaDoMes(de), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+    const [catalogo, baselines, excecoes, realizado] = await Promise.all([
+      db.catalogo(), db.metasBaselines(), db.metasExcecoes(), db.realizadoPorCategoriaMes(deDia, ateExcl),
+    ]);
+    const realMap = {};
+    for (const r of realizado) realMap[`${r.categoria_id}|${r.mes}`] = r.realizado_cents;
+    const categorias = catalogo.categorias
+      .filter((c) => c.natureza === "despesa")
+      .map((c) => ({
+        categoria_id: c.id, categoria: c.nome,
+        celulas: meses.map((m) => {
+          const { valorCents, origem } = alvoEfetivo(baselines, excecoes, c.id, primeiroDiaDoMes(m));
+          const passadoOuCorrente = m <= hoje;
+          return { mes: m, alvo_cents: valorCents, origem,
+                   realizado_cents: passadoOuCorrente ? (realMap[`${c.id}|${m}`] || 0) : null };
+        }),
+      }));
+    return j({ meses, categorias });
+  }
+
   // ---- importar extrato/fatura (Incremento 3) ----
   if (url.pathname === "/api/importar/preview" && request.method === "POST") {
    try {
