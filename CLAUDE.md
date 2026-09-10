@@ -186,8 +186,30 @@ O CI (`.github/workflows/ci.yml`) roda os dois.
 | 1.5 | Lançamento manual | texto (`"15,50 padaria 29/08"`) via Claude, validado | *fast-follow* |
 | 2 | Classificador que aprende | app grava correções; sistema passa a acertar | implementado |
 | 3 | Extrato + fatura | PDF → parsing → transações; conciliação | Incremento 3 |
-| 4 | Planejamento | metas/realizado vs alvo | Incremento 4 |
+| 4 | Planejamento | metas/realizado vs alvo | Fase A (mês) implementada |
 | 5 | Camada PJ | receita empresa → cascata → despesas casa | Incremento 5 |
 | 6 | Plus | investimentos; estrutura fina Dropbox | Incremento 6 |
 
 A v1 (Incremento 1) é **imagem-apenas**. Texto e PDF voltam depois.
+
+### Colunas novas (Incremento 4, Fase A)
+
+Alvo de gasto por categoria, mês a mês, comparado contra o realizado. Modelo temporal:
+**baseline com vigência** (`metas`, "a partir deste mês, o alvo é V", propaga pra frente até
+um baseline mais novo) + **exceção pontual** (`metas_excecao`, "só este mês", não propaga).
+Só despesa, só por categoria (`macro`) — sem subcategoria, sem pessoa/esfera.
+
+| Tabela/coluna | Descrição |
+|---|---|
+| `metas(categoria_id, vigente_desde, valor_alvo)` | baseline: alvo vale a partir de `vigente_desde` até o próximo baseline |
+| `metas_excecao(categoria_id, mes, valor_alvo)` | exceção: alvo só naquele `mes`, não propaga |
+
+Vocabulário: `origem ∈ {excecao, baseline, sem-alvo}` — de onde veio o alvo resolvido pra um
+mês (leitura, `GET /api/metas`); `escopo ∈ {baseline, excecao}` — pra onde grava uma edição
+(escrita, `PUT /api/metas`). Resolução (`exceção > baseline > sem-alvo`) roda em JS puro
+(`worker/metas.js`), no mesmo espírito de `money.js`/`extrair.js`.
+
+Rotas: `GET /api/metas?mes=YYYY-MM` (alvo/realizado/diff por categoria + total),
+`GET /api/metas/sugestao?mes=YYYY-MM` (média do realizado dos 3 meses anteriores, pra
+prefill), `PUT /api/metas` e `DELETE /api/metas` (gravam/removem por `escopo`). Fase B
+(grade categorias × meses) fica pra depois, aditiva.

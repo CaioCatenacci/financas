@@ -236,13 +236,57 @@ nome da escola. Renome/merge agora é mudar uma linha — as transações seguem
 
 ---
 
+## 13. Incremento 4: planejamento — baseline+vigência+exceção
+
+O Resumo já soma o **realizado** por categoria e mês. Faltava o **plano**: um alvo por
+categoria, mês a mês, pra comparar contra o realizado e ver onde estourou. O requisito que
+molda tudo é temporal: o Caio precisa poder mudar o alvo **só num mês pontual** (viagem,
+imprevisto) **ou pra toda a sequência futura** (renegociou o aluguel, o teto novo vale daqui
+em diante) — e as duas coisas são fisicamente diferentes.
+
+**Por que baseline com vigência + exceção (não uma linha por mês nem um valor único):**
+uma linha por mês (categoria × mês materializado) precisaria de horizonte (até quando
+gerar linhas futuras?) e perderia o "daqui em diante" como conceito — mudar 12 meses seria
+12 escritas. Um valor único por categoria (sem tempo) não registra que o teto mudou no
+meio do caminho — perde o histórico do plano. **Baseline com vigência** ("a partir deste
+mês, o alvo é V", propaga pra frente até o próximo baseline) resolve os dois: histórico
+preservado (mês passado fica congelado no baseline que valia então, sem reescrever nada) e
+"daqui em diante" é uma única escrita. A **exceção por mês** cobre o caso pontual sem
+contaminar o baseline — sobrepõe um mês e desaparece, o baseline segue intacto por baixo.
+
+**Por que resolver em JS puro (`worker/metas.js`), não em SQL:** a pergunta "qual alvo vale
+neste mês, esta categoria" tem uma regra de precedência (`exceção > baseline mais recente
+≤ mês > sem-alvo`) que é simples de errar em SQL (window function + coalesce aninhado) e
+difícil de auditar quando o número parece errado. Com ~15 categorias por mês, performance
+não é problema — então o SQL só busca os dados crus (baselines, exceções, realizado) e a
+resolução roda em função pura, testável isoladamente, no mesmo espírito de `money.js` e
+`extrair.js`: sem banco, sem rede, tudo por parâmetro.
+
+**Por que só despesa e só categoria (macro), sem subcategoria/pessoa/esfera:** manter a
+superfície de planejamento enxuta. Meta é teto de gasto — receita planejada é pergunta
+diferente (fica de fora). Alvo por subcategoria ou recortado por pessoa multiplicaria as
+células (~15 categorias × 12 meses já é a grade da Fase B) sem que o Caio tenha pedido esse
+nível de granularidade; dá pra abrir depois se fizer falta.
+
+**Por que semear pela média dos 3 meses anteriores:** editar ~15 alvos do zero todo mês é
+atrito que mata o hábito. A sugestão pré-preenche com um número plausível (média do
+realizado recente daquela categoria) — o Caio só ajusta o que quer que seja diferente do
+padrão, e confirma antes de qualquer escrita (nada grava silenciosamente).
+
+**Faseamento A (mês) → B (grade):** a mesma lógica de "nada entra sem E2E" do resto do
+projeto. A Fase A entrega a fatia completa e deployável sozinha — definir alvo, ver
+realizado, ajustar pontual ou daí em diante, tudo numa tela de mês. A grade (categorias ×
+meses, pra planejar a sequência de uma vez) é aditiva por cima, sem tocar no que a Fase A
+já resolveu.
+
+---
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
 |---|---|---|
 | Extrato + fatura | PDF parsing é complexo; v1 é imagem. | Incremento 3 |
 | Conciliação | Depende de Incremento 3 (extrato/fatura). | Incremento 3 |
-| Metas / planejamento | Dados não existem ainda. | Incremento 4 |
 | PJ em cascata | Estrutura simples pro Caio pessoa física primeiro. | Incremento 5 |
 | Investimentos | Escopo separado; dados ainda a coletar. | Incremento 6 |
 
