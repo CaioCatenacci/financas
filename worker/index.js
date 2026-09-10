@@ -172,6 +172,11 @@ export async function handleApi(request, env, url, dbOpt = null) {
     return j(await db.listarTransacoes({ de: p.get("de"), ate: p.get("ate"), categoria_id: p.get("categoria_id"), natureza: p.get("natureza"), esfera: p.get("esfera") }));
   }
   if (url.pathname === "/api/catalogo") return j(await db.catalogo());
+  // edição em massa (POST, não colide com PATCH/DELETE /api/transacoes/:id)
+  if (url.pathname === "/api/transacoes/lote" && request.method === "POST") {
+    const b = await body();
+    return j(await db.atualizarTransacoesLote(b.ids || [], b.mudancas || {}));
+  }
   if (url.pathname.startsWith("/api/transacoes/") && request.method === "PATCH") {
     await db.atualizarTransacao(id(), await body());
     return j({ ok: true });

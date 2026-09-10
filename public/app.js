@@ -102,6 +102,25 @@ export function filtrarTransacoes(rows, filtro = {}) {
   });
 }
 
+// ---------- edição em massa (Lançamentos) ----------
+// monta o objeto `mudancas` a partir dos valores da barra de ação em massa. Só inclui um campo
+// quando ele NÃO está em "— não mexer —" ("__nao__"). Sentinelas: categoria "__nao__" = não mexe;
+// pessoa "__nao__" = não mexe, "" = limpar (null); computa "fora"/"incluir"/"__nao__".
+// Ao setar categoria, seta também a subcategoria (sub "" → null, igual à edição por linha).
+export function montarMudancas(bar = {}) {
+  const m = {};
+  if (bar.categoria && bar.categoria !== "__nao__") {
+    m.categoria_id = bar.categoria;
+    m.subcategoria_id = bar.subcategoria || null;
+  }
+  if (bar.pessoa !== "__nao__" && bar.pessoa !== undefined) {
+    m.pessoa_id = bar.pessoa || null; // "" = limpar
+  }
+  if (bar.computa === "fora") m.computa_resumo = false;
+  else if (bar.computa === "incluir") m.computa_resumo = true;
+  return m;
+}
+
 // ---------- importação (Task 9: aba Importar) ----------
 // resolve nome→id igual worker/categorias.js::resolverCategoria (reimplementado aqui porque o
 // browser não importa worker/*.js): categoria por nome exato, fallback "Outros"; sub só se
@@ -197,6 +216,7 @@ if (typeof document !== "undefined") {
     periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
+    selecao: new Set(), // ids selecionados p/ edição em massa (persiste ao filtrar/re-renderizar)
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
   };
 
@@ -422,11 +442,13 @@ if (typeof document !== "undefined") {
     const contador = $("#fcontador");
     if (contador) contador.textContent = `${linhas.length} de ${estado.transacoes.length}`;
     if (!linhas.length) {
-      $("#rows").innerHTML = `<tr><td colspan="8" class="vazio">nenhum lançamento com esses filtros</td></tr>`;
+      $("#rows").innerHTML = `<tr><td colspan="9" class="vazio">nenhum lançamento com esses filtros</td></tr>`;
+      atualizarMassaBar();
       return;
     }
     $("#rows").innerHTML = linhas.map(t => {
       const rec = t.natureza === "receita";
+      const sel = estado.selecao.has(t.id) ? "checked" : "";
       const catOpts = cats.map(c => `<option value="${esc(c.id)}" ${c.id === t.categoria_id ? "selected" : ""}>${esc(c.nome)}</option>`).join("");
       const subOpts = `<option value="">—</option>` +
         subsDaCat(estado.catalogo, t.categoria_id).map(s => `<option value="${esc(s.id)}" ${s.id === t.subcategoria_id ? "selected" : ""}>${esc(s.nome)}</option>`).join("");
@@ -436,6 +458,7 @@ if (typeof document !== "undefined") {
       // só aparece quando computa_resumo é false; o toggle (botão) inverte o valor nas duas direções.
       const selo = !t.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : "";
       return `<tr data-id="${t.id}">
+        <td class="selcol"><input type="checkbox" class="selrow" ${sel}></td>
         <td class="dt">${fmtData(t.data)}</td>
         <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—">${selo}</td>
         <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.categoria)})"></i><select class="edcat">${catOpts}</select></span></td>
@@ -449,6 +472,40 @@ if (typeof document !== "undefined") {
         </td>
       </tr>`;
     }).join("");
+    atualizarMassaBar();
+  }
+
+  // ids atualmente visíveis (respeitando o filtro) — base do "selecionar todos".
+  function idsFiltrados() {
+    return filtrarTransacoes(estado.transacoes, estado.filtro).map(t => t.id);
+  }
+
+  // atualiza a barra de massa: contagem, visibilidade e o estado do "selecionar todos".
+  function atualizarMassaBar() {
+    const n = estado.selecao.size;
+    const bar = $("#massabar");
+    if (bar) bar.classList.toggle("hidden", n === 0);
+    const cnt = $("#massacount");
+    if (cnt) cnt.textContent = `${n} selecionado${n === 1 ? "" : "s"}`;
+    const selall = $("#selall");
+    if (selall) {
+      const vis = idsFiltrados();
+      const todos = vis.length > 0 && vis.every(id => estado.selecao.has(id));
+      selall.checked = todos;
+      selall.indeterminate = n > 0 && !todos;
+    }
+  }
+
+  // popula os selects da barra de massa a partir do catálogo/pessoas (chamado no carregar).
+  function popularMassaBar() {
+    const cats = estado.catalogo.categorias;
+    const mcat = $("#mcat"); if (mcat) mcat.innerHTML =
+      `<option value="__nao__">Categoria: não mexer</option>` +
+      cats.map(c => `<option value="${esc(c.id)}">${esc(c.nome)}</option>`).join("");
+    const msub = $("#msub"); if (msub) msub.innerHTML = `<option value="">Subcategoria: —</option>`;
+    const mp = $("#mpessoa"); if (mp) mp.innerHTML =
+      `<option value="__nao__">Pessoa: não mexer</option><option value="">— (limpar) —</option>` +
+      estado.pessoas.map(p => `<option value="${esc(p.id)}">${esc(p.nome)}</option>`).join("");
   }
 
   // ----- Ajustes (gestão de categorias/subcategorias/pessoas) -----
@@ -723,11 +780,14 @@ if (typeof document !== "undefined") {
         apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
       ]);
       estado.resumo = resumo; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
+      // remove da seleção ids que sumiram (troca de período/recarga) — evita "selecionados" fantasmas
+      const presentes = new Set(transacoes.map(t => t.id));
+      for (const id of estado.selecao) if (!presentes.has(id)) estado.selecao.delete(id);
       // cores por nome de categoria: catálogo (pra sempre ter cor definida no select da Ajustes/filtro)
       // + nomes vindos das transações (cobre categoria já desativada que ainda aparece no histórico)
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
-      popularFiltros();
+      popularFiltros(); popularMassaBar();
       drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
@@ -772,6 +832,12 @@ if (typeof document !== "undefined") {
   // tabela: editar/apagar
   $("#rows").addEventListener("change", async e => {
     const tr = e.target.closest("tr"); if (!tr) return; const id = tr.dataset.id;
+    // seleção p/ edição em massa (checkbox da linha)
+    if (e.target.classList.contains("selrow")) {
+      if (e.target.checked) estado.selecao.add(id); else estado.selecao.delete(id);
+      atualizarMassaBar();
+      return;
+    }
     try {
       if (e.target.classList.contains("edcat")) {
         const categoria_id = e.target.value;
@@ -803,6 +869,41 @@ if (typeof document !== "undefined") {
       try { await apiPatch(`/api/transacoes/${tr.dataset.id}`, { computa_resumo: !t.computa_resumo }); carregar(); }
       catch (err) { alert("Falha ao atualizar: " + err.message); }
     }
+  });
+
+  // ----- edição em massa -----
+  // "selecionar todos": marca/desmarca todos os ids do filtro atual.
+  $("#selall").addEventListener("change", e => {
+    const vis = idsFiltrados();
+    if (e.target.checked) vis.forEach(id => estado.selecao.add(id));
+    else vis.forEach(id => estado.selecao.delete(id));
+    drawRows(); // re-renderiza os checkboxes das linhas
+  });
+  // ao escolher a categoria na barra, repovoa a subcategoria com as subs daquela categoria.
+  $("#mcat").addEventListener("change", e => {
+    const catId = e.target.value;
+    const msub = $("#msub");
+    if (catId === "__nao__") { msub.innerHTML = `<option value="">Subcategoria: —</option>`; return; }
+    msub.innerHTML = `<option value="">— (sem sub) —</option>` +
+      subsDaCat(estado.catalogo, catId).map(s => `<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join("");
+  });
+  $("#mlimpar").addEventListener("click", () => { estado.selecao.clear(); drawRows(); });
+  $("#maplicar").addEventListener("click", async () => {
+    const ids = [...estado.selecao];
+    if (!ids.length) return;
+    const mudancas = montarMudancas({
+      categoria: $("#mcat").value, subcategoria: $("#msub").value,
+      pessoa: $("#mpessoa").value, computa: $("#mcomputa").value,
+    });
+    if (!Object.keys(mudancas).length) { alert("Escolha ao menos um campo pra alterar (categoria, pessoa ou fora do resumo)."); return; }
+    if (!confirm(`Alterar ${ids.length} lançamento${ids.length === 1 ? "" : "s"}?`)) return;
+    try {
+      const r = await apiPost("/api/transacoes/lote", { ids, mudancas });
+      estado.selecao.clear();
+      await carregar();
+      const regras = r.regras ? ` · ${r.regras} regra${r.regras === 1 ? "" : "s"} aprendida${r.regras === 1 ? "" : "s"}` : "";
+      alert(`✅ ${r.atualizados} lançamento${r.atualizados === 1 ? "" : "s"} alterado${r.atualizados === 1 ? "" : "s"}${regras}.`);
+    } catch (err) { alert("Falha na edição em massa: " + err.message); }
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }

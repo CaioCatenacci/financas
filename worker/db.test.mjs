@@ -404,3 +404,45 @@ test("aplicarImportacao com decisão vazia não abre transação", async () => {
   assert.equal(sql.transacao, undefined); // não chamou sql.transaction
   assert.deepEqual(r, { gravados: 0, conciliados: 0, naoGasto: 0 });
 });
+
+test("atualizarTransacoesLote: UPDATE único com guard por campo (any(ids)) + aprende em lote", async () => {
+  // SELECT das contrapartes devolve 2 linhas, mas MESMA contraparte → 1 regra (dedupe)
+  const sql = fakeSql([
+    { contraparte_nome: "PADARIA REAL", contraparte_chave: null },
+    { contraparte_nome: "PADARIA REAL", contraparte_chave: null },
+  ]);
+  const db = criarDb(sql);
+  const r = await db.atualizarTransacoesLote(["id1", "id2"], { categoria_id: "cCasa", subcategoria_id: "sMerc" });
+  assert.match(sql.chamadas[0].text, /update transacoes set/i);
+  assert.match(sql.chamadas[0].text, /id = any\(/i);
+  assert.ok(sql.chamadas[0].values.includes("cCasa"));
+  assert.ok(sql.chamadas[0].values.some(v => Array.isArray(v) && v.includes("id1")), "ids vão como array");
+  assert.match(sql.chamadas[1].text, /select contraparte_nome, contraparte_chave/i); // leitura p/ aprender
+  assert.equal(sql.transacao.length, 1);   // upserts numa transação; dedupe → 1
+  assert.deepEqual(r, { atualizados: 2, regras: 1 });
+});
+
+test("atualizarTransacoesLote: só pessoa → sem aprendizado (não lê contrapartes nem abre transação)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const r = await db.atualizarTransacoesLote(["id1"], { pessoa_id: "p1" });
+  assert.equal(sql.chamadas.length, 1);    // só o UPDATE
+  assert.equal(sql.transacao, undefined);
+  assert.deepEqual(r, { atualizados: 1, regras: 0 });
+});
+
+test("atualizarTransacoesLote: fora do resumo sem mexer em categoria/pessoa (sem aprendizado)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.atualizarTransacoesLote(["id1"], { computa_resumo: false });
+  assert.ok(sql.chamadas[0].values.includes(false));
+  assert.equal(sql.chamadas.length, 1);
+});
+
+test("atualizarTransacoesLote: ids vazios não faz nada", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const r = await db.atualizarTransacoesLote([], { categoria_id: "cX" });
+  assert.equal(sql.chamadas.length, 0);
+  assert.deepEqual(r, { atualizados: 0, regras: 0 });
+});

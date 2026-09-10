@@ -103,6 +103,15 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--disp);
 .filtros select:hover,.filtros input[type="text"]:hover{border-color:var(--dim)}
 .fcontador{font-size:12px;color:var(--mut);font-family:var(--mono);white-space:nowrap;margin-left:auto}
 
+/* barra de edição em massa */
+.massabar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;
+  border:1px solid var(--accent);border-radius:12px;background:var(--accent-soft)}
+.massabar select{border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:8px;padding:6px 8px;cursor:pointer}
+.massacount{font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap}
+.massabar #maplicar{margin-left:auto}
+.selcol{width:34px;text-align:center}
+.selcol input{cursor:pointer}
+
 /* tabela */
 .tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow)}
 table{border-collapse:collapse;width:100%;font-size:13.5px;min-width:820px}

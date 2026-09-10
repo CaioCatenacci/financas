@@ -230,6 +230,7 @@ function dbApiFake() {
       { pessoa: "Alice", natureza: "despesa", total: 300 },
       { pessoa: "Bob", natureza: "receita", total: 1000 },
     ],
+    atualizarTransacoesLote: async (ids, mudancas) => { dbApiFake._lote = { ids, mudancas }; return { atualizados: ids.length, regras: 0 }; },
   };
 }
 
@@ -425,6 +426,18 @@ test("POST /api/importar/preview com texto vazio → 400 (PDF ilegível)", async
   assert.equal(response.status, 400);
   const data = await response.json();
   assert.match(data.erro, /extrair texto|ilegível|vazio/i);
+});
+
+test("POST /api/transacoes/lote chama atualizarTransacoesLote com ids e mudancas", async () => {
+  const db = dbApiFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/transacoes/lote", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ ids: ["a", "b", "c"], mudancas: { categoria_id: "c1", subcategoria_id: "s1" } }),
+  });
+  const data = await (await handleApi(request, env, new URL(request.url), db)).json();
+  assert.deepEqual(dbApiFake._lote, { ids: ["a", "b", "c"], mudancas: { categoria_id: "c1", subcategoria_id: "s1" } });
+  assert.equal(data.atualizados, 3);
 });
 
 test("/api/resumo inclui porPessoa", async () => {

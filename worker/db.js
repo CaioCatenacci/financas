@@ -107,6 +107,52 @@ export function criarDb(sql) {
       await sql`delete from transacoes where id = ${id}`;
     },
 
+    // Edição em massa: aplica `mudancas` a todos os `ids` num ÚNICO update (guard por campo:
+    // só mexe no que veio em `mudancas`; `id = any(ids)` → 1 subrequest, não estoura o limite).
+    // Se a categoria mudou e `aprender`, aprende contraparte→categoria de cada linha em LOTE
+    // (1 leitura + 1 sql.transaction de upserts) — mesma regra da edição por linha.
+    // `mudancas`: { categoria_id?, subcategoria_id?, pessoa_id?, computa_resumo? } — chave ausente
+    // = não mexe naquele campo; categoria_id presente também seta subcategoria_id (null se sem sub).
+    async atualizarTransacoesLote(ids, mudancas = {}, { aprender = true } = {}) {
+      if (!ids || !ids.length) return { atualizados: 0, regras: 0 };
+      const setCat = mudancas.categoria_id !== undefined;
+      const setPessoa = mudancas.pessoa_id !== undefined;
+      const setComputa = mudancas.computa_resumo !== undefined;
+      const catId = mudancas.categoria_id || null;
+      const subId = mudancas.subcategoria_id || null;
+      const pessoaId = mudancas.pessoa_id || null;
+      const computa = !!mudancas.computa_resumo;
+
+      await sql`
+        update transacoes set
+          categoria_id     = case when ${setCat}::boolean     then ${catId}::uuid    else categoria_id end,
+          subcategoria_id  = case when ${setCat}::boolean     then ${subId}::uuid    else subcategoria_id end,
+          pessoa_id        = case when ${setPessoa}::boolean  then ${pessoaId}::uuid else pessoa_id end,
+          computa_resumo   = case when ${setComputa}::boolean then ${computa}::boolean else computa_resumo end,
+          origem_categoria = case when ${setCat}::boolean     then 'manual'          else origem_categoria end
+        where id = any(${ids}::uuid[])`;
+
+      let regras = 0;
+      // aprende só quando a categoria mudou (correção de categoria vira regra) — em lote.
+      if (aprender && setCat) {
+        const rows = await sql`select contraparte_nome, contraparte_chave from transacoes where id = any(${ids}::uuid[])`;
+        const porChave = new Map();
+        for (const r of rows) {
+          const d = derivarChave({ contraparte_nome: r.contraparte_nome, contraparte_chave: r.contraparte_chave });
+          if (d) porChave.set(`${d.tipo}|${d.chave}`, d); // dedupe: uma regra por contraparte
+        }
+        const upserts = [...porChave.values()].map(d => sql`
+          insert into associacoes (chave, tipo_chave, categoria_id, subcategoria_id, n, atualizado_em)
+          values (${d.chave}, ${d.tipo}, ${catId}, ${subId}, 1, now())
+          on conflict (chave, tipo_chave) do update
+            set categoria_id = excluded.categoria_id, subcategoria_id = excluded.subcategoria_id,
+                n = associacoes.n + 1, atualizado_em = now()`);
+        if (upserts.length) await sql.transaction(upserts);
+        regras = upserts.length;
+      }
+      return { atualizados: ids.length, regras };
+    },
+
     async buscarAssociacao(chave, tipo) {
       const rows = await sql`select * from associacoes where chave = ${chave} and tipo_chave = ${tipo} limit 1`;
       return rows[0] ?? null;

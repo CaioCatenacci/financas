@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsDaCat,
-  agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto,
+  agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
 } from "./app.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
@@ -402,4 +402,38 @@ test("reconstruirTexto ignora itens com string vazia/só espaço (comuns no pdf.
   ];
   const texto = reconstruirTexto(itens, "layout");
   assert.match(texto, /^29\/05\s+LOJA\s+17,00$/);
+});
+
+// ---------- montarMudancas (edição em massa) ----------
+test("montarMudancas: '— não mexer —' em tudo → objeto vazio (nada muda)", () => {
+  assert.deepEqual(montarMudancas({ categoria: "__nao__", subcategoria: "", pessoa: "__nao__", computa: "__nao__" }), {});
+});
+
+test("montarMudancas: categoria seta categoria_id + subcategoria_id", () => {
+  assert.deepEqual(
+    montarMudancas({ categoria: "c1", subcategoria: "s1", pessoa: "__nao__", computa: "__nao__" }),
+    { categoria_id: "c1", subcategoria_id: "s1" });
+});
+
+test("montarMudancas: categoria sem sub → subcategoria_id null", () => {
+  assert.deepEqual(
+    montarMudancas({ categoria: "c1", subcategoria: "", pessoa: "__nao__", computa: "__nao__" }),
+    { categoria_id: "c1", subcategoria_id: null });
+});
+
+test("montarMudancas: pessoa vazia = limpar (null); id = setar; '__nao__' = não mexe", () => {
+  assert.deepEqual(montarMudancas({ categoria: "__nao__", pessoa: "", computa: "__nao__" }), { pessoa_id: null });
+  assert.deepEqual(montarMudancas({ categoria: "__nao__", pessoa: "p1", computa: "__nao__" }), { pessoa_id: "p1" });
+  assert.deepEqual(montarMudancas({ categoria: "__nao__", pessoa: "__nao__", computa: "__nao__" }), {});
+});
+
+test("montarMudancas: fora do resumo mapeia p/ computa_resumo true/false", () => {
+  assert.deepEqual(montarMudancas({ categoria: "__nao__", pessoa: "__nao__", computa: "fora" }), { computa_resumo: false });
+  assert.deepEqual(montarMudancas({ categoria: "__nao__", pessoa: "__nao__", computa: "incluir" }), { computa_resumo: true });
+});
+
+test("montarMudancas: combina categoria + pessoa + fora do resumo", () => {
+  assert.deepEqual(
+    montarMudancas({ categoria: "c1", subcategoria: "s1", pessoa: "p1", computa: "fora" }),
+    { categoria_id: "c1", subcategoria_id: "s1", pessoa_id: "p1", computa_resumo: false });
 });

@@ -99,9 +99,23 @@
       <button id="flimpar" class="chip" type="button">Limpar</button>
       <span class="fcontador" id="fcontador"></span>
     </div>
+    <div class="massabar hidden" id="massabar">
+      <span class="massacount" id="massacount"></span>
+      <select id="mcat" aria-label="Categoria em massa"></select>
+      <select id="msub" aria-label="Subcategoria em massa"></select>
+      <select id="mpessoa" aria-label="Pessoa em massa"></select>
+      <select id="mcomputa" aria-label="Fora do resumo em massa">
+        <option value="__nao__">Resumo: não mexer</option>
+        <option value="fora">Marcar fora do resumo</option>
+        <option value="incluir">Incluir no resumo</option>
+      </select>
+      <button id="maplicar" class="chip" type="button">Aplicar</button>
+      <button id="mlimpar" class="chip" type="button">Limpar seleção</button>
+    </div>
     <div class="tblwrap">
       <table>
         <thead><tr>
+          <th class="selcol"><input type="checkbox" id="selall" aria-label="Selecionar todos"></th>
           <th>Data</th><th>Descrição</th><th>Categoria</th><th>Subcategoria</th><th>Pessoa</th>
           <th style="text-align:right">Valor</th><th style="text-align:right">Reemb.</th><th></th>
         </tr></thead>
