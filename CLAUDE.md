@@ -186,13 +186,13 @@ O CI (`.github/workflows/ci.yml`) roda os dois.
 | 1.5 | Lançamento manual | texto (`"15,50 padaria 29/08"`) via Claude, validado | *fast-follow* |
 | 2 | Classificador que aprende | app grava correções; sistema passa a acertar | implementado |
 | 3 | Extrato + fatura | PDF → parsing → transações; conciliação | Incremento 3 |
-| 4 | Planejamento | metas/realizado vs alvo | Fase A (mês) implementada |
+| 4 | Planejamento | metas/realizado vs alvo | implementado (mês + grade) |
 | 5 | Camada PJ | receita empresa → cascata → despesas casa | Incremento 5 |
 | 6 | Plus | investimentos; estrutura fina Dropbox | Incremento 6 |
 
 A v1 (Incremento 1) é **imagem-apenas**. Texto e PDF voltam depois.
 
-### Colunas novas (Incremento 4, Fase A)
+### Colunas novas (Incremento 4)
 
 Alvo de gasto por categoria, mês a mês, comparado contra o realizado. Modelo temporal:
 **baseline com vigência** (`metas`, "a partir deste mês, o alvo é V", propaga pra frente até
@@ -211,5 +211,5 @@ mês (leitura, `GET /api/metas`); `escopo ∈ {baseline, excecao}` — pra onde 
 
 Rotas: `GET /api/metas?mes=YYYY-MM` (alvo/realizado/diff por categoria + total),
 `GET /api/metas/sugestao?mes=YYYY-MM` (média do realizado dos 3 meses anteriores, pra
-prefill), `PUT /api/metas` e `DELETE /api/metas` (gravam/removem por `escopo`). Fase B
-(grade categorias × meses) fica pra depois, aditiva.
+prefill), `PUT /api/metas` e `DELETE /api/metas` (gravam/removem por `escopo`),
+`GET /api/metas/grade` (grade categorias × meses, Fase B).

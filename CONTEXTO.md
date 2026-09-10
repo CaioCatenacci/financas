@@ -279,6 +279,12 @@ realizado, ajustar pontual ou daí em diante, tudo numa tela de mês. A grade (c
 meses, pra planejar a sequência de uma vez) é aditiva por cima, sem tocar no que a Fase A
 já resolveu.
 
+**Por que editar uma célula da grade sempre grava baseline:** a grade existe pra planejar a
+sequência de uma vez — o gesto natural ali é "daqui pra frente o alvo desta categoria é
+esse". A exceção pontual (só este mês) continua existindo, mas é caso raro o suficiente
+pra ficar só na tela de mês (Fase A), que já resolve isso; a grade não precisa duplicar
+esse controle e ganha em simplicidade não tendo escolha de escopo por célula.
+
 ---
 
 ## Não fizemos (por que não faz sentido ainda)
