@@ -618,6 +618,91 @@ if (typeof document !== "undefined") {
     } catch (err) { alert("Falha: " + err.message); }
   });
 
+  // ----- Inc 4: Planejamento (tela do mês — alvo vs realizado) -----
+  // Espelha parseBRtoCents de worker/money.js (vírgula/ponto → centavos): teclado BR entrega
+  // vírgula, e o campo é type="text"+inputmode="decimal" (regra do CLAUDE.md), então precisa
+  // de um parser aqui mesmo — este arquivo não importa código do Worker.
+  function parseBRtoCentsUI(str) {
+    if (typeof str !== "string") return null;
+    let s = str.replace(/R\$\s*/i, "").trim();
+    if (!s) return null;
+    if (s.startsWith("-")) return null; // valor de meta é sempre positivo
+    s = s.replace(/\./g, ""); // remove separador de milhar
+    if (s.includes(",")) s = s.replace(",", ".");
+    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+    return Math.round(parseFloat(s) * 100);
+  }
+
+  const mesCorrenteISO = () => new Date().toISOString().slice(0, 7);
+  const apiPut = (p, body) => fetch(p, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
+    .then(r => { if (!r.ok) throw new Error(`PUT ${p} ${r.status}`); return r; });
+
+  async function renderPlanejamento() {
+    const mesInput = $("#planMes");
+    if (!mesInput.value) mesInput.value = mesCorrenteISO();
+    const mes = mesInput.value;
+    const [dados, sug] = await Promise.all([
+      apiGet(`/api/metas?mes=${mes}`),
+      apiGet(`/api/metas/sugestao?mes=${mes}`),
+    ]);
+    const sugPorCat = {};
+    for (const s of sug.linhas) sugPorCat[s.categoria_id] = s.sugestao_cents;
+
+    const tbody = $("#planTabela tbody");
+    tbody.innerHTML = dados.linhas.map(l => {
+      const alvo = l.alvo_cents == null ? "" : centavosBR(l.alvo_cents / 100 + "");
+      const placeholder = l.alvo_cents == null && sugPorCat[l.categoria_id] != null
+        ? `sug. ${centavosBR(sugPorCat[l.categoria_id] / 100 + "")}` : "definir";
+      const realizado = centavosBR(l.realizado_cents / 100 + "");
+      const barra = l.alvo_cents ? Math.min(100, Math.round(100 * l.realizado_cents / l.alvo_cents)) : 0;
+      const diff = l.diff_cents == null ? "—"
+        : (l.diff_cents >= 0 ? `falta ${centavosBR(l.diff_cents / 100 + "")}` : `estourou ${centavosBR(-l.diff_cents / 100 + "")}`);
+      const selo = l.origem === "excecao" ? ` <span class="selo-excecao" title="ajuste só deste mês">exceção</span>` : "";
+      return `<tr data-cat="${l.categoria_id}">
+        <td>${esc(l.categoria)}${selo}</td>
+        <td><input class="planAlvo" type="text" inputmode="decimal" value="${alvo}" placeholder="${placeholder}" data-sug="${sugPorCat[l.categoria_id] ?? ""}"></td>
+        <td>${realizado}</td>
+        <td class="status-${l.status}"><div class="planbar"><i style="width:${barra}%"></i></div>${diff}</td>
+      </tr>`;
+    }).join("");
+
+    const tfoot = $("#planTabela tfoot");
+    tfoot.innerHTML = `<tr><td>Total</td>
+      <td>${centavosBR(dados.total.alvo_cents / 100 + "")}</td>
+      <td>${centavosBR(dados.total.realizado_cents / 100 + "")}</td>
+      <td>${dados.total.diff_cents >= 0 ? "falta" : "estourou"} ${centavosBR(Math.abs(dados.total.diff_cents) / 100 + "")}</td></tr>`;
+  }
+
+  // salvar alvo: pergunta o escopo (só este mês vs deste mês em diante)
+  $("#planTabela").addEventListener("change", async (e) => {
+    if (!e.target.classList.contains("planAlvo")) return;
+    const tr = e.target.closest("tr");
+    const categoria_id = tr.dataset.cat;
+    const mes = $("#planMes").value;
+    const raw = e.target.value.trim();
+    if (raw === "") { // limpar → apaga exceção do mês (baseline permanece)
+      await apiDelete(`/api/metas?categoria_id=${categoria_id}&mes=${mes}&escopo=excecao`).catch(() => {});
+      return renderPlanejamento();
+    }
+    const cents = parseBRtoCentsUI(raw);
+    if (cents == null) { alert("Valor inválido"); return renderPlanejamento(); }
+    const soEste = confirm("OK = só este mês (exceção)\nCancelar = deste mês em diante (baseline)");
+    const escopo = soEste ? "excecao" : "baseline";
+    try {
+      await apiPut(`/api/metas`, { categoria_id, mes, valor_cents: cents, escopo });
+    } catch (err) { alert("Falha ao salvar: " + err.message); }
+    renderPlanejamento();
+  });
+
+  // "Sugerir pra todas": pré-preenche os campos vazios com a sugestão; NÃO grava (Caio revisa e salva).
+  $("#planSugerir").addEventListener("click", () => {
+    $("#planTabela").querySelectorAll(".planAlvo").forEach(inp => {
+      if (inp.value.trim() === "" && inp.dataset.sug) inp.value = centavosBR(Number(inp.dataset.sug) / 100 + "");
+    });
+  });
+
+  $("#planMes").addEventListener("change", renderPlanejamento);
+
   // ----- Importar (upload PDF → preview → revisão → aplicar; Task 9) -----
   function tabelaItens(titulo, itens, { comAmbiguo = false } = {}) {
     if (!itens.length) return "";
@@ -799,8 +884,10 @@ if (typeof document !== "undefined") {
     $("#lanc").classList.toggle("hidden", v !== "lanc");
     $("#importar").classList.toggle("hidden", v !== "importar");
     $("#ajustes").classList.toggle("hidden", v !== "ajustes");
+    $("#planejamento").classList.toggle("hidden", v !== "planejamento");
     if (v === "ajustes") drawAjustes();
     if (v === "importar") drawImportar();
+    if (v === "planejamento") renderPlanejamento();
   }));
   document.querySelectorAll(".period").forEach(p => p.addEventListener("click", e => {
     if (!e.target.dataset.p) return;
