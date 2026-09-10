@@ -671,7 +671,35 @@ if (typeof document !== "undefined") {
       <td>${centavosBR(dados.total.alvo_cents / 100 + "")}</td>
       <td>${centavosBR(dados.total.realizado_cents / 100 + "")}</td>
       <td>${dados.total.diff_cents >= 0 ? "falta" : "estourou"} ${centavosBR(Math.abs(dados.total.diff_cents) / 100 + "")}</td></tr>`;
+
+    await renderGrade();
   }
+
+  // ----- Inc 4 Tarefa 8: grade categorias × meses (visão secundária, recolhível) -----
+  async function renderGrade() {
+    const g = await apiGet(`/api/metas/grade`);
+    const head = `<thead><tr><th>Categoria</th>${g.meses.map(m => `<th>${mesLabel(m)}</th>`).join("")}</tr></thead>`;
+    const body = g.categorias.map(c => {
+      const tds = c.celulas.map(cel => {
+        const alvo = cel.alvo_cents == null ? "" : centavosBR(cel.alvo_cents / 100 + "");
+        const real = cel.realizado_cents == null ? "" : `<small>${centavosBR(cel.realizado_cents / 100 + "")}</small>`;
+        return `<td><input class="gAlvo" type="text" inputmode="decimal" value="${alvo}" data-cat="${c.categoria_id}" data-mes="${cel.mes}">${real}</td>`;
+      }).join("");
+      return `<tr><td>${esc(c.categoria)}</td>${tds}</tr>`;
+    }).join("");
+    $("#planGrade").innerHTML = head + `<tbody>${body}</tbody>`;
+  }
+
+  // editar célula da grade = baseline a partir daquele mês ("daqui pra frente")
+  $("#planGrade").addEventListener("change", async (e) => {
+    if (!e.target.classList.contains("gAlvo")) return;
+    const cents = parseBRtoCentsUI(e.target.value.trim());
+    if (cents == null) return;
+    try {
+      await apiPut(`/api/metas`, { categoria_id: e.target.dataset.cat, mes: e.target.dataset.mes, valor_cents: cents, escopo: "baseline" });
+    } catch (err) { alert("Falha ao salvar: " + err.message); }
+    renderPlanejamento(); // re-render mês + grade
+  });
 
   // salvar alvo: pergunta o escopo (só este mês vs deste mês em diante)
   $("#planTabela").addEventListener("change", async (e) => {
