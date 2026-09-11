@@ -954,6 +954,7 @@ if (typeof document !== "undefined") {
     $("#planejamento").classList.toggle("hidden", v !== "planejamento");
     if (v === "ajustes") drawAjustes();
     if (v === "importar") drawImportar();
+    if (v === "lanc") carregarLancamentos();
     if (v === "planejamento") renderPlanejamento();
   }));
 
