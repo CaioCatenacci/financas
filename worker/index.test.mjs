@@ -224,7 +224,6 @@ function dbApiFake() {
     listarCategorias: async () => [{ macro: "Casa", sub: "Limpeza" }],
     resumoKPIs: async () => ({ receita: 1000, despesa: 500, reembolso: 0 }),
     resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
-    resumoMensal: async () => [{ mes: "2026-09", natureza: "despesa", total: 500 }],
     resumoMesVsAnterior: async () => [{ macro: "Casa", atual: 500, ant: 300 }],
     resumoPorPessoa: async () => [
       { pessoa: "Alice", natureza: "despesa", total: 300 },

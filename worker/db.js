@@ -222,13 +222,6 @@ export function criarDb(sql) {
         group by c.nome, s.nome, t.natureza order by total desc`;
     },
 
-    async resumoMensal(de, ate) {
-      return await sql`
-        select to_char(data,'YYYY-MM') as mes, natureza, sum(valor_final) as total
-        from transacoes where data >= ${de} and data <= ${ate} and computa_resumo
-        group by 1, 2 order by 1`;
-    },
-
     async resumoKPIs(de, ate) {
       const rows = await sql`
         select

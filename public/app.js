@@ -1,18 +1,6 @@
 // ---------- funções puras (testadas em node) ----------
-export function agruparMensal(rows) {
-  const mapa = new Map();
-  for (const r of rows) {
-    if (!mapa.has(r.mes)) mapa.set(r.mes, { mes: r.mes, receita: 0, despesa: 0, saldo: 0 });
-    const o = mapa.get(r.mes);
-    const v = parseFloat(r.total);
-    if (r.natureza === "receita") o.receita += v; else o.despesa += v;
-    o.saldo = o.receita - o.despesa;
-  }
-  return [...mapa.values()].sort((a, b) => a.mes.localeCompare(b.mes));
-}
-
 // resumo.porPessoa vem do backend como linhas {pessoa, natureza, total} (uma por pessoa×natureza)
-// dobra em uma linha por pessoa. Mesmo formato de saída que agruparMensal usa (receita/despesa/saldo).
+// dobra em uma linha por pessoa. Mesmo formato de saída que agruparPorPessoa devolve (receita/despesa/saldo).
 // Ordena por despesa desc porque é um corte de gasto (quem gastou mais primeiro).
 export function agruparPorPessoa(rows) {
   const mapa = new Map();
@@ -42,26 +30,7 @@ export function deltaPct(ant, atual) {
   return (atual - ant) / ant * 100;
 }
 
-export function periodoRange(preset, hoje = new Date()) {
-  const y = hoje.getUTCFullYear(), m = hoje.getUTCMonth();
-  const pad = x => String(x).padStart(2, "0");
-  const iso = (yy, mm, dd) => `${yy}-${pad(mm + 1)}-${pad(dd)}`;
-  const lastDay = (yy, mm) => new Date(Date.UTC(yy, mm + 1, 0)).getUTCDate();
-  if (preset === "mes") return { de: iso(y, m, 1), ate: iso(y, m, lastDay(y, m)) };
-  if (preset === "mespassado") {
-    // mês anterior; Date resolve a virada de ano (janeiro → dezembro do ano passado)
-    const d = new Date(Date.UTC(y, m - 1, 1)), yy = d.getUTCFullYear(), mm = d.getUTCMonth();
-    return { de: iso(yy, mm, 1), ate: iso(yy, mm, lastDay(yy, mm)) };
-  }
-  if (preset === "ano") return { de: `${y}-01-01`, ate: `${y}-12-31` };
-  if (preset === "12m") {
-    const s = new Date(Date.UTC(y, m - 11, 1));
-    return { de: iso(s.getUTCFullYear(), s.getUTCMonth(), 1), ate: iso(y, m, lastDay(y, m)) };
-  }
-  return { de: "1900-01-01", ate: "2999-12-31" };
-}
-
-// Inc 4.5: range meio-aberto [de, ateExcl) de um mês 'YYYY-MM'. Substitui periodoRange no eixo mês.
+// Inc 4.5: range meio-aberto [de, ateExcl) de um mês 'YYYY-MM'.
 export function rangeDoMes(mes) {
   const [a, m] = mes.split("-").map(Number);
   const prox = m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, "0")}`;
@@ -296,45 +265,7 @@ if (typeof document !== "undefined") {
       cel("Reembolso (IR)", reembolso, "--c3", "dedutível");
   }
 
-  // ----- evolução mensal -----
-  function drawEvo() {
-    const dados = agruparMensal(estado.resumo.mensal || []);
-    const W = 560, H = 230, pl = 8, pr = 8, pt = 14, pb = 26, iw = W - pl - pr, ih = H - pt - pb;
-    const el = $("#evo");
-    if (!dados.length) { el.innerHTML = `<p class="vazio">sem dados no período</p>`; return; }
-    // domínio inclui o saldo negativo (senão a barra de saldo é desenhada fora do viewBox
-    // quando a receita é 0 e vaza do card via svg{overflow}). hi = topo, lo = fundo (≤ 0).
-    const hi = Math.max(1, ...dados.map(d => Math.max(d.receita, d.despesa))) * 1.1;
-    const lo = Math.min(0, ...dados.map(d => d.saldo)) * 1.1;
-    const n = dados.length;
-    const X = i => n === 1 ? pl + iw / 2 : pl + iw * i / (n - 1), Y = v => pt + ih * (hi - v) / (hi - lo);
-    const path = key => dados.map((d, i) => (i ? "L" : "M") + X(i).toFixed(1) + "," + Y(d[key]).toFixed(1)).join(" ");
-    // fecha a área na linha do zero (Y(0)), não no fundo do viewBox: com domínio [lo,hi]
-    // e lo<0, pt+ih passou a ser Y(lo), o que inflava o preenchimento até o piso negativo.
-    const area = key => path(key) + ` L${X(n - 1).toFixed(1)},${Y(0).toFixed(1)} L${X(0).toFixed(1)},${Y(0).toFixed(1)} Z`;
-    let g = "";
-    for (let k = 0; k <= 3; k++) { const y = pt + ih * k / 3; g += `<line class="grid-l" x1="${pl}" y1="${y}" x2="${W - pr}" y2="${y}"/>`; }
-    let bars = "";
-    dados.forEach((d, i) => { const s = d.saldo; bars += `<rect x="${(X(i) - 3.5).toFixed(1)}" y="${(s >= 0 ? Y(s) : Y(0)).toFixed(1)}" width="7" height="${Math.abs(Y(s) - Y(0)).toFixed(1)}" rx="2" opacity=".28" style="fill:var(--dim)"/>`; });
-    let labels = "";
-    const step = n > 8 ? 2 : 1;
-    dados.forEach((d, i) => { if (i % step === 0) labels += `<text class="axis" x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${mesLabel(d.mes)}</text>`; });
-    let hot = "";
-    dados.forEach((d, i) => { const w = iw / n; hot += `<rect x="${(X(i) - w / 2).toFixed(1)}" y="${pt}" width="${w.toFixed(1)}" height="${ih}" fill="transparent" data-i="${i}"/>`; });
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Evolução mensal">
-      ${g}${bars}
-      <path d="${area("despesa")}" opacity=".10" style="fill:var(--despesa)"/>
-      <path d="${path("despesa")}" stroke-width="2" style="fill:none;stroke:var(--despesa)"/>
-      <path d="${path("receita")}" stroke-width="2" style="fill:none;stroke:var(--receita)"/>
-      ${labels}<g id="evohot">${hot}</g></svg>`;
-    $("#evohot").querySelectorAll("rect").forEach(r => {
-      r.addEventListener("mousemove", e => { const d = dados[+r.dataset.i]; showTip(e, `<b>${mesLabel(d.mes)}</b><br>Receita ${BRL(d.receita)}<br>Despesa ${BRL(d.despesa)}<br>Saldo ${BRL(d.saldo)}`); });
-      r.addEventListener("mouseleave", hideTip);
-    });
-  }
-
-  // ----- Inc 4.5 Tarefa 7: gasto no mês — acumulado × orçamento (substitui a evolução
-  // mensal; espelha a estrutura SVG de drawEvo — paddings/viewBox/grid/showTip). -----
+  // ----- Inc 4.5 Tarefa 7: gasto no mês — acumulado × orçamento -----
   function drawDiario() {
     const [ano, mes] = estado.mes.split("-").map(Number);
     const hojeISO = new Date().toISOString().slice(0, 10);
@@ -390,32 +321,6 @@ if (typeof document !== "undefined") {
       m.set(r.macro, (m.get(r.macro) || 0) + parseFloat(r.total));
     }
     return [...m.entries()].map(([nm, v]) => ({ nm, v })).sort((a, b) => b.v - a.v);
-  }
-
-  // ----- donut -----
-  function drawDonut() {
-    let cats = despesaPorMacro();
-    const el = $("#donut"), lst = $("#catlist");
-    if (!cats.length) { el.innerHTML = `<p class="vazio">sem despesas</p>`; lst.innerHTML = ""; return; }
-    if (cats.length > 7) { const top = cats.slice(0, 6); const out = cats.slice(6).reduce((a, c) => a + c.v, 0); cats = [...top, { nm: "Outros", v: out }]; }
-    const total = cats.reduce((a, c) => a + c.v, 0), R = 64, r = 40, cx = 76, cy = 76;
-    let a0 = -Math.PI / 2, arcs = "";
-    cats.forEach((c, i) => {
-      const a1 = a0 + 2 * Math.PI * c.v / total;
-      const x0 = cx + R * Math.cos(a0), y0 = cy + R * Math.sin(a0), x1 = cx + R * Math.cos(a1), y1 = cy + R * Math.sin(a1);
-      const xi1 = cx + r * Math.cos(a1), yi1 = cy + r * Math.sin(a1), xi0 = cx + r * Math.cos(a0), yi0 = cy + r * Math.sin(a0);
-      const laf = (a1 - a0) > Math.PI ? 1 : 0;
-      arcs += `<path d="M${x0.toFixed(1)},${y0.toFixed(1)} A${R},${R} 0 ${laf} 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${xi1.toFixed(1)},${yi1.toFixed(1)} A${r},${r} 0 ${laf} 0 ${xi0.toFixed(1)},${yi0.toFixed(1)} Z" stroke-width="2" data-i="${i}" style="fill:var(${corDe(c.nm)});stroke:var(--surface)"/>`;
-      a0 = a1;
-    });
-    el.innerHTML = `<svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gastos por categoria">${arcs}
-      <text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
-      <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text></svg>`;
-    el.querySelectorAll("path").forEach(p => {
-      p.addEventListener("mousemove", e => { const c = cats[+p.dataset.i]; showTip(e, `<b>${esc(c.nm)}</b><br>${BRL(c.v)} · ${(100 * c.v / total).toFixed(0)}%`); });
-      p.addEventListener("mouseleave", hideTip);
-    });
-    lst.innerHTML = cats.map(c => `<div class="catrow"><i class="dot" style="background:var(${corDe(c.nm)})"></i><span class="nm">${esc(c.nm)}</span><span class="vl">${BRL(c.v)}</span></div>`).join("");
   }
 
   // ----- Inc 4.5 Tarefa 8: sunburst categoria (anel interno) + subcategoria (anel externo) -----

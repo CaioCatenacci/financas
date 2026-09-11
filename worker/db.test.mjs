@@ -217,14 +217,6 @@ test("resumoPorCategoria junta categorias e apelida c.nome as macro (forma p/ os
   assert.deepEqual(sql.chamadas[0].values, ["2026-01-01", "2026-12-31"]);
 });
 
-test("resumoMensal passa o intervalo do período", async () => {
-  const sql = fakeSql([{ mes: "2026-01", natureza: "despesa", total: "10.00" }]);
-  const db = criarDb(sql);
-  await db.resumoMensal("2026-01-01", "2026-12-31");
-  assert.match(sql.chamadas[0].text, /to_char\(data,'YYYY-MM'\)/i);
-  assert.deepEqual(sql.chamadas[0].values, ["2026-01-01", "2026-12-31"]);
-});
-
 test("resumoKPIs retorna a linha única com receita/despesa/reembolso do período", async () => {
   const sql = fakeSql([{ receita: "264000.00", despesa: "189400.00", reembolso: "12180.00" }]);
   const db = criarDb(sql);

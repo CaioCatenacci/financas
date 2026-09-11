@@ -1,25 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  agruparMensal, centavosBR, kf, deltaPct, periodoRange, rangeDoMes, construirWaterfall, subsDaCat,
+  centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento,
 } from "./app.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
 import { parseFatura } from "../worker/fatura.js";
-
-test("agruparMensal soma receita/despesa e saldo por mês", () => {
-  const rows = [
-    { mes: "2026-01", natureza: "despesa", total: "100.00" },
-    { mes: "2026-01", natureza: "receita", total: "300.00" },
-    { mes: "2026-02", natureza: "despesa", total: "50.00" },
-  ];
-  assert.deepEqual(agruparMensal(rows), [
-    { mes: "2026-01", receita: 300, despesa: 100, saldo: 200 },
-    { mes: "2026-02", receita: 0, despesa: 50, saldo: -50 },
-  ]);
-});
 
 test("centavosBR formata numeric string", () => {
   assert.equal(centavosBR("1505.50"), "1.505,50");
@@ -37,20 +25,6 @@ test("deltaPct calcula variação e trata base zero", () => {
   assert.equal(deltaPct(200, 150), -25);
   assert.equal(deltaPct(0, 50), 100);
   assert.equal(deltaPct(0, 0), 0);
-});
-
-test("periodoRange devolve intervalos ISO por preset", () => {
-  const h = new Date(Date.UTC(2026, 7, 15)); // 2026-08-15
-  assert.deepEqual(periodoRange("ano", h), { de: "2026-01-01", ate: "2026-12-31" });
-  assert.deepEqual(periodoRange("mes", h), { de: "2026-08-01", ate: "2026-08-31" });
-  assert.deepEqual(periodoRange("12m", h), { de: "2025-09-01", ate: "2026-08-31" });
-  assert.deepEqual(periodoRange("tudo", h), { de: "1900-01-01", ate: "2999-12-31" });
-  assert.deepEqual(periodoRange("mespassado", h), { de: "2026-07-01", ate: "2026-07-31" });
-});
-
-test("periodoRange mespassado vira o ano em janeiro (jan → dez do ano anterior)", () => {
-  const jan = new Date(Date.UTC(2026, 0, 10)); // 2026-01-10
-  assert.deepEqual(periodoRange("mespassado", jan), { de: "2025-12-01", ate: "2025-12-31" });
 });
 
 test("rangeDoMes: de = dia 1, ateExcl = dia 1 do mês seguinte (vira o ano)", () => {
