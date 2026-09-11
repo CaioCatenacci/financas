@@ -248,7 +248,7 @@ if (typeof document !== "undefined") {
   const mesLabelAno = ym => `${mesLabel(ym)}/${ym.slice(2, 4)}`;
 
   const estado = {
-    periodo: "12m", mes: new Date().toISOString().slice(0, 7), resumo: null, transacoes: [], cores: {}, pessoas: [],
+    mes: new Date().toISOString().slice(0, 7), resumo: null, metasMes: null, transacoes: [], cores: {}, pessoas: [],
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
     selecao: new Set(), // ids selecionados p/ edição em massa (persiste ao filtrar/re-renderizar)
@@ -328,6 +328,55 @@ if (typeof document !== "undefined") {
       ${labels}<g id="evohot">${hot}</g></svg>`;
     $("#evohot").querySelectorAll("rect").forEach(r => {
       r.addEventListener("mousemove", e => { const d = dados[+r.dataset.i]; showTip(e, `<b>${mesLabel(d.mes)}</b><br>Receita ${BRL(d.receita)}<br>Despesa ${BRL(d.despesa)}<br>Saldo ${BRL(d.saldo)}`); });
+      r.addEventListener("mouseleave", hideTip);
+    });
+  }
+
+  // ----- Inc 4.5 Tarefa 7: gasto no mês — acumulado × orçamento (substitui a evolução
+  // mensal; espelha a estrutura SVG de drawEvo — paddings/viewBox/grid/showTip). -----
+  function drawDiario() {
+    const [ano, mes] = estado.mes.split("-").map(Number);
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    // só passa hojeISO (e portanto para a curva em hoje) quando o mês selecionado é o
+    // corrente; num mês passado/futuro a curva cobre o mês inteiro.
+    const hojeSeMesCorrente = hojeISO.slice(0, 7) === estado.mes ? hojeISO : null;
+    const acum = acumularDiario(estado.resumo.diario || [], ano, mes, hojeSeMesCorrente);
+    const alvoTotal = +(estado.metasMes?.total?.alvo_cents || 0);
+    const pace = paceOrcamento(alvoTotal, ano, mes); // reta cobre o mês inteiro, não para em hoje
+    const ultimo = pace.length;
+    const el = $("#evo");
+    if (!ultimo) { el.innerHTML = `<p class="vazio">sem dados no mês</p>`; return; }
+    const W = 560, H = 230, pl = 8, pr = 8, pt = 14, pb = 26, iw = W - pl - pr, ih = H - pt - pb;
+    // domínio Y = maior entre o pico do acumulado (é monotônico, então é a última entrada)
+    // e o orçamento total (última entrada da reta de ritmo), com folga de 10%.
+    const maiorAcum = acum.length ? acum[acum.length - 1].acum_cents / 100 : 0;
+    const orcamentoTotal = alvoTotal / 100;
+    const hi = Math.max(1, maiorAcum, orcamentoTotal) * 1.1;
+    const X = d => ultimo === 1 ? pl + iw / 2 : pl + iw * (d - 1) / (ultimo - 1);
+    const Y = v => pt + ih * (hi - v) / hi;
+    let g = "";
+    for (let k = 0; k <= 3; k++) { const y = pt + ih * k / 3; g += `<line class="grid-l" x1="${pl}" y1="${y}" x2="${W - pr}" y2="${y}"/>`; }
+    // pace[i]/acum[i] têm 1 entrada por dia a partir do dia 1, em ordem — o índice já é o dia-1.
+    const pathAlvo = pace.map((p, i) => (i ? "L" : "M") + X(p.dia).toFixed(1) + "," + Y(p.alvo_cents / 100).toFixed(1)).join(" ");
+    const pathGasto = acum.map((a, i) => (i ? "L" : "M") + X(i + 1).toFixed(1) + "," + Y(a.acum_cents / 100).toFixed(1)).join(" ");
+    let labels = "";
+    const step = ultimo > 20 ? 5 : ultimo > 10 ? 2 : 1;
+    for (let d = 1; d <= ultimo; d++) if ((d - 1) % step === 0) labels += `<text class="axis" x="${X(d).toFixed(1)}" y="${H - 8}" text-anchor="middle">${d}</text>`;
+    let hot = "";
+    const w = iw / ultimo;
+    for (let d = 1; d <= ultimo; d++) hot += `<rect x="${(X(d) - w / 2).toFixed(1)}" y="${pt}" width="${w.toFixed(1)}" height="${ih}" fill="transparent" data-d="${d}"/>`;
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Gasto no mês">
+      ${g}
+      <path d="${pathAlvo}" stroke-width="2" stroke-dasharray="4 3" style="fill:none;stroke:var(--dim)"/>
+      ${pathGasto ? `<path d="${pathGasto}" stroke-width="2" style="fill:none;stroke:var(--despesa)"/>` : ""}
+      ${labels}<g id="evohot">${hot}</g></svg>`;
+    $("#evohot").querySelectorAll("rect").forEach(r => {
+      r.addEventListener("mousemove", e => {
+        const d = +r.dataset.d;
+        const gasto = d <= acum.length ? acum[d - 1].acum_cents / 100 : null;
+        const alvo = pace[d - 1].alvo_cents / 100;
+        showTip(e, `<b>dia ${d}</b><br>${gasto != null ? `Gasto acumulado ${BRL(gasto)}` : "sem gasto registrado ainda"}<br>Orçamento previsto ${BRL(alvo)}`);
+      });
       r.addEventListener("mouseleave", hideTip);
     });
   }
@@ -945,7 +994,7 @@ if (typeof document !== "undefined") {
 
   // Inc 4.5 Tarefa 2: range de datas p/ buscar TRANSAÇÕES (aba Lançamentos) — mês único
   // (rangeDoMes, da Tarefa 1) por padrão, ou janela aberta quando "Todos os meses" está
-  // ligado. Independente do período do Resumo (que continua em periodoRange/estado.periodo).
+  // ligado. Mesmo estado.mes que agora também governa o Resumo (Tarefa 7).
   function transacoesRange() {
     if (estado.lancTudo) return { de: "1900-01-01", ate: "2999-12-31" };
     const { de, ateExcl } = rangeDoMes(estado.mes);
@@ -959,14 +1008,16 @@ if (typeof document !== "undefined") {
   // ----- carga e eventos -----
   async function carregar() {
     try {
-      const { de, ate } = periodoRange(estado.periodo);
-      const qsResumo = `?de=${de}&ate=${ate}`;
+      // Inc 4.5 Tarefa 7: Resumo fechou no mês (nada de presets) — mesmo estado.mes do
+      // #mesSel. /api/metas devolve o alvo do mês, usado como orçamento em drawDiario.
+      const qsResumo = `?mes=${estado.mes}`;
       const rt = transacoesRange();
       const qsTransacoes = `?de=${rt.de}&ate=${rt.ate}`;
-      const [resumo, transacoes, catalogo, pessoas] = await Promise.all([
-        apiGet("/api/resumo" + qsResumo), apiGet("/api/transacoes" + qsTransacoes), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
+      const [resumo, metasMes, transacoes, catalogo, pessoas] = await Promise.all([
+        apiGet("/api/resumo" + qsResumo), apiGet("/api/metas" + qsResumo),
+        apiGet("/api/transacoes" + qsTransacoes), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
       ]);
-      estado.resumo = resumo; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
+      estado.resumo = resumo; estado.metasMes = metasMes; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
       // remove da seleção ids que sumiram (troca de período/recarga) — evita "selecionados" fantasmas
       const presentes = new Set(transacoes.map(t => t.id));
       for (const id of estado.selecao) if (!presentes.has(id)) estado.selecao.delete(id);
@@ -975,12 +1026,24 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
+      drawKPIs(); drawDiario(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
+  // Inc 4.5 Tarefa 7: recarrega só o Resumo (resumo do mês + metas do mês, p/ o orçamento
+  // de drawDiario) — espelha carregarLancamentos: evita refazer o fetch de transações/
+  // catálogo quando só o mês do Resumo mudou (troca de #mesSel ou clique na aba).
+  async function carregarResumo() {
+    try {
+      const qs = `?mes=${estado.mes}`;
+      const [resumo, metasMes] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs)]);
+      estado.resumo = resumo; estado.metasMes = metasMes;
+      drawKPIs(); drawDiario(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa();
+    } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
+  }
+
   // Recarrega só as transações (aba Lançamentos) com o range corrente — usado pela troca de
-  // mês/"Todos os meses" p/ não refazer o fetch do Resumo (que segue os presets de .period).
+  // mês/"Todos os meses" p/ não refazer o fetch do Resumo (agora em carregarResumo()).
   async function carregarLancamentos() {
     try {
       const { de, ate } = transacoesRange();
@@ -1007,17 +1070,18 @@ if (typeof document !== "undefined") {
     if (v === "importar") drawImportar();
     if (v === "lanc") carregarLancamentos();
     if (v === "planejamento") renderPlanejamento();
+    if (v === "resumo") carregarResumo();
   }));
 
-  // Inc 4.5 Tarefa 2/3: mês global — governa Lançamentos e Planejamento (mês corrente
-  // + grade). Resumo fica de fora nesta fase (segue .period).
+  // Inc 4.5 Tarefa 7: mês global — agora governa Lançamentos, Planejamento E Resumo (os
+  // presets de .period saíram; o Resumo fecha no mês de #mesSel, igual às outras abas).
   $("#mesSel").value = estado.mes;
   $("#mesSel").addEventListener("change", e => {
     estado.mes = e.target.value;
     const v = document.querySelector(".tab.on")?.dataset.view;
     if (v === "lanc") carregarLancamentos();
     else if (v === "planejamento") renderPlanejamento();
-    // Resumo: nada nesta fase — segue os presets de .period.
+    else if (v === "resumo") carregarResumo();
   });
   $("#lancTudo").addEventListener("click", () => {
     estado.lancTudo = !estado.lancTudo;
@@ -1025,12 +1089,6 @@ if (typeof document !== "undefined") {
     $("#mesSel").disabled = estado.lancTudo; // ligado, o mês global é ignorado p/ Lançamentos
     carregarLancamentos();
   });
-  document.querySelectorAll(".period").forEach(p => p.addEventListener("click", e => {
-    if (!e.target.dataset.p) return;
-    document.querySelectorAll(".period .chip").forEach(c => { if (c.dataset.p) c.classList.remove("on"); });
-    document.querySelectorAll(`.period .chip[data-p="${e.target.dataset.p}"]`).forEach(c => c.classList.add("on"));
-    estado.periodo = e.target.dataset.p; carregar();
-  }));
   $("#theme").addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme");
     const next = cur === "dark" ? "light" : cur === "light" ? "dark" : (matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark");
@@ -1130,6 +1188,6 @@ if (typeof document !== "undefined") {
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }
-  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); } }, 150); });
+  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); } }, 150); });
   carregar();
 }

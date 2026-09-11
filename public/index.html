@@ -74,18 +74,10 @@
     <button class="iconbtn" id="theme" title="Alternar tema">◐</button>
   </div>
 
-  <!-- Inc 4.5 Tarefa 2: mês global — governa Lançamentos (mês único por padrão); Resumo
-       segue os presets de .period abaixo (Fase 1 não mexe no Resumo). -->
+  <!-- Inc 4.5 Tarefa 7: mês global — governa Lançamentos, Planejamento e agora o Resumo
+       também (os presets de .period saíram; o Resumo fecha no mês de #mesSel). -->
   <div class="mesbar">
     <label>Mês <input type="month" id="mesSel"></label>
-  </div>
-
-  <div class="period">
-    <button class="chip" data-p="mes">Mês atual</button>
-    <button class="chip" data-p="mespassado">Mês passado</button>
-    <button class="chip" data-p="ano">Ano</button>
-    <button class="chip on" data-p="12m">Últimos 12 meses</button>
-    <button class="chip" data-p="tudo">Tudo</button>
   </div>
 
   <section id="resumo">
@@ -93,12 +85,11 @@
 
     <div class="grid two" style="margin-bottom:16px">
       <div class="card">
-        <div class="cardhead"><div><h2>Evolução mensal</h2><p class="sub">receita × despesa · saldo do mês</p></div></div>
+        <div class="cardhead"><div><h2>Gasto no mês</h2><p class="sub">acumulado × orçamento</p></div></div>
         <div id="evo"></div>
         <div class="legend">
-          <span><i class="dot" style="background:var(--receita)"></i>Receita</span>
-          <span><i class="dot" style="background:var(--despesa)"></i>Despesa</span>
-          <span><i class="dot" style="background:var(--dim)"></i>Saldo</span>
+          <span><i class="dot" style="background:var(--despesa)"></i>Gasto acumulado</span>
+          <span><i class="dot" style="background:var(--dim)"></i>Orçamento</span>
         </div>
       </div>
       <div class="card">
@@ -116,7 +107,7 @@
         <div id="waterfall"></div>
       </div>
       <div class="card">
-        <div class="cardhead"><div><h2>Gasto por categoria: mês vs anterior</h2><p class="sub">variação do gasto mês a mês</p></div></div>
+        <div class="cardhead"><div><h2>Gasto por categoria: mês vs anterior</h2><p class="sub">mês selecionado vs anterior</p></div></div>
         <div class="dbwrap" id="dumb"></div>
         <div class="legend" style="margin-top:16px">
           <span><i class="dot" style="background:var(--dim)"></i>Mês anterior</span>
