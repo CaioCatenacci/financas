@@ -254,6 +254,7 @@ if (typeof document !== "undefined") {
     selecao: new Set(), // ids selecionados p/ edição em massa (persiste ao filtrar/re-renderizar)
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
     lancTudo: false,
+    sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
   };
 
   // API
@@ -415,6 +416,141 @@ if (typeof document !== "undefined") {
       p.addEventListener("mouseleave", hideTip);
     });
     lst.innerHTML = cats.map(c => `<div class="catrow"><i class="dot" style="background:var(${corDe(c.nm)})"></i><span class="nm">${esc(c.nm)}</span><span class="vl">${BRL(c.v)}</span></div>`).join("");
+  }
+
+  // ----- Inc 4.5 Tarefa 8: sunburst categoria (anel interno) + subcategoria (anel externo) -----
+  // agrupa porCategoria (só despesa, linhas com sub preenchida) por macro → [{nm(sub), v}].
+  // O total de uma categoria (despesaPorMacro) inclui tanto as linhas com sub quanto as sem
+  // (sub null); a diferença entre o total da macro e a soma das subs é o "sem subcategoria".
+  function subPorMacro() {
+    const m = new Map();
+    for (const r of (estado.resumo.porCategoria || [])) {
+      if (r.natureza !== "despesa" || !r.sub) continue;
+      if (!m.has(r.macro)) m.set(r.macro, []);
+      m.get(r.macro).push({ nm: r.sub, v: parseFloat(r.total) });
+    }
+    return m;
+  }
+
+  // caminho de um arco de anel (mesma geometria do donut, generalizada p/ raio interno/externo
+  // arbitrários — reusada pelos dois anéis do sunburst).
+  function arcoAnel(a0, a1, rIn, rOut, cx, cy) {
+    const laf = (a1 - a0) > Math.PI ? 1 : 0;
+    const x0 = cx + rOut * Math.cos(a0), y0 = cy + rOut * Math.sin(a0);
+    const x1 = cx + rOut * Math.cos(a1), y1 = cy + rOut * Math.sin(a1);
+    const xi1 = cx + rIn * Math.cos(a1), yi1 = cy + rIn * Math.sin(a1);
+    const xi0 = cx + rIn * Math.cos(a0), yi0 = cy + rIn * Math.sin(a0);
+    return `M${x0.toFixed(1)},${y0.toFixed(1)} A${rOut},${rOut} 0 ${laf} 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${xi1.toFixed(1)},${yi1.toFixed(1)} A${rIn},${rIn} 0 ${laf} 0 ${xi0.toFixed(1)},${yi0.toFixed(1)} Z`;
+  }
+  // uma fatia com ângulo ~2π (categoria/subcategoria única, ou foco numa categoria) degenera
+  // no arco SVG (ponto inicial == ponto final); parte em duas metades de π quando isso ocorre.
+  function arcoOuCheio(a0, a1, rIn, rOut, cx, cy) {
+    if (a1 - a0 >= 2 * Math.PI - 1e-6) {
+      const am = a0 + Math.PI;
+      return arcoAnel(a0, am, rIn, rOut, cx, cy) + " " + arcoAnel(am, a1, rIn, rOut, cx, cy);
+    }
+    return arcoAnel(a0, a1, rIn, rOut, cx, cy);
+  }
+  // subdivide o arco [a0,a1] de uma categoria entre as subs dela + "sem subcategoria" (resto).
+  // categoria sem nenhuma sub cai no caso subs.length===0: um único segmento atenuado com
+  // v = cat.v cobrindo o arco inteiro (o "atenuado naquele arco" do brief).
+  function fatiasSub(cat, a0, a1, subMap) {
+    const subs = (subMap.get(cat.nm) || []).slice().sort((a, b) => b.v - a.v);
+    const somaSubs = subs.reduce((a, s) => a + s.v, 0);
+    const semSub = Math.max(0, cat.v - somaSubs);
+    const itens = subs.map(s => ({ nm: s.nm, v: s.v, semSub: false }));
+    if (semSub > 1e-9 || itens.length === 0) itens.push({ nm: null, v: semSub || cat.v, semSub: true });
+    const total = itens.reduce((a, i) => a + i.v, 0) || 1;
+    const span = a1 - a0;
+    let ini = a0;
+    return itens.map((it, i) => {
+      const fim = i === itens.length - 1 ? a1 : ini + span * (it.v / total); // última fecha exato em a1
+      const seg = { ...it, a0: ini, a1: fim };
+      ini = fim;
+      return seg;
+    });
+  }
+
+  function drawSunburst() {
+    let cats = despesaPorMacro();
+    const el = $("#donut"), lst = $("#catlist");
+    if (!cats.length) { el.innerHTML = `<p class="vazio">sem despesas</p>`; lst.innerHTML = ""; estado.sunburstFoco = null; return; }
+    if (cats.length > 7) { const top = cats.slice(0, 6); const out = cats.slice(6).reduce((a, c) => a + c.v, 0); cats = [...top, { nm: "Outros", v: out }]; }
+
+    // se a categoria em foco não existe mais na visão atual (mudou o mês/filtro), reseta.
+    const focoPedido = estado.sunburstFoco;
+    if (focoPedido && !cats.some(c => c.nm === focoPedido)) estado.sunburstFoco = null;
+    const foco = estado.sunburstFoco;
+    const viewCats = foco ? cats.filter(c => c.nm === foco) : cats;
+    const total = viewCats.reduce((a, c) => a + c.v, 0);
+
+    const subMap = subPorMacro();
+    const cx = 76, cy = 76;
+    const rC0 = 24, rC1 = 44; // anel interno: categoria
+    const rS0 = 46, rS1 = 64; // anel externo: subcategoria
+
+    let a0 = -Math.PI / 2;
+    const itens = viewCats.map(c => { const a1 = a0 + 2 * Math.PI * c.v / total; const seg = { ...c, a0, a1 }; a0 = a1; return seg; });
+    const segsPorCat = itens.map(c => fatiasSub(c, c.a0, c.a1, subMap));
+
+    let catArcs = "", subArcs = "";
+    itens.forEach((c, i) => {
+      catArcs += `<path d="${arcoOuCheio(c.a0, c.a1, rC0, rC1, cx, cy)}" data-i="${i}" class="sb-cat" style="fill:var(${corDe(c.nm)});stroke:var(--surface);cursor:pointer" stroke-width="2"/>`;
+      segsPorCat[i].forEach((s, j) => {
+        // tom do anel externo: opacidade decrescente por sub (distingue fatias da mesma cor);
+        // "sem subcategoria" fica bem atenuada — é o caso "categoria sem sub" quando é a única.
+        const op = s.semSub ? 0.22 : Math.max(0.35, 0.85 - j * 0.15);
+        subArcs += `<path d="${arcoOuCheio(s.a0, s.a1, rS0, rS1, cx, cy)}" data-ci="${i}" data-si="${j}" class="sb-sub" style="fill:var(${corDe(c.nm)});stroke:var(--surface)" stroke-width="1.5" opacity="${op}"/>`;
+      });
+    });
+
+    const centro = foco
+      ? `<text x="76" y="70" text-anchor="middle" font-size="9" style="font-family:var(--mono);fill:var(--mut)">${esc(foco)}</text>
+         <text x="76" y="88" text-anchor="middle" font-size="14" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text>`
+      : `<text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
+         <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text>`;
+
+    el.innerHTML = `<svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gastos por categoria e subcategoria">
+      ${subArcs}${catArcs}
+      <circle cx="76" cy="76" r="${rC0}" class="sb-center" style="fill:transparent;cursor:${foco ? "pointer" : "default"}"/>
+      ${centro}</svg>`;
+
+    // hover: categoria (anel interno) — nome + valor + % do total da visão atual.
+    el.querySelectorAll(".sb-cat").forEach(p => {
+      p.addEventListener("mousemove", e => { const c = itens[+p.dataset.i]; showTip(e, `<b>${esc(c.nm)}</b><br>${BRL(c.v)} · ${(100 * c.v / total).toFixed(0)}%`); });
+      p.addEventListener("mouseleave", hideTip);
+      // clique numa categoria foca (2º clique na já focada desfoca — sem isso o único jeito
+      // de voltar seria acertar o centro, que fica pequeno quando a fatia toma o círculo todo).
+      p.addEventListener("click", () => {
+        const c = itens[+p.dataset.i];
+        estado.sunburstFoco = (estado.sunburstFoco === c.nm) ? null : c.nm;
+        drawSunburst();
+      });
+    });
+    // hover: subcategoria (anel externo) — "categoria › sub" (ou "sem subcategoria").
+    el.querySelectorAll(".sb-sub").forEach(p => {
+      p.addEventListener("mousemove", e => {
+        const ci = +p.dataset.ci, si = +p.dataset.si, c = itens[ci], s = segsPorCat[ci][si];
+        const rotulo = s.semSub ? `${esc(c.nm)} › sem subcategoria` : `${esc(c.nm)} › ${esc(s.nm)}`;
+        showTip(e, `<b>${rotulo}</b><br>${BRL(s.v)} · ${(100 * s.v / total).toFixed(0)}%`);
+      });
+      p.addEventListener("mouseleave", hideTip);
+    });
+    // clique no centro reseta o foco (visão completa).
+    el.querySelector(".sb-center").addEventListener("click", () => {
+      if (estado.sunburstFoco) { estado.sunburstFoco = null; drawSunburst(); }
+    });
+
+    // legenda lateral sempre lista todas as categorias (não só a focada); a focada fica em
+    // negrito, e clicar numa linha também foca/desfoca — atalho alternativo à fatia no anel.
+    lst.innerHTML = cats.map(c => `<div class="catrow" data-nm="${esc(c.nm)}" style="cursor:pointer"><i class="dot" style="background:var(${corDe(c.nm)})"></i><span class="nm" style="font-weight:${c.nm === foco ? 700 : 400}">${esc(c.nm)}</span><span class="vl">${BRL(c.v)}</span></div>`).join("");
+    lst.querySelectorAll(".catrow").forEach(row => {
+      row.addEventListener("click", () => {
+        const nm = row.dataset.nm;
+        estado.sunburstFoco = (estado.sunburstFoco === nm) ? null : nm;
+        drawSunburst();
+      });
+    });
   }
 
   // ----- waterfall -----
@@ -1026,7 +1162,7 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawDiario(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
@@ -1038,7 +1174,7 @@ if (typeof document !== "undefined") {
       const qs = `?mes=${estado.mes}`;
       const [resumo, metasMes] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs)]);
       estado.resumo = resumo; estado.metasMes = metasMes;
-      drawKPIs(); drawDiario(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa();
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoa();
     } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
   }
 
@@ -1188,6 +1324,6 @@ if (typeof document !== "undefined") {
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }
-  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); } }, 150); });
+  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoa(); } }, 150); });
   carregar();
 }
