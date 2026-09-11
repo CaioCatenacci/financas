@@ -50,6 +50,11 @@
     width:90px;padding:4px 6px;border-radius:6px;text-align:right}
   #planGrade .gAlvo:hover,#planGrade .gAlvo:focus{border-color:var(--line);background:var(--ground);outline:none}
   #planGrade small{display:block;color:var(--mut);font-size:11px;text-align:right}
+  /* Inc 4.5 Tarefa 3: nas células da grade, cor de texto sozinha (herdada de .status-*)
+     some no meio de tanta coluna — reforça com fundo leve + borda à esquerda. Só dentro
+     da grade: a tabela do mês (#planTabela) mantém o visual atual (só cor de texto). */
+  #planGrade td.status-aviso{background:color-mix(in srgb, var(--aviso) 12%, transparent);border-left:3px solid var(--aviso)}
+  #planGrade td.status-estouro{background:color-mix(in srgb, var(--neg) 12%, transparent);border-left:3px solid var(--neg)}
 </style>
 </head>
 <body>
@@ -180,8 +185,8 @@
   <section id="ajustes" class="hidden"></section>
 
   <section id="planejamento" class="hidden">
+    <!-- Inc 4.5 Tarefa 3: mês próprio removido — a tela segue o #mesSel global (estado.mes). -->
     <div class="planhead">
-      <label>Mês <input type="month" id="planMes"></label>
       <button id="planSugerir" class="chip" type="button">Sugerir pra todas</button>
     </div>
     <div class="tblwrap">

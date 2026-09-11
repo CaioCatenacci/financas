@@ -218,6 +218,9 @@ if (typeof document !== "undefined") {
   const hideTip = () => { tip.style.opacity = 0; };
   const MES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
   const mesLabel = ym => MES[+ym.slice(5, 7) - 1];
+  // Inc 4.5 Tarefa 3: rótulo de coluna da grade leva o ano (ex. "jun/26") — mesLabel sozinho
+  // não distingue jun/25 de jun/26 numa grade de 12 meses à frente.
+  const mesLabelAno = ym => `${mesLabel(ym)}/${ym.slice(2, 4)}`;
 
   const estado = {
     periodo: "12m", mes: new Date().toISOString().slice(0, 7), resumo: null, transacoes: [], cores: {}, pessoas: [],
@@ -641,14 +644,34 @@ if (typeof document !== "undefined") {
     return Math.round(parseFloat(s) * 100);
   }
 
-  const mesCorrenteISO = () => new Date().toISOString().slice(0, 7);
   const apiPut = (p, body) => fetch(p, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
     .then(r => { if (!r.ok) throw new Error(`PUT ${p} ${r.status}`); return r; });
 
+  // Inc 4.5 Tarefa 3: soma N meses a um 'YYYY-MM' com aritmética local — evita importar
+  // mesAnterior (backend, worker/metas.js) só pra calcular o fim da janela da grade.
+  function somarMeses(mes, n) {
+    const [a, m] = mes.split("-").map(Number);
+    const total = (m - 1) + n;
+    const ano = a + Math.floor(total / 12);
+    const mesNovo = ((total % 12) + 12) % 12 + 1;
+    return `${ano}-${String(mesNovo).padStart(2, "0")}`;
+  }
+
+  // Inc 4.5 Tarefa 3: replica statusMeta (worker/metas.js) no front pra colorir a grade
+  // sem precisar que o /api/metas/grade devolva status por célula.
+  function statusCelula(realizado_cents, alvo_cents) {
+    if (realizado_cents == null || alvo_cents == null) return ""; // futuro ou sem alvo: neutro
+    if (alvo_cents === 0) return realizado_cents > 0 ? "status-estouro" : "status-normal";
+    const frac = realizado_cents / alvo_cents;
+    if (frac > 1) return "status-estouro";
+    if (frac >= 0.8) return "status-aviso";
+    return "status-normal";
+  }
+
   async function renderPlanejamento() {
-    const mesInput = $("#planMes");
-    if (!mesInput.value) mesInput.value = mesCorrenteISO();
-    const mes = mesInput.value;
+    // Inc 4.5 Tarefa 3: mês próprio (#planMes) removido — a tela segue estado.mes,
+    // que é a mesma fonte do seletor global #mesSel (Tarefa 2).
+    const mes = estado.mes;
     const [dados, sug] = await Promise.all([
       apiGet(`/api/metas?mes=${mes}`),
       apiGet(`/api/metas/sugestao?mes=${mes}`),
@@ -683,15 +706,20 @@ if (typeof document !== "undefined") {
     await renderGrade();
   }
 
-  // ----- Inc 4 Tarefa 8: grade categorias × meses (visão secundária, recolhível) -----
+  // ----- Inc 4 Tarefa 8 / Inc 4.5 Tarefa 3: grade categorias × meses (visão secundária,
+  // recolhível) — ancorada em estado.mes, 12 meses à frente, com ano no rótulo e cor por
+  // célula (status de estouro/aviso/normal, igual à tela do mês). -----
   async function renderGrade() {
-    const g = await apiGet(`/api/metas/grade`);
-    const head = `<thead><tr><th>Categoria</th>${g.meses.map(m => `<th>${mesLabel(m)}</th>`).join("")}</tr></thead>`;
+    const de = estado.mes;
+    const ate = somarMeses(de, 11); // 12 colunas: de..ate inclusive
+    const g = await apiGet(`/api/metas/grade?de=${de}&ate=${ate}`);
+    const head = `<thead><tr><th>Categoria</th>${g.meses.map(m => `<th>${mesLabelAno(m)}</th>`).join("")}</tr></thead>`;
     const body = g.categorias.map(c => {
       const tds = c.celulas.map(cel => {
         const alvo = cel.alvo_cents == null ? "" : centavosBR(cel.alvo_cents / 100 + "");
         const real = cel.realizado_cents == null ? "" : `<small>${centavosBR(cel.realizado_cents / 100 + "")}</small>`;
-        return `<td><input class="gAlvo" type="text" inputmode="decimal" value="${alvo}" data-cat="${c.categoria_id}" data-mes="${cel.mes}">${real}</td>`;
+        const status = statusCelula(cel.realizado_cents, cel.alvo_cents);
+        return `<td class="${status}"><input class="gAlvo" type="text" inputmode="decimal" value="${alvo}" data-cat="${c.categoria_id}" data-mes="${cel.mes}">${real}</td>`;
       }).join("");
       return `<tr><td>${esc(c.categoria)}</td>${tds}</tr>`;
     }).join("");
@@ -714,7 +742,7 @@ if (typeof document !== "undefined") {
     if (!e.target.classList.contains("planAlvo")) return;
     const tr = e.target.closest("tr");
     const categoria_id = tr.dataset.cat;
-    const mes = $("#planMes").value;
+    const mes = estado.mes;
     const raw = e.target.value.trim();
     if (raw === "") { // limpar → apaga exceção do mês (baseline permanece)
       await apiDelete(`/api/metas?categoria_id=${categoria_id}&mes=${mes}&escopo=excecao`).catch(() => {});
@@ -736,8 +764,6 @@ if (typeof document !== "undefined") {
       if (inp.value.trim() === "" && inp.dataset.sug) inp.value = centavosBR(Number(inp.dataset.sug) / 100 + "");
     });
   });
-
-  $("#planMes").addEventListener("change", renderPlanejamento);
 
   // ----- Importar (upload PDF → preview → revisão → aplicar; Task 9) -----
   function tabelaItens(titulo, itens, { comAmbiguo = false } = {}) {
@@ -958,8 +984,8 @@ if (typeof document !== "undefined") {
     if (v === "planejamento") renderPlanejamento();
   }));
 
-  // Inc 4.5 Tarefa 2: mês global — governa Lançamentos (e, indiretamente, Planejamento,
-  // que já tem seu próprio #planMes). Resumo fica de fora nesta fase (segue .period).
+  // Inc 4.5 Tarefa 2/3: mês global — governa Lançamentos e Planejamento (mês corrente
+  // + grade). Resumo fica de fora nesta fase (segue .period).
   $("#mesSel").value = estado.mes;
   $("#mesSel").addEventListener("change", e => {
     estado.mes = e.target.value;
