@@ -61,6 +61,13 @@ export function periodoRange(preset, hoje = new Date()) {
   return { de: "1900-01-01", ate: "2999-12-31" };
 }
 
+// Inc 4.5: range meio-aberto [de, ateExcl) de um mês 'YYYY-MM'. Substitui periodoRange no eixo mês.
+export function rangeDoMes(mes) {
+  const [a, m] = mes.split("-").map(Number);
+  const prox = m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, "0")}`;
+  return { de: `${mes}-01`, ateExcl: `${prox}-01` };
+}
+
 // receita (número) + cats despesa [{nm,v}] → passos do waterfall com lo/hi cumulativos
 export function construirWaterfall(receita, cats) {
   receita = +receita;
@@ -213,11 +220,12 @@ if (typeof document !== "undefined") {
   const mesLabel = ym => MES[+ym.slice(5, 7) - 1];
 
   const estado = {
-    periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
+    periodo: "12m", mes: new Date().toISOString().slice(0, 7), resumo: null, transacoes: [], cores: {}, pessoas: [],
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
     selecao: new Set(), // ids selecionados p/ edição em massa (persiste ao filtrar/re-renderizar)
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
+    lancTudo: false,
   };
 
   // API

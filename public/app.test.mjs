@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  agruparMensal, centavosBR, kf, deltaPct, periodoRange, construirWaterfall, subsDaCat,
+  agruparMensal, centavosBR, kf, deltaPct, periodoRange, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
 } from "./app.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
@@ -50,6 +50,11 @@ test("periodoRange devolve intervalos ISO por preset", () => {
 test("periodoRange mespassado vira o ano em janeiro (jan → dez do ano anterior)", () => {
   const jan = new Date(Date.UTC(2026, 0, 10)); // 2026-01-10
   assert.deepEqual(periodoRange("mespassado", jan), { de: "2025-12-01", ate: "2025-12-31" });
+});
+
+test("rangeDoMes: de = dia 1, ateExcl = dia 1 do mês seguinte (vira o ano)", () => {
+  assert.deepEqual(rangeDoMes("2026-09"), { de: "2026-09-01", ateExcl: "2026-10-01" });
+  assert.deepEqual(rangeDoMes("2026-12"), { de: "2026-12-01", ateExcl: "2027-01-01" });
 });
 
 test("construirWaterfall monta receita → despesas → saldo com lo/hi cumulativos", () => {
