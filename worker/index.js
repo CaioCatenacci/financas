@@ -210,14 +210,26 @@ export async function handleApi(request, env, url, dbOpt = null) {
   if (url.pathname.startsWith("/api/pessoas/") && request.method === "DELETE") { await db.desativarPessoa(id()); return j({ ok: true }); }
 
   if (url.pathname === "/api/resumo") {
-    const de = url.searchParams.get("de") || "1900-01-01";
-    const ate = url.searchParams.get("ate") || "2999-12-31";
+    // mes=YYYY-MM filtra o resumo naquele mês e ancora o mesVsAnterior nele;
+    // sem mes, cai no fallback de/ate (compatibilidade) e mesVsAnterior usa o mês do "ate".
+    const mes = url.searchParams.get("mes");
+    let de, ate, ateExcl, mesRef;
+    if (mes && /^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) {
+      const [ya, ma] = mes.split("-").map(Number);
+      const lastDay = new Date(Date.UTC(ya, ma, 0)).getUTCDate();
+      de = `${mes}-01`; ate = `${mes}-${String(lastDay).padStart(2, "0")}`;
+      ateExcl = primeiroDiaDoMes(mesAnterior(mes, -1)); mesRef = mes;
+    } else {
+      de = url.searchParams.get("de") || "1900-01-01";
+      ate = url.searchParams.get("ate") || "2999-12-31";
+      ateExcl = null; mesRef = (ate || "").slice(0, 7) || new Date().toISOString().slice(0, 7);
+    }
     return j({
       kpis: await db.resumoKPIs(de, ate),
       porCategoria: await db.resumoPorCategoria(de, ate),
-      mensal: await db.resumoMensal(de, ate),
-      mesVsAnterior: await db.resumoMesVsAnterior(),
       porPessoa: await db.resumoPorPessoa(de, ate),
+      mesVsAnterior: await db.resumoMesVsAnterior(mesRef),
+      diario: ateExcl ? await db.resumoDiario(de, ateExcl) : [],
     });
   }
 
