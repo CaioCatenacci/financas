@@ -613,26 +613,83 @@ if (typeof document !== "undefined") {
     });
   }
 
-  // ----- gasto por pessoa -----
-  function drawPessoa() {
+  // ----- Inc 4.5 Tarefa 9: gasto por pessoa — rosca (mesma mecânica de arco do drawDonut),
+  // com o total das despesas no centro; legenda reusa .catlist/.catrow (mesmo estilo do
+  // donut de categorias) com valor e percentual por pessoa. Substitui a barra de drawPessoa.
+  function drawPessoaDonut() {
     const rows = agruparPorPessoa(estado.resumo.porPessoa || []);
     const el = $("#pessoa");
     if (!rows.length) { el.innerHTML = `<p class="vazio">sem despesas no período</p>`; return; }
-    const max = Math.max(1, ...rows.map(r => r.despesa)) * 1.06;
     const cores = construirCores(rows.map(r => r.pessoa));
-    el.innerHTML = rows.map((r, i) => {
-      const w = (100 * r.despesa / max).toFixed(1);
-      return `<div class="pprow" data-i="${i}">
-        <span class="pplabel">${esc(r.pessoa)}</span>
-        <svg class="pptrack" viewBox="0 0 100 14" preserveAspectRatio="none" role="img" aria-label="${esc(r.pessoa)}">
-          <rect x="0" y="2" width="${w}" height="10" rx="3" style="fill:var(${cores[r.pessoa]})"/>
+    const total = rows.reduce((a, r) => a + r.despesa, 0);
+    const R = 64, r = 40, cx = 76, cy = 76;
+    let a0 = -Math.PI / 2, arcs = "";
+    rows.forEach((row, i) => {
+      const a1 = a0 + 2 * Math.PI * row.despesa / (total || 1);
+      const x0 = cx + R * Math.cos(a0), y0 = cy + R * Math.sin(a0), x1 = cx + R * Math.cos(a1), y1 = cy + R * Math.sin(a1);
+      const xi1 = cx + r * Math.cos(a1), yi1 = cy + r * Math.sin(a1), xi0 = cx + r * Math.cos(a0), yi0 = cy + r * Math.sin(a0);
+      const laf = (a1 - a0) > Math.PI ? 1 : 0;
+      arcs += `<path d="M${x0.toFixed(1)},${y0.toFixed(1)} A${R},${R} 0 ${laf} 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${xi1.toFixed(1)},${yi1.toFixed(1)} A${r},${r} 0 ${laf} 0 ${xi0.toFixed(1)},${yi0.toFixed(1)} Z" stroke-width="2" data-i="${i}" style="fill:var(${cores[row.pessoa]});stroke:var(--surface)"/>`;
+      a0 = a1;
+    });
+    el.innerHTML = `<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gasto por pessoa">${arcs}
+        <text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
+        <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text></svg>
+      <div class="catlist" id="pessoalist" style="flex:1;min-width:150px"></div>
+    </div>`;
+    el.querySelectorAll("path").forEach(p => {
+      p.addEventListener("mousemove", e => {
+        const row = rows[+p.dataset.i];
+        const pct = total ? (100 * row.despesa / total).toFixed(0) : "0";
+        showTip(e, `<b>${esc(row.pessoa)}</b><br>Despesa ${BRL(row.despesa)} · ${pct}%<br>Receita ${BRL(row.receita)}<br>Saldo ${BRL(row.saldo)}`);
+      });
+      p.addEventListener("mouseleave", hideTip);
+    });
+    $("#pessoalist").innerHTML = rows.map(row => {
+      const pct = total ? (100 * row.despesa / total).toFixed(0) : "0";
+      return `<div class="catrow"><i class="dot" style="background:var(${cores[row.pessoa]})"></i><span class="nm">${esc(row.pessoa)}</span><span class="vl">${BRL(row.despesa)} · ${pct}%</span></div>`;
+    }).join("");
+  }
+
+  // ----- Inc 4.5 Tarefa 9: orçamento × realizado por categoria (bullet chart) -----
+  // Uma linha por categoria com alvo definido no mês (estado.metasMes.linhas, já carregado
+  // pra Tarefa 7/Planejamento): barra = realizado, marcador vertical = orçamento, cor da
+  // barra pelo mesmo status (normal/aviso/estouro) usado na tela de Planejamento.
+  function corStatusBullet(status) {
+    return status === "estouro" ? "--neg" : status === "aviso" ? "--aviso" : "--ink";
+  }
+  function drawBullet() {
+    const el = $("#bullet");
+    const todas = (estado.metasMes && estado.metasMes.linhas) || [];
+    const linhas = todas.filter(l => l.alvo_cents != null);
+    if (!linhas.length) { el.innerHTML = `<p class="vazio">sem orçamento no mês</p>`; return; }
+    // razão realizado/alvo p/ ordenar por estouro; alvo=0 com gasto vira "infinito" (pior caso),
+    // alvo=0 sem gasto fica em 0 — mesmo tratamento de statusCelula (linha 872) pro caso alvo=0.
+    const razao = l => l.alvo_cents === 0 ? (l.realizado_cents > 0 ? Infinity : 0) : l.realizado_cents / l.alvo_cents;
+    const ordenadas = linhas.slice().sort((a, b) => razao(b) - razao(a));
+    const W = 200, H = 20;
+    el.innerHTML = ordenadas.map((l, i) => {
+      // escala por linha (não comum): categorias de porte muito diferente (aluguel vs lazer)
+      // ficariam ilegíveis numa escala única — max(realizado,alvo)*1.1 dá folga pro marcador.
+      const escala = Math.max(l.realizado_cents, l.alvo_cents, 1) * 1.1;
+      const barraW = Math.min(W, W * l.realizado_cents / escala);
+      const marcaX = Math.min(W, W * l.alvo_cents / escala);
+      return `<div class="bulletrow" data-i="${i}">
+        <span class="bulletlabel">${esc(l.categoria)}</span>
+        <svg class="bullettrack" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(l.categoria)}">
+          <rect x="0" y="4" width="${W}" height="12" rx="3" style="fill:var(--sunk)"/>
+          <rect x="0" y="4" width="${barraW.toFixed(1)}" height="12" rx="3" style="fill:var(${corStatusBullet(l.status)})"/>
+          <line x1="${marcaX.toFixed(1)}" y1="0" x2="${marcaX.toFixed(1)}" y2="${H}" stroke-width="2" style="stroke:var(--ink)"/>
         </svg>
-        <span class="ppval">${BRL(r.despesa)}</span>
+        <span class="bulletval">${BRL(l.realizado_cents / 100)} / ${BRL(l.alvo_cents / 100)}</span>
       </div>`;
     }).join("");
-    el.querySelectorAll(".pprow").forEach(row => {
-      const r = rows[+row.dataset.i];
-      row.addEventListener("mousemove", e => showTip(e, `<b>${esc(r.pessoa)}</b><br>Despesa ${BRL(r.despesa)}<br>Receita ${BRL(r.receita)}<br>Saldo ${BRL(r.saldo)}`));
+    el.querySelectorAll(".bulletrow").forEach(row => {
+      const l = ordenadas[+row.dataset.i];
+      const diff = l.alvo_cents - l.realizado_cents;
+      row.addEventListener("mousemove", e => showTip(e,
+        `<b>${esc(l.categoria)}</b><br>Realizado ${BRL(l.realizado_cents / 100)}<br>Orçamento ${BRL(l.alvo_cents / 100)}<br>${diff >= 0 ? "Falta" : "Estourou"} ${BRL(Math.abs(diff) / 100)}`));
       row.addEventListener("mouseleave", hideTip);
     });
   }
@@ -1162,7 +1219,7 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
@@ -1174,7 +1231,7 @@ if (typeof document !== "undefined") {
       const qs = `?mes=${estado.mes}`;
       const [resumo, metasMes] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs)]);
       estado.resumo = resumo; estado.metasMes = metasMes;
-      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoa();
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet();
     } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
   }
 
@@ -1324,6 +1381,6 @@ if (typeof document !== "undefined") {
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }
-  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoa(); } }, 150); });
+  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet(); } }, 150); });
   carregar();
 }

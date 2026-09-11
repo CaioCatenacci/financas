@@ -55,6 +55,15 @@
      da grade: a tabela do mês (#planTabela) mantém o visual atual (só cor de texto). */
   #planGrade td.status-aviso{background:color-mix(in srgb, var(--aviso) 12%, transparent);border-left:3px solid var(--aviso)}
   #planGrade td.status-estouro{background:color-mix(in srgb, var(--neg) 12%, transparent);border-left:3px solid var(--neg)}
+  /* Inc 4.5 Tarefa 9: bullet chart orçamento × realizado — mesma estrutura de linha do
+     .dbrow (dumbbell), rótulo + track SVG + valores; vive aqui pela mesma razão do bloco
+     acima (task só toca index.html/app.js). */
+  .bulletwrap{display:flex;flex-direction:column;gap:12px}
+  .bulletrow{display:grid;grid-template-columns:160px 1fr 170px;align-items:center;gap:10px}
+  .bulletrow:hover{background:var(--sunk);border-radius:8px;margin:-3px -6px;padding:3px 6px}
+  .bulletlabel{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bullettrack{width:100%;height:20px}
+  .bulletval{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;color:var(--mut);white-space:nowrap;text-align:right}
 </style>
 </head>
 <body>
@@ -119,6 +128,13 @@
     <div class="card" style="margin-top:16px">
       <div class="cardhead"><div><h2>Gasto por pessoa</h2><p class="sub">despesas do período por pessoa</p></div></div>
       <div class="ppwrap" id="pessoa"></div>
+    </div>
+
+    <!-- Inc 4.5 Tarefa 9: bullet chart orçamento × realizado — largura total (fora do
+         .grid two) porque cada linha é uma categoria e o painel cresce com o catálogo. -->
+    <div class="card" style="margin-top:16px">
+      <div class="cardhead"><div><h2>Orçamento × realizado</h2><p class="sub">por categoria, no mês</p></div></div>
+      <div class="bulletwrap" id="bullet"></div>
     </div>
   </section>
 
