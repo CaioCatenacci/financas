@@ -87,6 +87,31 @@ export function subsDaCat(catalogo, categoria_id) {
     .map(s => ({ id: s.id, nome: s.nome }));
 }
 
+// Inc 4.5: acumulado diário do gasto no mês. diario=[{dia:'YYYY-MM-DD', total_cents}] (esparso).
+// hojeISO: se dado e no mês, para nesse dia (mês corrente). Devolve 1 entrada por dia até o limite.
+export function acumularDiario(diario, ano, mes, hojeISO = null) {
+  const porDia = {};
+  for (const d of diario) porDia[d.dia] = d.total_cents;
+  const ultimo = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+  const out = [];
+  let acum = 0;
+  for (let dia = 1; dia <= ultimo; dia++) {
+    const iso = `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+    if (hojeISO && iso > hojeISO) break;         // mês corrente: para em hoje
+    acum += (porDia[iso] || 0);
+    out.push({ dia: iso, acum_cents: acum });
+  }
+  return out;
+}
+
+// reta de "ritmo" do orçamento: linear de 0 (dia 1) ao total (último dia).
+export function paceOrcamento(totalCents, ano, mes) {
+  const ultimo = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+  const out = [];
+  for (let dia = 1; dia <= ultimo; dia++) out.push({ dia, alvo_cents: Math.round(totalCents * dia / ultimo) });
+  return out;
+}
+
 // remove acentos p/ busca acento-insensível ("sao paulo" acha "São Paulo").
 const normalizarBusca = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 

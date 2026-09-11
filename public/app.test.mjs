@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   agruparMensal, centavosBR, kf, deltaPct, periodoRange, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
+  acumularDiario, paceOrcamento,
 } from "./app.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
@@ -441,4 +442,26 @@ test("montarMudancas: combina categoria + pessoa + fora do resumo", () => {
   assert.deepEqual(
     montarMudancas({ categoria: "c1", subcategoria: "s1", pessoa: "p1", computa: "fora" }),
     { categoria_id: "c1", subcategoria_id: "s1", pessoa_id: "p1", computa_resumo: false });
+});
+
+test("acumularDiario: acumula por dia e para em hoje no mês corrente", () => {
+  const diario = [{ dia: "2026-09-01", total_cents: 1000 }, { dia: "2026-09-03", total_cents: 500 }];
+  const r = acumularDiario(diario, 2026, 9, "2026-09-03");
+  assert.equal(r.length, 3);                    // dias 1,2,3 (para em hoje)
+  assert.equal(r[0].acum_cents, 1000);
+  assert.equal(r[1].acum_cents, 1000);          // dia 2 sem gasto: mantém
+  assert.equal(r[2].acum_cents, 1500);          // dia 3 acumula
+});
+
+test("acumularDiario: mês fechado (sem hoje) vai até o último dia", () => {
+  const r = acumularDiario([{ dia: "2026-06-30", total_cents: 200 }], 2026, 6, null);
+  assert.equal(r.length, 30);
+  assert.equal(r[29].acum_cents, 200);
+});
+
+test("paceOrcamento: reta linear de 0 ao total no último dia", () => {
+  const r = paceOrcamento(300000, 2026, 9); // set = 30 dias
+  assert.equal(r.length, 30);
+  assert.equal(r[29].alvo_cents, 300000);
+  assert.equal(r[14].alvo_cents, Math.round(300000 * 15 / 30)); // dia 15
 });
