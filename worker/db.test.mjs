@@ -522,3 +522,25 @@ test("apagarExcecao remove pela chave (categoria, mes)", async () => {
   assert.match(c.text, /delete from metas_excecao/i);
   assert.deepEqual(c.values, ["c1", "2026-08-01"]);
 });
+
+test("resumoDiario: despesa+computa_resumo por dia, meio-aberto, cents numérico", async () => {
+  const sql = fakeSql([{ dia: "2026-09-03", total_cents: "1500" }]); // Neon devolve bigint como STRING
+  const db = criarDb(sql);
+  const r = await db.resumoDiario("2026-09-01", "2026-10-01");
+  assert.equal(typeof r[0].total_cents, "number");
+  assert.equal(r[0].total_cents, 1500);
+  const c = sql.chamadas[0];
+  assert.match(c.text, /natureza = 'despesa'/i);
+  assert.match(c.text, /computa_resumo/i);
+  assert.match(c.text, /data >= .* and .*data < /is);
+  assert.deepEqual(c.values, ["2026-09-01", "2026-10-01"]);
+});
+
+test("resumoMesVsAnterior ancora no mês passado (não em max(data))", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.resumoMesVsAnterior("2026-09");
+  const c = sql.chamadas[0];
+  assert.ok(c.values.includes("2026-09-01") || c.text.includes("2026-09"), "usa o mês passado por parâmetro");
+  assert.doesNotMatch(c.text, /max\(data\)/i);
+});

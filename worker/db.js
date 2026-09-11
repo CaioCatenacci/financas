@@ -239,17 +239,30 @@ export function criarDb(sql) {
       return rows[0];
     },
 
-    // dumbbell: despesa por categoria no último mês com dados vs o anterior. Ancorado em max(data).
-    async resumoMesVsAnterior() {
+    async resumoDiario(de, ateExcl) {
+      const rows = await sql`
+        select to_char(data,'YYYY-MM-DD') as dia,
+               (round(sum(valor_final)*100))::bigint as total_cents
+        from transacoes
+        where natureza = 'despesa' and computa_resumo
+          and data >= ${de} and data < ${ateExcl}
+        group by 1 order by 1`;
+      return rows.map(r => ({ ...r, total_cents: Number(r.total_cents) }));
+    },
+
+    // dumbbell: despesa por categoria no mês de referência vs o anterior. Ancorado no mês passado.
+    async resumoMesVsAnterior(mesRef) {
+      const cur = `${mesRef}-01`;
       return await sql`
-        with m as (select date_trunc('month', max(data)) as cur from transacoes)
+        with m as (select date_trunc('month', ${cur}::date) as cur)
         select c.nome as macro,
           coalesce(sum(t.valor_final) filter (where date_trunc('month', t.data) = (select cur from m)), 0) as atual,
           coalesce(sum(t.valor_final) filter (where date_trunc('month', t.data) = (select cur from m) - interval '1 month'), 0) as ant
         from transacoes t
         left join categorias c on c.id = t.categoria_id
         where t.natureza = 'despesa' and t.computa_resumo
-          and date_trunc('month', t.data) in ((select cur from m), (select cur from m) - interval '1 month')
+          and t.data >= (select cur from m) - interval '1 month'
+          and t.data <  (select cur from m) + interval '1 month'
         group by c.nome
         order by atual desc`;
     },
