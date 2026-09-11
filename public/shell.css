@@ -43,8 +43,6 @@ body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--disp);
   padding:7px 16px;border-radius:9px;cursor:pointer}
 .tab.on{background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
 
-/* período */
-.period{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:18px}
 .chip{border:1px solid var(--line);background:var(--surface);color:var(--mut);font:inherit;font-size:13px;
   font-weight:600;padding:6px 13px;border-radius:999px;cursor:pointer}
 .chip.on{background:var(--ink);color:var(--ground);border-color:var(--ink)}

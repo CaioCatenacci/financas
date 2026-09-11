@@ -224,7 +224,6 @@ function dbApiFake() {
     listarCategorias: async () => [{ macro: "Casa", sub: "Limpeza" }],
     resumoKPIs: async () => ({ receita: 1000, despesa: 500, reembolso: 0 }),
     resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
-    resumoMensal: async () => [{ mes: "2026-09", natureza: "despesa", total: 500 }],
     resumoMesVsAnterior: async () => [{ macro: "Casa", atual: 500, ant: 300 }],
     resumoPorPessoa: async () => [
       { pessoa: "Alice", natureza: "despesa", total: 300 },
@@ -453,8 +452,7 @@ test("/api/resumo inclui porPessoa", async () => {
   assert.equal(data.porPessoa.length, 2, "porPessoa deve ter 2 registros");
   assert.ok(data.kpis, "resposta deve manter kpis");
   assert.ok(data.porCategoria, "resposta deve manter porCategoria");
-  assert.ok(data.mensal, "resposta deve manter mensal");
-  assert.ok(data.mesVsAnterior, "resposta deve manter mesVsAnterior");
+  assert.ok(data.mesVsAnterior, "resposta deve manter mesVsAnterior"); // "mensal" saiu do payload (Task 5, Inc 4.5)
 });
 
 // ---- Inc 4: planejamento (metas) ----
@@ -584,4 +582,27 @@ test("GET /api/metas/grade: default de/ate = 12 meses (−3..+8) do mês corrent
   const req = new Request("http://localhost/api/metas/grade", { headers: cook });
   const data = await (await handleApi(req, envTok, new URL(req.url), db)).json();
   assert.equal(data.meses.length, 12);
+});
+
+// Inc 4.5 Task 5: /api/resumo?mes= — fake dedicado, registra o que a rota passou pro db
+function dbResumoFake() {
+  const estado = { mesRef: null, de: null, ateExcl: null };
+  return {
+    estado,
+    resumoKPIs: async () => ({ receita: 1000, despesa: 500, reembolso: 0 }),
+    resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
+    resumoPorPessoa: async () => [{ pessoa: "Alice", natureza: "despesa", total: 300 }],
+    resumoDiario: async (de, ateExcl) => { estado.de = de; estado.ateExcl = ateExcl; return [{ dia: "2026-09-01", total: 500 }]; },
+    resumoMesVsAnterior: async (mesRef) => { estado.mesRef = mesRef; return [{ macro: "Casa", atual: 500, ant: 300 }]; },
+  };
+}
+
+test("/api/resumo?mes= devolve diario e mesVsAnterior do mês", async () => {
+  const db = dbResumoFake(); // fake com kpis/porCategoria/porPessoa/resumoDiario/resumoMesVsAnterior
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const req = new Request("http://localhost/api/resumo?mes=2026-09", { headers: { "Cookie": "token=token123" } });
+  const data = await (await handleApi(req, env, new URL(req.url), db)).json();
+  assert.ok(Array.isArray(data.diario), "tem diario");
+  assert.ok(Array.isArray(data.mesVsAnterior), "tem mesVsAnterior");
+  assert.equal(db.estado.mesRef, "2026-09"); // resumoMesVsAnterior recebeu o mês
 });

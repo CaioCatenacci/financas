@@ -1,18 +1,6 @@
 // ---------- funções puras (testadas em node) ----------
-export function agruparMensal(rows) {
-  const mapa = new Map();
-  for (const r of rows) {
-    if (!mapa.has(r.mes)) mapa.set(r.mes, { mes: r.mes, receita: 0, despesa: 0, saldo: 0 });
-    const o = mapa.get(r.mes);
-    const v = parseFloat(r.total);
-    if (r.natureza === "receita") o.receita += v; else o.despesa += v;
-    o.saldo = o.receita - o.despesa;
-  }
-  return [...mapa.values()].sort((a, b) => a.mes.localeCompare(b.mes));
-}
-
 // resumo.porPessoa vem do backend como linhas {pessoa, natureza, total} (uma por pessoa×natureza)
-// dobra em uma linha por pessoa. Mesmo formato de saída que agruparMensal usa (receita/despesa/saldo).
+// dobra em uma linha por pessoa. Mesmo formato de saída que agruparPorPessoa devolve (receita/despesa/saldo).
 // Ordena por despesa desc porque é um corte de gasto (quem gastou mais primeiro).
 export function agruparPorPessoa(rows) {
   const mapa = new Map();
@@ -42,23 +30,11 @@ export function deltaPct(ant, atual) {
   return (atual - ant) / ant * 100;
 }
 
-export function periodoRange(preset, hoje = new Date()) {
-  const y = hoje.getUTCFullYear(), m = hoje.getUTCMonth();
-  const pad = x => String(x).padStart(2, "0");
-  const iso = (yy, mm, dd) => `${yy}-${pad(mm + 1)}-${pad(dd)}`;
-  const lastDay = (yy, mm) => new Date(Date.UTC(yy, mm + 1, 0)).getUTCDate();
-  if (preset === "mes") return { de: iso(y, m, 1), ate: iso(y, m, lastDay(y, m)) };
-  if (preset === "mespassado") {
-    // mês anterior; Date resolve a virada de ano (janeiro → dezembro do ano passado)
-    const d = new Date(Date.UTC(y, m - 1, 1)), yy = d.getUTCFullYear(), mm = d.getUTCMonth();
-    return { de: iso(yy, mm, 1), ate: iso(yy, mm, lastDay(yy, mm)) };
-  }
-  if (preset === "ano") return { de: `${y}-01-01`, ate: `${y}-12-31` };
-  if (preset === "12m") {
-    const s = new Date(Date.UTC(y, m - 11, 1));
-    return { de: iso(s.getUTCFullYear(), s.getUTCMonth(), 1), ate: iso(y, m, lastDay(y, m)) };
-  }
-  return { de: "1900-01-01", ate: "2999-12-31" };
+// Inc 4.5: range meio-aberto [de, ateExcl) de um mês 'YYYY-MM'.
+export function rangeDoMes(mes) {
+  const [a, m] = mes.split("-").map(Number);
+  const prox = m === 12 ? `${a + 1}-01` : `${a}-${String(m + 1).padStart(2, "0")}`;
+  return { de: `${mes}-01`, ateExcl: `${prox}-01` };
 }
 
 // receita (número) + cats despesa [{nm,v}] → passos do waterfall com lo/hi cumulativos
@@ -78,6 +54,31 @@ export function subsDaCat(catalogo, categoria_id) {
   return (catalogo.subcategorias || [])
     .filter(s => s.categoria_id === categoria_id)
     .map(s => ({ id: s.id, nome: s.nome }));
+}
+
+// Inc 4.5: acumulado diário do gasto no mês. diario=[{dia:'YYYY-MM-DD', total_cents}] (esparso).
+// hojeISO: se dado e no mês, para nesse dia (mês corrente). Devolve 1 entrada por dia até o limite.
+export function acumularDiario(diario, ano, mes, hojeISO = null) {
+  const porDia = {};
+  for (const d of diario) porDia[d.dia] = d.total_cents;
+  const ultimo = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+  const out = [];
+  let acum = 0;
+  for (let dia = 1; dia <= ultimo; dia++) {
+    const iso = `${ano}-${String(mes).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+    if (hojeISO && iso > hojeISO) break;         // mês corrente: para em hoje
+    acum += (porDia[iso] || 0);
+    out.push({ dia: iso, acum_cents: acum });
+  }
+  return out;
+}
+
+// reta de "ritmo" do orçamento: linear de 0 (dia 1) ao total (último dia).
+export function paceOrcamento(totalCents, ano, mes) {
+  const ultimo = new Date(Date.UTC(ano, mes, 0)).getUTCDate();
+  const out = [];
+  for (let dia = 1; dia <= ultimo; dia++) out.push({ dia, alvo_cents: Math.round(totalCents * dia / ultimo) });
+  return out;
 }
 
 // remove acentos p/ busca acento-insensível ("sao paulo" acha "São Paulo").
@@ -211,13 +212,18 @@ if (typeof document !== "undefined") {
   const hideTip = () => { tip.style.opacity = 0; };
   const MES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
   const mesLabel = ym => MES[+ym.slice(5, 7) - 1];
+  // Inc 4.5 Tarefa 3: rótulo de coluna da grade leva o ano (ex. "jun/26") — mesLabel sozinho
+  // não distingue jun/25 de jun/26 numa grade de 12 meses à frente.
+  const mesLabelAno = ym => `${mesLabel(ym)}/${ym.slice(2, 4)}`;
 
   const estado = {
-    periodo: "12m", resumo: null, transacoes: [], cores: {}, pessoas: [],
+    mes: new Date().toISOString().slice(0, 7), resumo: null, metasMes: null, transacoes: [], cores: {}, pessoas: [],
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
     selecao: new Set(), // ids selecionados p/ edição em massa (persiste ao filtrar/re-renderizar)
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
+    lancTudo: false,
+    sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
   };
 
   // API
@@ -259,39 +265,50 @@ if (typeof document !== "undefined") {
       cel("Reembolso (IR)", reembolso, "--c3", "dedutível");
   }
 
-  // ----- evolução mensal -----
-  function drawEvo() {
-    const dados = agruparMensal(estado.resumo.mensal || []);
-    const W = 560, H = 230, pl = 8, pr = 8, pt = 14, pb = 26, iw = W - pl - pr, ih = H - pt - pb;
+  // ----- Inc 4.5 Tarefa 7: gasto no mês — acumulado × orçamento -----
+  function drawDiario() {
+    const [ano, mes] = estado.mes.split("-").map(Number);
+    const hojeISO = new Date().toISOString().slice(0, 10);
+    // só passa hojeISO (e portanto para a curva em hoje) quando o mês selecionado é o
+    // corrente; num mês passado/futuro a curva cobre o mês inteiro.
+    const hojeSeMesCorrente = hojeISO.slice(0, 7) === estado.mes ? hojeISO : null;
+    const acum = acumularDiario(estado.resumo.diario || [], ano, mes, hojeSeMesCorrente);
+    const alvoTotal = +(estado.metasMes?.total?.alvo_cents || 0);
+    const pace = paceOrcamento(alvoTotal, ano, mes); // reta cobre o mês inteiro, não para em hoje
+    const ultimo = pace.length;
     const el = $("#evo");
-    if (!dados.length) { el.innerHTML = `<p class="vazio">sem dados no período</p>`; return; }
-    // domínio inclui o saldo negativo (senão a barra de saldo é desenhada fora do viewBox
-    // quando a receita é 0 e vaza do card via svg{overflow}). hi = topo, lo = fundo (≤ 0).
-    const hi = Math.max(1, ...dados.map(d => Math.max(d.receita, d.despesa))) * 1.1;
-    const lo = Math.min(0, ...dados.map(d => d.saldo)) * 1.1;
-    const n = dados.length;
-    const X = i => n === 1 ? pl + iw / 2 : pl + iw * i / (n - 1), Y = v => pt + ih * (hi - v) / (hi - lo);
-    const path = key => dados.map((d, i) => (i ? "L" : "M") + X(i).toFixed(1) + "," + Y(d[key]).toFixed(1)).join(" ");
-    // fecha a área na linha do zero (Y(0)), não no fundo do viewBox: com domínio [lo,hi]
-    // e lo<0, pt+ih passou a ser Y(lo), o que inflava o preenchimento até o piso negativo.
-    const area = key => path(key) + ` L${X(n - 1).toFixed(1)},${Y(0).toFixed(1)} L${X(0).toFixed(1)},${Y(0).toFixed(1)} Z`;
+    if (!ultimo) { el.innerHTML = `<p class="vazio">sem dados no mês</p>`; return; }
+    const W = 560, H = 230, pl = 8, pr = 8, pt = 14, pb = 26, iw = W - pl - pr, ih = H - pt - pb;
+    // domínio Y = maior entre o pico do acumulado (é monotônico, então é a última entrada)
+    // e o orçamento total (última entrada da reta de ritmo), com folga de 10%.
+    const maiorAcum = acum.length ? acum[acum.length - 1].acum_cents / 100 : 0;
+    const orcamentoTotal = alvoTotal / 100;
+    const hi = Math.max(1, maiorAcum, orcamentoTotal) * 1.1;
+    const X = d => ultimo === 1 ? pl + iw / 2 : pl + iw * (d - 1) / (ultimo - 1);
+    const Y = v => pt + ih * (hi - v) / hi;
     let g = "";
     for (let k = 0; k <= 3; k++) { const y = pt + ih * k / 3; g += `<line class="grid-l" x1="${pl}" y1="${y}" x2="${W - pr}" y2="${y}"/>`; }
-    let bars = "";
-    dados.forEach((d, i) => { const s = d.saldo; bars += `<rect x="${(X(i) - 3.5).toFixed(1)}" y="${(s >= 0 ? Y(s) : Y(0)).toFixed(1)}" width="7" height="${Math.abs(Y(s) - Y(0)).toFixed(1)}" rx="2" opacity=".28" style="fill:var(--dim)"/>`; });
+    // pace[i]/acum[i] têm 1 entrada por dia a partir do dia 1, em ordem — o índice já é o dia-1.
+    const pathAlvo = pace.map((p, i) => (i ? "L" : "M") + X(p.dia).toFixed(1) + "," + Y(p.alvo_cents / 100).toFixed(1)).join(" ");
+    const pathGasto = acum.map((a, i) => (i ? "L" : "M") + X(i + 1).toFixed(1) + "," + Y(a.acum_cents / 100).toFixed(1)).join(" ");
     let labels = "";
-    const step = n > 8 ? 2 : 1;
-    dados.forEach((d, i) => { if (i % step === 0) labels += `<text class="axis" x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${mesLabel(d.mes)}</text>`; });
+    const step = ultimo > 20 ? 5 : ultimo > 10 ? 2 : 1;
+    for (let d = 1; d <= ultimo; d++) if ((d - 1) % step === 0) labels += `<text class="axis" x="${X(d).toFixed(1)}" y="${H - 8}" text-anchor="middle">${d}</text>`;
     let hot = "";
-    dados.forEach((d, i) => { const w = iw / n; hot += `<rect x="${(X(i) - w / 2).toFixed(1)}" y="${pt}" width="${w.toFixed(1)}" height="${ih}" fill="transparent" data-i="${i}"/>`; });
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Evolução mensal">
-      ${g}${bars}
-      <path d="${area("despesa")}" opacity=".10" style="fill:var(--despesa)"/>
-      <path d="${path("despesa")}" stroke-width="2" style="fill:none;stroke:var(--despesa)"/>
-      <path d="${path("receita")}" stroke-width="2" style="fill:none;stroke:var(--receita)"/>
+    const w = iw / ultimo;
+    for (let d = 1; d <= ultimo; d++) hot += `<rect x="${(X(d) - w / 2).toFixed(1)}" y="${pt}" width="${w.toFixed(1)}" height="${ih}" fill="transparent" data-d="${d}"/>`;
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Gasto no mês">
+      ${g}
+      <path d="${pathAlvo}" stroke-width="2" stroke-dasharray="4 3" style="fill:none;stroke:var(--dim)"/>
+      ${pathGasto ? `<path d="${pathGasto}" stroke-width="2" style="fill:none;stroke:var(--despesa)"/>` : ""}
       ${labels}<g id="evohot">${hot}</g></svg>`;
     $("#evohot").querySelectorAll("rect").forEach(r => {
-      r.addEventListener("mousemove", e => { const d = dados[+r.dataset.i]; showTip(e, `<b>${mesLabel(d.mes)}</b><br>Receita ${BRL(d.receita)}<br>Despesa ${BRL(d.despesa)}<br>Saldo ${BRL(d.saldo)}`); });
+      r.addEventListener("mousemove", e => {
+        const d = +r.dataset.d;
+        const gasto = d <= acum.length ? acum[d - 1].acum_cents / 100 : null;
+        const alvo = pace[d - 1].alvo_cents / 100;
+        showTip(e, `<b>dia ${d}</b><br>${gasto != null ? `Gasto acumulado ${BRL(gasto)}` : "sem gasto registrado ainda"}<br>Orçamento previsto ${BRL(alvo)}`);
+      });
       r.addEventListener("mouseleave", hideTip);
     });
   }
@@ -306,30 +323,139 @@ if (typeof document !== "undefined") {
     return [...m.entries()].map(([nm, v]) => ({ nm, v })).sort((a, b) => b.v - a.v);
   }
 
-  // ----- donut -----
-  function drawDonut() {
+  // ----- Inc 4.5 Tarefa 8: sunburst categoria (anel interno) + subcategoria (anel externo) -----
+  // agrupa porCategoria (só despesa, linhas com sub preenchida) por macro → [{nm(sub), v}].
+  // O total de uma categoria (despesaPorMacro) inclui tanto as linhas com sub quanto as sem
+  // (sub null); a diferença entre o total da macro e a soma das subs é o "sem subcategoria".
+  function subPorMacro() {
+    const m = new Map();
+    for (const r of (estado.resumo.porCategoria || [])) {
+      if (r.natureza !== "despesa" || !r.sub) continue;
+      if (!m.has(r.macro)) m.set(r.macro, []);
+      m.get(r.macro).push({ nm: r.sub, v: parseFloat(r.total) });
+    }
+    return m;
+  }
+
+  // caminho de um arco de anel (mesma geometria do donut, generalizada p/ raio interno/externo
+  // arbitrários — reusada pelos dois anéis do sunburst).
+  function arcoAnel(a0, a1, rIn, rOut, cx, cy) {
+    const laf = (a1 - a0) > Math.PI ? 1 : 0;
+    const x0 = cx + rOut * Math.cos(a0), y0 = cy + rOut * Math.sin(a0);
+    const x1 = cx + rOut * Math.cos(a1), y1 = cy + rOut * Math.sin(a1);
+    const xi1 = cx + rIn * Math.cos(a1), yi1 = cy + rIn * Math.sin(a1);
+    const xi0 = cx + rIn * Math.cos(a0), yi0 = cy + rIn * Math.sin(a0);
+    return `M${x0.toFixed(1)},${y0.toFixed(1)} A${rOut},${rOut} 0 ${laf} 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${xi1.toFixed(1)},${yi1.toFixed(1)} A${rIn},${rIn} 0 ${laf} 0 ${xi0.toFixed(1)},${yi0.toFixed(1)} Z`;
+  }
+  // uma fatia com ângulo ~2π (categoria/subcategoria única, ou foco numa categoria) degenera
+  // no arco SVG (ponto inicial == ponto final); parte em duas metades de π quando isso ocorre.
+  function arcoOuCheio(a0, a1, rIn, rOut, cx, cy) {
+    if (a1 - a0 >= 2 * Math.PI - 1e-6) {
+      const am = a0 + Math.PI;
+      return arcoAnel(a0, am, rIn, rOut, cx, cy) + " " + arcoAnel(am, a1, rIn, rOut, cx, cy);
+    }
+    return arcoAnel(a0, a1, rIn, rOut, cx, cy);
+  }
+  // subdivide o arco [a0,a1] de uma categoria entre as subs dela + "sem subcategoria" (resto).
+  // categoria sem nenhuma sub cai no caso subs.length===0: um único segmento atenuado com
+  // v = cat.v cobrindo o arco inteiro (o "atenuado naquele arco" do brief).
+  function fatiasSub(cat, a0, a1, subMap) {
+    const subs = (subMap.get(cat.nm) || []).slice().sort((a, b) => b.v - a.v);
+    const somaSubs = subs.reduce((a, s) => a + s.v, 0);
+    const semSub = Math.max(0, cat.v - somaSubs);
+    const itens = subs.map(s => ({ nm: s.nm, v: s.v, semSub: false }));
+    if (semSub > 1e-9 || itens.length === 0) itens.push({ nm: null, v: semSub || cat.v, semSub: true });
+    const total = itens.reduce((a, i) => a + i.v, 0) || 1;
+    const span = a1 - a0;
+    let ini = a0;
+    return itens.map((it, i) => {
+      const fim = i === itens.length - 1 ? a1 : ini + span * (it.v / total); // última fecha exato em a1
+      const seg = { ...it, a0: ini, a1: fim };
+      ini = fim;
+      return seg;
+    });
+  }
+
+  function drawSunburst() {
     let cats = despesaPorMacro();
     const el = $("#donut"), lst = $("#catlist");
-    if (!cats.length) { el.innerHTML = `<p class="vazio">sem despesas</p>`; lst.innerHTML = ""; return; }
+    if (!cats.length) { el.innerHTML = `<p class="vazio">sem despesas</p>`; lst.innerHTML = ""; estado.sunburstFoco = null; return; }
     if (cats.length > 7) { const top = cats.slice(0, 6); const out = cats.slice(6).reduce((a, c) => a + c.v, 0); cats = [...top, { nm: "Outros", v: out }]; }
-    const total = cats.reduce((a, c) => a + c.v, 0), R = 64, r = 40, cx = 76, cy = 76;
-    let a0 = -Math.PI / 2, arcs = "";
-    cats.forEach((c, i) => {
-      const a1 = a0 + 2 * Math.PI * c.v / total;
-      const x0 = cx + R * Math.cos(a0), y0 = cy + R * Math.sin(a0), x1 = cx + R * Math.cos(a1), y1 = cy + R * Math.sin(a1);
-      const xi1 = cx + r * Math.cos(a1), yi1 = cy + r * Math.sin(a1), xi0 = cx + r * Math.cos(a0), yi0 = cy + r * Math.sin(a0);
-      const laf = (a1 - a0) > Math.PI ? 1 : 0;
-      arcs += `<path d="M${x0.toFixed(1)},${y0.toFixed(1)} A${R},${R} 0 ${laf} 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${xi1.toFixed(1)},${yi1.toFixed(1)} A${r},${r} 0 ${laf} 0 ${xi0.toFixed(1)},${yi0.toFixed(1)} Z" stroke-width="2" data-i="${i}" style="fill:var(${corDe(c.nm)});stroke:var(--surface)"/>`;
-      a0 = a1;
+
+    // se a categoria em foco não existe mais na visão atual (mudou o mês/filtro), reseta.
+    const focoPedido = estado.sunburstFoco;
+    if (focoPedido && !cats.some(c => c.nm === focoPedido)) estado.sunburstFoco = null;
+    const foco = estado.sunburstFoco;
+    const viewCats = foco ? cats.filter(c => c.nm === foco) : cats;
+    const total = viewCats.reduce((a, c) => a + c.v, 0);
+
+    const subMap = subPorMacro();
+    const cx = 76, cy = 76;
+    const rC0 = 24, rC1 = 44; // anel interno: categoria
+    const rS0 = 46, rS1 = 64; // anel externo: subcategoria
+
+    let a0 = -Math.PI / 2;
+    const itens = viewCats.map(c => { const a1 = a0 + 2 * Math.PI * c.v / total; const seg = { ...c, a0, a1 }; a0 = a1; return seg; });
+    const segsPorCat = itens.map(c => fatiasSub(c, c.a0, c.a1, subMap));
+
+    let catArcs = "", subArcs = "";
+    itens.forEach((c, i) => {
+      catArcs += `<path d="${arcoOuCheio(c.a0, c.a1, rC0, rC1, cx, cy)}" data-i="${i}" class="sb-cat" style="fill:var(${corDe(c.nm)});stroke:var(--surface);cursor:pointer" stroke-width="2"/>`;
+      segsPorCat[i].forEach((s, j) => {
+        // tom do anel externo: opacidade decrescente por sub (distingue fatias da mesma cor);
+        // "sem subcategoria" fica bem atenuada — é o caso "categoria sem sub" quando é a única.
+        const op = s.semSub ? 0.22 : Math.max(0.35, 0.85 - j * 0.15);
+        subArcs += `<path d="${arcoOuCheio(s.a0, s.a1, rS0, rS1, cx, cy)}" data-ci="${i}" data-si="${j}" class="sb-sub" style="fill:var(${corDe(c.nm)});stroke:var(--surface)" stroke-width="1.5" opacity="${op}"/>`;
+      });
     });
-    el.innerHTML = `<svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gastos por categoria">${arcs}
-      <text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
-      <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text></svg>`;
-    el.querySelectorAll("path").forEach(p => {
-      p.addEventListener("mousemove", e => { const c = cats[+p.dataset.i]; showTip(e, `<b>${esc(c.nm)}</b><br>${BRL(c.v)} · ${(100 * c.v / total).toFixed(0)}%`); });
+
+    const centro = foco
+      ? `<text x="76" y="70" text-anchor="middle" font-size="9" style="font-family:var(--mono);fill:var(--mut)">${esc(foco)}</text>
+         <text x="76" y="88" text-anchor="middle" font-size="14" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text>`
+      : `<text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
+         <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text>`;
+
+    el.innerHTML = `<svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gastos por categoria e subcategoria">
+      ${subArcs}${catArcs}
+      <circle cx="76" cy="76" r="${rC0}" class="sb-center" style="fill:transparent;cursor:${foco ? "pointer" : "default"}"/>
+      ${centro}</svg>`;
+
+    // hover: categoria (anel interno) — nome + valor + % do total da visão atual.
+    el.querySelectorAll(".sb-cat").forEach(p => {
+      p.addEventListener("mousemove", e => { const c = itens[+p.dataset.i]; showTip(e, `<b>${esc(c.nm)}</b><br>${BRL(c.v)} · ${(100 * c.v / total).toFixed(0)}%`); });
+      p.addEventListener("mouseleave", hideTip);
+      // clique numa categoria foca (2º clique na já focada desfoca — sem isso o único jeito
+      // de voltar seria acertar o centro, que fica pequeno quando a fatia toma o círculo todo).
+      p.addEventListener("click", () => {
+        const c = itens[+p.dataset.i];
+        estado.sunburstFoco = (estado.sunburstFoco === c.nm) ? null : c.nm;
+        drawSunburst();
+      });
+    });
+    // hover: subcategoria (anel externo) — "categoria › sub" (ou "sem subcategoria").
+    el.querySelectorAll(".sb-sub").forEach(p => {
+      p.addEventListener("mousemove", e => {
+        const ci = +p.dataset.ci, si = +p.dataset.si, c = itens[ci], s = segsPorCat[ci][si];
+        const rotulo = s.semSub ? `${esc(c.nm)} › sem subcategoria` : `${esc(c.nm)} › ${esc(s.nm)}`;
+        showTip(e, `<b>${rotulo}</b><br>${BRL(s.v)} · ${(100 * s.v / total).toFixed(0)}%`);
+      });
       p.addEventListener("mouseleave", hideTip);
     });
-    lst.innerHTML = cats.map(c => `<div class="catrow"><i class="dot" style="background:var(${corDe(c.nm)})"></i><span class="nm">${esc(c.nm)}</span><span class="vl">${BRL(c.v)}</span></div>`).join("");
+    // clique no centro reseta o foco (visão completa).
+    el.querySelector(".sb-center").addEventListener("click", () => {
+      if (estado.sunburstFoco) { estado.sunburstFoco = null; drawSunburst(); }
+    });
+
+    // legenda lateral sempre lista todas as categorias (não só a focada); a focada fica em
+    // negrito, e clicar numa linha também foca/desfoca — atalho alternativo à fatia no anel.
+    lst.innerHTML = cats.map(c => `<div class="catrow" data-nm="${esc(c.nm)}" style="cursor:pointer"><i class="dot" style="background:var(${corDe(c.nm)})"></i><span class="nm" style="font-weight:${c.nm === foco ? 700 : 400}">${esc(c.nm)}</span><span class="vl">${BRL(c.v)}</span></div>`).join("");
+    lst.querySelectorAll(".catrow").forEach(row => {
+      row.addEventListener("click", () => {
+        const nm = row.dataset.nm;
+        estado.sunburstFoco = (estado.sunburstFoco === nm) ? null : nm;
+        drawSunburst();
+      });
+    });
   }
 
   // ----- waterfall -----
@@ -392,26 +518,83 @@ if (typeof document !== "undefined") {
     });
   }
 
-  // ----- gasto por pessoa -----
-  function drawPessoa() {
+  // ----- Inc 4.5 Tarefa 9: gasto por pessoa — rosca (mesma mecânica de arco do drawDonut),
+  // com o total das despesas no centro; legenda reusa .catlist/.catrow (mesmo estilo do
+  // donut de categorias) com valor e percentual por pessoa. Substitui a barra de drawPessoa.
+  function drawPessoaDonut() {
     const rows = agruparPorPessoa(estado.resumo.porPessoa || []);
     const el = $("#pessoa");
     if (!rows.length) { el.innerHTML = `<p class="vazio">sem despesas no período</p>`; return; }
-    const max = Math.max(1, ...rows.map(r => r.despesa)) * 1.06;
     const cores = construirCores(rows.map(r => r.pessoa));
-    el.innerHTML = rows.map((r, i) => {
-      const w = (100 * r.despesa / max).toFixed(1);
-      return `<div class="pprow" data-i="${i}">
-        <span class="pplabel">${esc(r.pessoa)}</span>
-        <svg class="pptrack" viewBox="0 0 100 14" preserveAspectRatio="none" role="img" aria-label="${esc(r.pessoa)}">
-          <rect x="0" y="2" width="${w}" height="10" rx="3" style="fill:var(${cores[r.pessoa]})"/>
+    const total = rows.reduce((a, r) => a + r.despesa, 0);
+    const R = 64, r = 40, cx = 76, cy = 76;
+    let a0 = -Math.PI / 2, arcs = "";
+    rows.forEach((row, i) => {
+      const a1 = a0 + 2 * Math.PI * row.despesa / (total || 1);
+      const x0 = cx + R * Math.cos(a0), y0 = cy + R * Math.sin(a0), x1 = cx + R * Math.cos(a1), y1 = cy + R * Math.sin(a1);
+      const xi1 = cx + r * Math.cos(a1), yi1 = cy + r * Math.sin(a1), xi0 = cx + r * Math.cos(a0), yi0 = cy + r * Math.sin(a0);
+      const laf = (a1 - a0) > Math.PI ? 1 : 0;
+      arcs += `<path d="M${x0.toFixed(1)},${y0.toFixed(1)} A${R},${R} 0 ${laf} 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${xi1.toFixed(1)},${yi1.toFixed(1)} A${r},${r} 0 ${laf} 0 ${xi0.toFixed(1)},${yi0.toFixed(1)} Z" stroke-width="2" data-i="${i}" style="fill:var(${cores[row.pessoa]});stroke:var(--surface)"/>`;
+      a0 = a1;
+    });
+    el.innerHTML = `<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+      <svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gasto por pessoa">${arcs}
+        <text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
+        <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text></svg>
+      <div class="catlist" id="pessoalist" style="flex:1;min-width:150px"></div>
+    </div>`;
+    el.querySelectorAll("path").forEach(p => {
+      p.addEventListener("mousemove", e => {
+        const row = rows[+p.dataset.i];
+        const pct = total ? (100 * row.despesa / total).toFixed(0) : "0";
+        showTip(e, `<b>${esc(row.pessoa)}</b><br>Despesa ${BRL(row.despesa)} · ${pct}%<br>Receita ${BRL(row.receita)}<br>Saldo ${BRL(row.saldo)}`);
+      });
+      p.addEventListener("mouseleave", hideTip);
+    });
+    $("#pessoalist").innerHTML = rows.map(row => {
+      const pct = total ? (100 * row.despesa / total).toFixed(0) : "0";
+      return `<div class="catrow"><i class="dot" style="background:var(${cores[row.pessoa]})"></i><span class="nm">${esc(row.pessoa)}</span><span class="vl">${BRL(row.despesa)} · ${pct}%</span></div>`;
+    }).join("");
+  }
+
+  // ----- Inc 4.5 Tarefa 9: orçamento × realizado por categoria (bullet chart) -----
+  // Uma linha por categoria com alvo definido no mês (estado.metasMes.linhas, já carregado
+  // pra Tarefa 7/Planejamento): barra = realizado, marcador vertical = orçamento, cor da
+  // barra pelo mesmo status (normal/aviso/estouro) usado na tela de Planejamento.
+  function corStatusBullet(status) {
+    return status === "estouro" ? "--neg" : status === "aviso" ? "--aviso" : "--ink";
+  }
+  function drawBullet() {
+    const el = $("#bullet");
+    const todas = (estado.metasMes && estado.metasMes.linhas) || [];
+    const linhas = todas.filter(l => l.alvo_cents != null);
+    if (!linhas.length) { el.innerHTML = `<p class="vazio">sem orçamento no mês</p>`; return; }
+    // razão realizado/alvo p/ ordenar por estouro; alvo=0 com gasto vira "infinito" (pior caso),
+    // alvo=0 sem gasto fica em 0 — mesmo tratamento de statusCelula pro caso alvo=0.
+    const razao = l => l.alvo_cents === 0 ? (l.realizado_cents > 0 ? Infinity : 0) : l.realizado_cents / l.alvo_cents;
+    const ordenadas = linhas.slice().sort((a, b) => razao(b) - razao(a));
+    const W = 200, H = 20;
+    el.innerHTML = ordenadas.map((l, i) => {
+      // escala por linha (não comum): categorias de porte muito diferente (aluguel vs lazer)
+      // ficariam ilegíveis numa escala única — max(realizado,alvo)*1.1 dá folga pro marcador.
+      const escala = Math.max(l.realizado_cents, l.alvo_cents, 1) * 1.1;
+      const barraW = Math.min(W, W * l.realizado_cents / escala);
+      const marcaX = Math.min(W, W * l.alvo_cents / escala);
+      return `<div class="bulletrow" data-i="${i}">
+        <span class="bulletlabel">${esc(l.categoria)}</span>
+        <svg class="bullettrack" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(l.categoria)}">
+          <rect x="0" y="4" width="${W}" height="12" rx="3" style="fill:var(--sunk)"/>
+          <rect x="0" y="4" width="${barraW.toFixed(1)}" height="12" rx="3" style="fill:var(${corStatusBullet(l.status)})"/>
+          <line x1="${marcaX.toFixed(1)}" y1="0" x2="${marcaX.toFixed(1)}" y2="${H}" stroke-width="2" style="stroke:var(--ink)"/>
         </svg>
-        <span class="ppval">${BRL(r.despesa)}</span>
+        <span class="bulletval">${BRL(l.realizado_cents / 100)} / ${BRL(l.alvo_cents / 100)}</span>
       </div>`;
     }).join("");
-    el.querySelectorAll(".pprow").forEach(row => {
-      const r = rows[+row.dataset.i];
-      row.addEventListener("mousemove", e => showTip(e, `<b>${esc(r.pessoa)}</b><br>Despesa ${BRL(r.despesa)}<br>Receita ${BRL(r.receita)}<br>Saldo ${BRL(r.saldo)}`));
+    el.querySelectorAll(".bulletrow").forEach(row => {
+      const l = ordenadas[+row.dataset.i];
+      const diff = l.alvo_cents - l.realizado_cents;
+      row.addEventListener("mousemove", e => showTip(e,
+        `<b>${esc(l.categoria)}</b><br>Realizado ${BRL(l.realizado_cents / 100)}<br>Orçamento ${BRL(l.alvo_cents / 100)}<br>${diff >= 0 ? "Falta" : "Estourou"} ${BRL(Math.abs(diff) / 100)}`));
       row.addEventListener("mouseleave", hideTip);
     });
   }
@@ -633,14 +816,34 @@ if (typeof document !== "undefined") {
     return Math.round(parseFloat(s) * 100);
   }
 
-  const mesCorrenteISO = () => new Date().toISOString().slice(0, 7);
   const apiPut = (p, body) => fetch(p, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
     .then(r => { if (!r.ok) throw new Error(`PUT ${p} ${r.status}`); return r; });
 
+  // Inc 4.5 Tarefa 3: soma N meses a um 'YYYY-MM' com aritmética local — evita importar
+  // mesAnterior (backend, worker/metas.js) só pra calcular o fim da janela da grade.
+  function somarMeses(mes, n) {
+    const [a, m] = mes.split("-").map(Number);
+    const total = (m - 1) + n;
+    const ano = a + Math.floor(total / 12);
+    const mesNovo = ((total % 12) + 12) % 12 + 1;
+    return `${ano}-${String(mesNovo).padStart(2, "0")}`;
+  }
+
+  // Inc 4.5 Tarefa 3: replica statusMeta (worker/metas.js) no front pra colorir a grade
+  // sem precisar que o /api/metas/grade devolva status por célula.
+  function statusCelula(realizado_cents, alvo_cents) {
+    if (realizado_cents == null || alvo_cents == null) return ""; // futuro ou sem alvo: neutro
+    if (alvo_cents === 0) return realizado_cents > 0 ? "status-estouro" : "status-normal";
+    const frac = realizado_cents / alvo_cents;
+    if (frac > 1) return "status-estouro";
+    if (frac >= 0.8) return "status-aviso";
+    return "status-normal";
+  }
+
   async function renderPlanejamento() {
-    const mesInput = $("#planMes");
-    if (!mesInput.value) mesInput.value = mesCorrenteISO();
-    const mes = mesInput.value;
+    // Inc 4.5 Tarefa 3: mês próprio (#planMes) removido — a tela segue estado.mes,
+    // que é a mesma fonte do seletor global #mesSel (Tarefa 2).
+    const mes = estado.mes;
     const [dados, sug] = await Promise.all([
       apiGet(`/api/metas?mes=${mes}`),
       apiGet(`/api/metas/sugestao?mes=${mes}`),
@@ -675,15 +878,20 @@ if (typeof document !== "undefined") {
     await renderGrade();
   }
 
-  // ----- Inc 4 Tarefa 8: grade categorias × meses (visão secundária, recolhível) -----
+  // ----- Inc 4 Tarefa 8 / Inc 4.5 Tarefa 3: grade categorias × meses (visão secundária,
+  // recolhível) — ancorada em estado.mes, 12 meses à frente, com ano no rótulo e cor por
+  // célula (status de estouro/aviso/normal, igual à tela do mês). -----
   async function renderGrade() {
-    const g = await apiGet(`/api/metas/grade`);
-    const head = `<thead><tr><th>Categoria</th>${g.meses.map(m => `<th>${mesLabel(m)}</th>`).join("")}</tr></thead>`;
+    const de = estado.mes;
+    const ate = somarMeses(de, 11); // 12 colunas: de..ate inclusive
+    const g = await apiGet(`/api/metas/grade?de=${de}&ate=${ate}`);
+    const head = `<thead><tr><th>Categoria</th>${g.meses.map(m => `<th>${mesLabelAno(m)}</th>`).join("")}</tr></thead>`;
     const body = g.categorias.map(c => {
       const tds = c.celulas.map(cel => {
         const alvo = cel.alvo_cents == null ? "" : centavosBR(cel.alvo_cents / 100 + "");
         const real = cel.realizado_cents == null ? "" : `<small>${centavosBR(cel.realizado_cents / 100 + "")}</small>`;
-        return `<td><input class="gAlvo" type="text" inputmode="decimal" value="${alvo}" data-cat="${c.categoria_id}" data-mes="${cel.mes}">${real}</td>`;
+        const status = statusCelula(cel.realizado_cents, cel.alvo_cents);
+        return `<td class="${status}"><input class="gAlvo" type="text" inputmode="decimal" value="${alvo}" data-cat="${c.categoria_id}" data-mes="${cel.mes}">${real}</td>`;
       }).join("");
       return `<tr><td>${esc(c.categoria)}</td>${tds}</tr>`;
     }).join("");
@@ -706,7 +914,7 @@ if (typeof document !== "undefined") {
     if (!e.target.classList.contains("planAlvo")) return;
     const tr = e.target.closest("tr");
     const categoria_id = tr.dataset.cat;
-    const mes = $("#planMes").value;
+    const mes = estado.mes;
     const raw = e.target.value.trim();
     if (raw === "") { // limpar → apaga exceção do mês (baseline permanece)
       await apiDelete(`/api/metas?categoria_id=${categoria_id}&mes=${mes}&escopo=excecao`).catch(() => {});
@@ -728,8 +936,6 @@ if (typeof document !== "undefined") {
       if (inp.value.trim() === "" && inp.dataset.sug) inp.value = centavosBR(Number(inp.dataset.sug) / 100 + "");
     });
   });
-
-  $("#planMes").addEventListener("change", renderPlanejamento);
 
   // ----- Importar (upload PDF → preview → revisão → aplicar; Task 9) -----
   function tabelaItens(titulo, itens, { comAmbiguo = false } = {}) {
@@ -884,15 +1090,32 @@ if (typeof document !== "undefined") {
     if (e.target.id === "imptipo") { estado.importar.tipo = e.target.value; estado.importar.preview = null; drawImportar(); }
   });
 
+  // Inc 4.5 Tarefa 2: range de datas p/ buscar TRANSAÇÕES (aba Lançamentos) — mês único
+  // (rangeDoMes, da Tarefa 1) por padrão, ou janela aberta quando "Todos os meses" está
+  // ligado. Mesmo estado.mes que agora também governa o Resumo (Tarefa 7).
+  function transacoesRange() {
+    if (estado.lancTudo) return { de: "1900-01-01", ate: "2999-12-31" };
+    const { de, ateExcl } = rangeDoMes(estado.mes);
+    // /api/transacoes filtra ate com "<=" (inclusivo) — rangeDoMes devolve o range
+    // meio-aberto [de, ateExcl); volta 1 dia p/ obter o último dia do mês.
+    const d = new Date(`${ateExcl}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    return { de, ate: d.toISOString().slice(0, 10) };
+  }
+
   // ----- carga e eventos -----
   async function carregar() {
     try {
-      const { de, ate } = periodoRange(estado.periodo);
-      const qs = `?de=${de}&ate=${ate}`;
-      const [resumo, transacoes, catalogo, pessoas] = await Promise.all([
-        apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
+      // Inc 4.5 Tarefa 7: Resumo fechou no mês (nada de presets) — mesmo estado.mes do
+      // #mesSel. /api/metas devolve o alvo do mês, usado como orçamento em drawDiario.
+      const qsResumo = `?mes=${estado.mes}`;
+      const rt = transacoesRange();
+      const qsTransacoes = `?de=${rt.de}&ate=${rt.ate}`;
+      const [resumo, metasMes, transacoes, catalogo, pessoas] = await Promise.all([
+        apiGet("/api/resumo" + qsResumo), apiGet("/api/metas" + qsResumo),
+        apiGet("/api/transacoes" + qsTransacoes), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
       ]);
-      estado.resumo = resumo; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
+      estado.resumo = resumo; estado.metasMes = metasMes; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
       // remove da seleção ids que sumiram (troca de período/recarga) — evita "selecionados" fantasmas
       const presentes = new Set(transacoes.map(t => t.id));
       for (const id of estado.selecao) if (!presentes.has(id)) estado.selecao.delete(id);
@@ -901,8 +1124,36 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); drawRows();
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
+  }
+
+  // Inc 4.5 Tarefa 7: recarrega só o Resumo (resumo do mês + metas do mês, p/ o orçamento
+  // de drawDiario) — espelha carregarLancamentos: evita refazer o fetch de transações/
+  // catálogo quando só o mês do Resumo mudou (troca de #mesSel ou clique na aba).
+  async function carregarResumo() {
+    try {
+      const qs = `?mes=${estado.mes}`;
+      const [resumo, metasMes] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs)]);
+      estado.resumo = resumo; estado.metasMes = metasMes;
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet();
+    } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
+  }
+
+  // Recarrega só as transações (aba Lançamentos) com o range corrente — usado pela troca de
+  // mês/"Todos os meses" p/ não refazer o fetch do Resumo (agora em carregarResumo()).
+  async function carregarLancamentos() {
+    try {
+      const { de, ate } = transacoesRange();
+      const transacoes = await apiGet(`/api/transacoes?de=${de}&ate=${ate}`);
+      estado.transacoes = transacoes;
+      const presentes = new Set(transacoes.map(t => t.id));
+      for (const id of estado.selecao) if (!presentes.has(id)) estado.selecao.delete(id);
+      const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
+      estado.cores = construirCores(nomes);
+      popularFiltros(); popularMassaBar();
+      drawRows();
+    } catch (e) { alert("Falha ao carregar lançamentos: " + e.message); }
   }
 
   document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
@@ -915,14 +1166,27 @@ if (typeof document !== "undefined") {
     $("#planejamento").classList.toggle("hidden", v !== "planejamento");
     if (v === "ajustes") drawAjustes();
     if (v === "importar") drawImportar();
+    if (v === "lanc") carregarLancamentos();
     if (v === "planejamento") renderPlanejamento();
+    if (v === "resumo") carregarResumo();
   }));
-  document.querySelectorAll(".period").forEach(p => p.addEventListener("click", e => {
-    if (!e.target.dataset.p) return;
-    document.querySelectorAll(".period .chip").forEach(c => { if (c.dataset.p) c.classList.remove("on"); });
-    document.querySelectorAll(`.period .chip[data-p="${e.target.dataset.p}"]`).forEach(c => c.classList.add("on"));
-    estado.periodo = e.target.dataset.p; carregar();
-  }));
+
+  // Inc 4.5 Tarefa 7: mês global — agora governa Lançamentos, Planejamento E Resumo (os
+  // presets de .period saíram; o Resumo fecha no mês de #mesSel, igual às outras abas).
+  $("#mesSel").value = estado.mes;
+  $("#mesSel").addEventListener("change", e => {
+    estado.mes = e.target.value;
+    const v = document.querySelector(".tab.on")?.dataset.view;
+    if (v === "lanc") carregarLancamentos();
+    else if (v === "planejamento") renderPlanejamento();
+    else if (v === "resumo") carregarResumo();
+  });
+  $("#lancTudo").addEventListener("click", () => {
+    estado.lancTudo = !estado.lancTudo;
+    $("#lancTudo").setAttribute("aria-pressed", String(estado.lancTudo));
+    $("#mesSel").disabled = estado.lancTudo; // ligado, o mês global é ignorado p/ Lançamentos
+    carregarLancamentos();
+  });
   $("#theme").addEventListener("click", () => {
     const cur = document.documentElement.getAttribute("data-theme");
     const next = cur === "dark" ? "light" : cur === "light" ? "dark" : (matchMedia("(prefers-color-scheme: dark)").matches ? "light" : "dark");
@@ -1022,6 +1286,6 @@ if (typeof document !== "undefined") {
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }
-  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawEvo(); drawDonut(); drawWaterfall(); drawDumbbell(); drawPessoa(); } }, 150); });
+  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet(); } }, 150); });
   carregar();
 }

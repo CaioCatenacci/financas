@@ -213,3 +213,22 @@ Rotas: `GET /api/metas?mes=YYYY-MM` (alvo/realizado/diff por categoria + total),
 `GET /api/metas/sugestao?mes=YYYY-MM` (média do realizado dos 3 meses anteriores, pra
 prefill), `PUT /api/metas` e `DELETE /api/metas` (gravam/removem por `escopo`),
 `GET /api/metas/grade` (grade categorias × meses, Fase B).
+
+### Incremento 4.5 — filtro único de mês + Resumo por mês fechado
+
+Um único seletor `<input type="month">` (`#mesSel`, estado `estado.mes`, formato `'YYYY-MM'`)
+governa todas as abas — Lançamentos, Planejamento e Resumo. Os presets antigos (`.period`,
+`periodoRange`) saíram; Lançamentos ganhou o chip "Todos os meses" como escape hatch.
+
+O Resumo fecha no mês selecionado (antes era um período livre com presets): `/api/resumo?mes=`
+devolve, além dos cortes existentes, `diario` (gasto acumulado dia a dia, `total_cents` em
+centavos) e mantém `porPessoa`/`porCategoria`/`mesVsAnterior` ancorados nesse mês. O card de
+evolução virou **"Gasto no mês"** (`drawDiario`): curva de gasto acumulado × reta de ritmo do
+orçamento (`acumularDiario`/`paceOrcamento`, `public/app.js`), lida contra `/api/metas?mes=`.
+O donut de categoria virou **sunburst** (`drawSunburst`): anel interno categoria, anel externo
+subcategoria, com clique pra focar/desfocar uma categoria. O corte por pessoa virou **rosca**
+(`drawPessoaDonut`, total no centro) e ganhou um **bullet chart** de orçamento × realizado por
+categoria (`drawBullet`). O dumbbell mês-vs-anterior e o waterfall seguem os mesmos.
+
+Faseamento: Fase 1 trocou só o seletor de Lançamentos/Planejamento sem tocar no Resumo (que
+seguia com `.period`); Fase 2 fechou o Resumo no mês e removeu os presets de vez.

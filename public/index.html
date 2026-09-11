@@ -17,6 +17,14 @@
   .planhead label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut)}
   .planhead input[type="month"]{border:1px solid var(--line);background:var(--surface);color:var(--ink);
     font:inherit;font-size:13px;border-radius:8px;padding:6px 8px}
+  /* Inc 4.5 Tarefa 2: seletor de mês global (topo) — mesmo estilo de input[type=month] do Planejamento. */
+  .mesbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .mesbar label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut)}
+  .mesbar input[type="month"]{border:1px solid var(--line);background:var(--surface);color:var(--ink);
+    font:inherit;font-size:13px;border-radius:8px;padding:6px 8px}
+  /* chip "Todos os meses" reusa a aparência ativa de .chip.on, mas via aria-pressed
+     (não é um preset de período — é um alternador independente dentro de Lançamentos). */
+  #lancTudo[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
   .planAlvo{border:1px solid transparent;background:transparent;color:var(--ink);font:inherit;font-size:13.5px;
     width:110px;padding:4px 6px;border-radius:6px;text-align:right}
   .planAlvo:hover,.planAlvo:focus{border-color:var(--line);background:var(--ground);outline:none}
@@ -42,6 +50,20 @@
     width:90px;padding:4px 6px;border-radius:6px;text-align:right}
   #planGrade .gAlvo:hover,#planGrade .gAlvo:focus{border-color:var(--line);background:var(--ground);outline:none}
   #planGrade small{display:block;color:var(--mut);font-size:11px;text-align:right}
+  /* Inc 4.5 Tarefa 3: nas células da grade, cor de texto sozinha (herdada de .status-*)
+     some no meio de tanta coluna — reforça com fundo leve + borda à esquerda. Só dentro
+     da grade: a tabela do mês (#planTabela) mantém o visual atual (só cor de texto). */
+  #planGrade td.status-aviso{background:color-mix(in srgb, var(--aviso) 12%, transparent);border-left:3px solid var(--aviso)}
+  #planGrade td.status-estouro{background:color-mix(in srgb, var(--neg) 12%, transparent);border-left:3px solid var(--neg)}
+  /* Inc 4.5 Tarefa 9: bullet chart orçamento × realizado — mesma estrutura de linha do
+     .dbrow (dumbbell), rótulo + track SVG + valores; vive aqui pela mesma razão do bloco
+     acima (task só toca index.html/app.js). */
+  .bulletwrap{display:flex;flex-direction:column;gap:12px}
+  .bulletrow{display:grid;grid-template-columns:160px 1fr 170px;align-items:center;gap:10px}
+  .bulletrow:hover{background:var(--sunk);border-radius:8px;margin:-3px -6px;padding:3px 6px}
+  .bulletlabel{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bullettrack{width:100%;height:20px}
+  .bulletval{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;color:var(--mut);white-space:nowrap;text-align:right}
 </style>
 </head>
 <body>
@@ -61,12 +83,10 @@
     <button class="iconbtn" id="theme" title="Alternar tema">◐</button>
   </div>
 
-  <div class="period">
-    <button class="chip" data-p="mes">Mês atual</button>
-    <button class="chip" data-p="mespassado">Mês passado</button>
-    <button class="chip" data-p="ano">Ano</button>
-    <button class="chip on" data-p="12m">Últimos 12 meses</button>
-    <button class="chip" data-p="tudo">Tudo</button>
+  <!-- Inc 4.5 Tarefa 7: mês global — governa Lançamentos, Planejamento e agora o Resumo
+       também (os presets de .period saíram; o Resumo fecha no mês de #mesSel). -->
+  <div class="mesbar">
+    <label>Mês <input type="month" id="mesSel"></label>
   </div>
 
   <section id="resumo">
@@ -74,16 +94,15 @@
 
     <div class="grid two" style="margin-bottom:16px">
       <div class="card">
-        <div class="cardhead"><div><h2>Evolução mensal</h2><p class="sub">receita × despesa · saldo do mês</p></div></div>
+        <div class="cardhead"><div><h2>Gasto no mês</h2><p class="sub">acumulado × orçamento</p></div></div>
         <div id="evo"></div>
         <div class="legend">
-          <span><i class="dot" style="background:var(--receita)"></i>Receita</span>
-          <span><i class="dot" style="background:var(--despesa)"></i>Despesa</span>
-          <span><i class="dot" style="background:var(--dim)"></i>Saldo</span>
+          <span><i class="dot" style="background:var(--despesa)"></i>Gasto acumulado</span>
+          <span><i class="dot" style="background:var(--dim)"></i>Orçamento</span>
         </div>
       </div>
       <div class="card">
-        <div class="cardhead"><div><h2>Gastos por categoria</h2><p class="sub">período selecionado</p></div></div>
+        <div class="cardhead"><div><h2>Gastos por categoria</h2><p class="sub">período selecionado · clique numa categoria para focar</p></div></div>
         <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
           <div id="donut"></div>
           <div class="catlist" id="catlist" style="flex:1;min-width:150px"></div>
@@ -97,7 +116,7 @@
         <div id="waterfall"></div>
       </div>
       <div class="card">
-        <div class="cardhead"><div><h2>Gasto por categoria: mês vs anterior</h2><p class="sub">variação do gasto mês a mês</p></div></div>
+        <div class="cardhead"><div><h2>Gasto por categoria: mês vs anterior</h2><p class="sub">mês selecionado vs anterior</p></div></div>
         <div class="dbwrap" id="dumb"></div>
         <div class="legend" style="margin-top:16px">
           <span><i class="dot" style="background:var(--dim)"></i>Mês anterior</span>
@@ -109,6 +128,13 @@
     <div class="card" style="margin-top:16px">
       <div class="cardhead"><div><h2>Gasto por pessoa</h2><p class="sub">despesas do período por pessoa</p></div></div>
       <div class="ppwrap" id="pessoa"></div>
+    </div>
+
+    <!-- Inc 4.5 Tarefa 9: bullet chart orçamento × realizado — largura total (fora do
+         .grid two) porque cada linha é uma categoria e o painel cresce com o catálogo. -->
+    <div class="card" style="margin-top:16px">
+      <div class="cardhead"><div><h2>Orçamento × realizado</h2><p class="sub">por categoria, no mês</p></div></div>
+      <div class="bulletwrap" id="bullet"></div>
     </div>
   </section>
 
@@ -132,6 +158,8 @@
       </select>
       <input id="ftexto" type="text" placeholder="Buscar descrição/favorecido" aria-label="Buscar descrição ou favorecido">
       <button id="flimpar" class="chip" type="button">Limpar</button>
+      <!-- Inc 4.5 Tarefa 2: ignora o mês global e recarrega Lançamentos sem filtro de data (reclassificação em massa). -->
+      <button type="button" class="chip" id="lancTudo" aria-pressed="false">Todos os meses</button>
       <span class="fcontador" id="fcontador"></span>
     </div>
     <div class="massabar hidden" id="massabar">
@@ -164,8 +192,8 @@
   <section id="ajustes" class="hidden"></section>
 
   <section id="planejamento" class="hidden">
+    <!-- Inc 4.5 Tarefa 3: mês próprio removido — a tela segue o #mesSel global (estado.mes). -->
     <div class="planhead">
-      <label>Mês <input type="month" id="planMes"></label>
       <button id="planSugerir" class="chip" type="button">Sugerir pra todas</button>
     </div>
     <div class="tblwrap">

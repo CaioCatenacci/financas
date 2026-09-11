@@ -287,6 +287,53 @@ esse controle e ganha em simplicidade não tendo escolha de escopo por célula.
 
 ---
 
+## 14. Incremento 4.5 — filtro único + Resumo por mês fechado
+
+Com Lançamentos, Planejamento e agora Metas todos girando em torno de um mês, ter três
+seletores de tempo diferentes (chips de período no Resumo, mês em Lançamentos, mês em
+Planejamento) virou fricção sem propósito — o Caio tinha que pensar em "qual filtro esse
+mexe" a cada troca. A correção é um único seletor de mês (`estado.mes`) governando as três
+abas; Lançamentos guarda "Todos os meses" como escape hatch pra quando o corte por mês
+atrapalha (procurar uma transação antiga, por exemplo).
+
+**Por que o Resumo fecha no mês (era um período livre com presets: mês/mês passado/ano/12
+meses/tudo):** o Incremento 4 trouxe orçamento, e orçamento só faz sentido comparado contra
+um mês fechado — "quanto sobrou do teto" não é uma pergunta que um período de 12 meses
+corridos responde bem. Mês fechado também é a unidade que Lançamentos e Planejamento já
+usavam; alinhar o Resumo nela elimina a pergunta "por que o filtro daqui é diferente".
+O corte por período mais longo (comparar anos, por exemplo) não desapareceu como
+necessidade hipotética, mas ninguém pediu — abre depois se fizer falta.
+
+**Por que curva diária + reta de ritmo (`drawDiario`/`acumularDiario`/`paceOrcamento`),
+não mais a evolução mês a mês (`drawEvo`):** dentro de um mês fechado, "evolução mensal"
+não tem mais o que mostrar (é um mês só). A pergunta que importa agora é "estou gastando
+rápido demais pro orçamento durar o mês?" — daí o gasto acumulado dia a dia contra uma reta
+de ritmo (orçamento total dividido linearmente pelos dias do mês): se a curva de gasto cruza
+a reta, o ritmo atual estoura o teto antes do fim do mês. `acumularDiario`/`paceOrcamento`
+ficaram puros (mesmo espírito de `metas.js`) porque a lógica é testável sem depender de SVG.
+
+**Por que sunburst (`drawSunburst`) no lugar do donut de categoria (`drawDonut`):** o Resumo
+já tinha subcategoria como corte (na tabela de Lançamentos), mas não no gráfico — o donut só
+mostrava a categoria. Um segundo anel por subcategoria dá esse detalhe sem abrir uma tela
+nova; o clique pra focar/desfocar uma categoria evita que o anel externo vire ruído visual
+quando há muitas subcategorias — só aparecem as subs da categoria em foco.
+
+**Por que rosca de pessoa (`drawPessoaDonut`) + bullet chart (`drawBullet`), não mais a
+barra de pessoa (`drawPessoa`):** a rosca reaproveita a mesma mecânica de arco do
+donut/sunburst (proporção visual consistente entre os três gráficos de composição) e dá
+o total no centro, que a barra não tinha. O bullet é novo: fecha o loop entre Planejamento
+(onde o alvo é definido) e Resumo (onde o realizado é visto) — cada categoria com alvo vira
+uma linha "realizado vs. orçamento" de leitura rápida, sem precisar trocar de aba.
+
+**Faseamento 1 → 2:** Fase 1 trocou o seletor de Lançamentos/Planejamento para `estado.mes`
+sem tocar no Resumo — que seguia com os presets antigos (`.period`/`periodoRange`) — pra não
+misturar duas mudanças (troca de filtro + reforma de gráficos) num commit só. Fase 2 fechou
+o Resumo no mês e trocou os quatro gráficos afetados; nesta limpeza final, `resumoMensal`
+(backend) e `drawEvo`/`drawDonut`/`agruparMensal`/`periodoRange`/`.period` (front, que as
+substituições da Fase 2 tinham deixado sem nenhuma chamada) saíram do código.
+
+---
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
