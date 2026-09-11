@@ -224,7 +224,7 @@ O Resumo fecha no mês selecionado (antes era um período livre com presets): `/
 devolve, além dos cortes existentes, `diario` (gasto acumulado dia a dia, `total_cents` em
 centavos) e mantém `porPessoa`/`porCategoria`/`mesVsAnterior` ancorados nesse mês. O card de
 evolução virou **"Gasto no mês"** (`drawDiario`): curva de gasto acumulado × reta de ritmo do
-orçamento (`acumularDiario`/`paceOrcamento`, `worker/metas.js`), lida contra `/api/metas?mes=`.
+orçamento (`acumularDiario`/`paceOrcamento`, `public/app.js`), lida contra `/api/metas?mes=`.
 O donut de categoria virou **sunburst** (`drawSunburst`): anel interno categoria, anel externo
 subcategoria, com clique pra focar/desfocar uma categoria. O corte por pessoa virou **rosca**
 (`drawPessoaDonut`, total no centro) e ganhou um **bullet chart** de orçamento × realizado por
