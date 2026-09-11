@@ -892,13 +892,28 @@ if (typeof document !== "undefined") {
     if (e.target.id === "imptipo") { estado.importar.tipo = e.target.value; estado.importar.preview = null; drawImportar(); }
   });
 
+  // Inc 4.5 Tarefa 2: range de datas p/ buscar TRANSAÇÕES (aba Lançamentos) — mês único
+  // (rangeDoMes, da Tarefa 1) por padrão, ou janela aberta quando "Todos os meses" está
+  // ligado. Independente do período do Resumo (que continua em periodoRange/estado.periodo).
+  function transacoesRange() {
+    if (estado.lancTudo) return { de: "1900-01-01", ate: "2999-12-31" };
+    const { de, ateExcl } = rangeDoMes(estado.mes);
+    // /api/transacoes filtra ate com "<=" (inclusivo) — rangeDoMes devolve o range
+    // meio-aberto [de, ateExcl); volta 1 dia p/ obter o último dia do mês.
+    const d = new Date(`${ateExcl}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() - 1);
+    return { de, ate: d.toISOString().slice(0, 10) };
+  }
+
   // ----- carga e eventos -----
   async function carregar() {
     try {
       const { de, ate } = periodoRange(estado.periodo);
-      const qs = `?de=${de}&ate=${ate}`;
+      const qsResumo = `?de=${de}&ate=${ate}`;
+      const rt = transacoesRange();
+      const qsTransacoes = `?de=${rt.de}&ate=${rt.ate}`;
       const [resumo, transacoes, catalogo, pessoas] = await Promise.all([
-        apiGet("/api/resumo" + qs), apiGet("/api/transacoes" + qs), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
+        apiGet("/api/resumo" + qsResumo), apiGet("/api/transacoes" + qsTransacoes), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
       ]);
       estado.resumo = resumo; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
       // remove da seleção ids que sumiram (troca de período/recarga) — evita "selecionados" fantasmas
@@ -913,6 +928,22 @@ if (typeof document !== "undefined") {
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
+  // Recarrega só as transações (aba Lançamentos) com o range corrente — usado pela troca de
+  // mês/"Todos os meses" p/ não refazer o fetch do Resumo (que segue os presets de .period).
+  async function carregarLancamentos() {
+    try {
+      const { de, ate } = transacoesRange();
+      const transacoes = await apiGet(`/api/transacoes?de=${de}&ate=${ate}`);
+      estado.transacoes = transacoes;
+      const presentes = new Set(transacoes.map(t => t.id));
+      for (const id of estado.selecao) if (!presentes.has(id)) estado.selecao.delete(id);
+      const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
+      estado.cores = construirCores(nomes);
+      popularFiltros(); popularMassaBar();
+      drawRows();
+    } catch (e) { alert("Falha ao carregar lançamentos: " + e.message); }
+  }
+
   document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(t => t.classList.remove("on")); b.classList.add("on");
     const v = b.dataset.view;
@@ -925,6 +956,23 @@ if (typeof document !== "undefined") {
     if (v === "importar") drawImportar();
     if (v === "planejamento") renderPlanejamento();
   }));
+
+  // Inc 4.5 Tarefa 2: mês global — governa Lançamentos (e, indiretamente, Planejamento,
+  // que já tem seu próprio #planMes). Resumo fica de fora nesta fase (segue .period).
+  $("#mesSel").value = estado.mes;
+  $("#mesSel").addEventListener("change", e => {
+    estado.mes = e.target.value;
+    const v = document.querySelector(".tab.on")?.dataset.view;
+    if (v === "lanc") carregarLancamentos();
+    else if (v === "planejamento") renderPlanejamento();
+    // Resumo: nada nesta fase — segue os presets de .period.
+  });
+  $("#lancTudo").addEventListener("click", () => {
+    estado.lancTudo = !estado.lancTudo;
+    $("#lancTudo").setAttribute("aria-pressed", String(estado.lancTudo));
+    $("#mesSel").disabled = estado.lancTudo; // ligado, o mês global é ignorado p/ Lançamentos
+    carregarLancamentos();
+  });
   document.querySelectorAll(".period").forEach(p => p.addEventListener("click", e => {
     if (!e.target.dataset.p) return;
     document.querySelectorAll(".period .chip").forEach(c => { if (c.dataset.p) c.classList.remove("on"); });

@@ -17,6 +17,14 @@
   .planhead label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut)}
   .planhead input[type="month"]{border:1px solid var(--line);background:var(--surface);color:var(--ink);
     font:inherit;font-size:13px;border-radius:8px;padding:6px 8px}
+  /* Inc 4.5 Tarefa 2: seletor de mês global (topo) — mesmo estilo de input[type=month] do Planejamento. */
+  .mesbar{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .mesbar label{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mut)}
+  .mesbar input[type="month"]{border:1px solid var(--line);background:var(--surface);color:var(--ink);
+    font:inherit;font-size:13px;border-radius:8px;padding:6px 8px}
+  /* chip "Todos os meses" reusa a aparência ativa de .chip.on, mas via aria-pressed
+     (não é um preset de período — é um alternador independente dentro de Lançamentos). */
+  #lancTudo[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
   .planAlvo{border:1px solid transparent;background:transparent;color:var(--ink);font:inherit;font-size:13.5px;
     width:110px;padding:4px 6px;border-radius:6px;text-align:right}
   .planAlvo:hover,.planAlvo:focus{border-color:var(--line);background:var(--ground);outline:none}
@@ -59,6 +67,12 @@
       <button class="tab" data-view="planejamento">Planejamento</button>
     </div>
     <button class="iconbtn" id="theme" title="Alternar tema">◐</button>
+  </div>
+
+  <!-- Inc 4.5 Tarefa 2: mês global — governa Lançamentos (mês único por padrão); Resumo
+       segue os presets de .period abaixo (Fase 1 não mexe no Resumo). -->
+  <div class="mesbar">
+    <label>Mês <input type="month" id="mesSel"></label>
   </div>
 
   <div class="period">
@@ -132,6 +146,8 @@
       </select>
       <input id="ftexto" type="text" placeholder="Buscar descrição/favorecido" aria-label="Buscar descrição ou favorecido">
       <button id="flimpar" class="chip" type="button">Limpar</button>
+      <!-- Inc 4.5 Tarefa 2: ignora o mês global e recarrega Lançamentos sem filtro de data (reclassificação em massa). -->
+      <button type="button" class="chip" id="lancTudo" aria-pressed="false">Todos os meses</button>
       <span class="fcontador" id="fcontador"></span>
     </div>
     <div class="massabar hidden" id="massabar">
