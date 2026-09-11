@@ -570,7 +570,7 @@ if (typeof document !== "undefined") {
     const linhas = todas.filter(l => l.alvo_cents != null);
     if (!linhas.length) { el.innerHTML = `<p class="vazio">sem orçamento no mês</p>`; return; }
     // razão realizado/alvo p/ ordenar por estouro; alvo=0 com gasto vira "infinito" (pior caso),
-    // alvo=0 sem gasto fica em 0 — mesmo tratamento de statusCelula (linha 872) pro caso alvo=0.
+    // alvo=0 sem gasto fica em 0 — mesmo tratamento de statusCelula pro caso alvo=0.
     const razao = l => l.alvo_cents === 0 ? (l.realizado_cents > 0 ? Infinity : 0) : l.realizado_cents / l.alvo_cents;
     const ordenadas = linhas.slice().sort((a, b) => razao(b) - razao(a));
     const W = 200, H = 20;

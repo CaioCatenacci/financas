@@ -240,6 +240,7 @@ export function criarDb(sql) {
         where natureza = 'despesa' and computa_resumo
           and data >= ${de} and data < ${ateExcl}
         group by 1 order by 1`;
+      // driver do Neon devolve ::bigint como string — converte na borda para operações numéricas.
       return rows.map(r => ({ ...r, total_cents: Number(r.total_cents) }));
     },
 
