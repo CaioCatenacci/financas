@@ -106,7 +106,7 @@ def _gravar(cur, catalogo, conta, novos, nao_gasto, casados):
                     (x["linha_hash"], x["match_id"]))
     # novos + não-gasto: inserem transação por id
     for x in novos + nao_gasto:
-        nome_cat = x["categoria_org"] or x["categoria_nome"] or "Outros"
+        nome_cat = x["categoria_org"] or x["categoria_nome"] or None  # None → categoria padrão
         cat_id, sub_id = resolver_categoria(nome_cat, x.get("sub_nome"), catalogo)
         cur.execute(
             """insert into transacoes

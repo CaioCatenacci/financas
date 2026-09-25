@@ -136,6 +136,22 @@ limpeza `0005` (drop) — gate destrutivo, só após o cutover validado.
 
 A UI chama `categoria` a categoria (nome) e `subcategoria` a sub; internamente é tudo por id.
 
+### Categoria padrão por flag (fix de 25/09/2026)
+
+O fallback de `resolverCategoria` (worker, `public/app.js` e `tools/categorias.py`) **não é mais
+por nome**: é a categoria com `categorias.padrao = true` (migração `0008`, índice parcial garante
+uma só). Motivo: "Outros" foi renomeada na aba Ajustes e o fallback por nome literal devolveu
+`categoria_id` null → not-null no insert → webhook do Telegram em 500, bot mudo. Semântica:
+
+| Categoria | Papel |
+|---|---|
+| `Não Identificado` (`padrao=true`) | recebe o que ninguém classificou; fila de triagem |
+| `Outros` | miscelânea **deliberada** (o Caio escolhe); não é fallback |
+
+`db.desativarCategoria` ignora a padrão (`and not padrao`); a aba Ajustes mostra o selo "padrão"
+e esconde o botão desativar. Renomear a padrão é livre. `handleTelegram` tem try/catch: erro vira
+resposta "⚠ Deu erro ao registrar…" + `200` (nunca 500 — o Telegram retentaria em loop, mudo).
+
 ---
 
 ## Segurança — inegociável

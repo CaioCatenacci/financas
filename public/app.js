@@ -124,12 +124,17 @@ export function montarMudancas(bar = {}) {
 
 // ---------- importação (Task 9: aba Importar) ----------
 // resolve nome→id igual worker/categorias.js::resolverCategoria (reimplementado aqui porque o
-// browser não importa worker/*.js): categoria por nome exato, fallback "Outros"; sub só se
+// browser não importa worker/*.js): categoria por nome exato, fallback na categoria padrão
+// (flag `padrao`; "Outros" só por compatibilidade — hoje é miscelânea deliberada); sub só se
 // bater dentro da categoria resolvida.
+export function categoriaPadrao(catalogo) {
+  const cats = catalogo.categorias || [];
+  return cats.find(c => c.padrao) || cats.find(c => c.nome === "Outros") || null;
+}
 function resolverCategoriaImport(nomeMacro, nomeSub, catalogo) {
   const cats = catalogo.categorias || [];
   let cat = cats.find(c => c.nome === nomeMacro);
-  if (!cat) cat = cats.find(c => c.nome === "Outros");
+  if (!cat) cat = categoriaPadrao(catalogo);
   const categoria_id = cat ? cat.id : null;
 
   let subcategoria_id = null;
@@ -153,7 +158,7 @@ export function montarDecisao(preview, catalogo, fonte) {
     }
     if (item.status !== "novo" && item.status !== "naoGasto") continue; // ambiguo/jaTem: skip
 
-    const nomeCat = item.categoriaOrg || item.categoriaNome || "Outros";
+    const nomeCat = item.categoriaOrg || item.categoriaNome || null; // null → padrão
     const { categoria_id, subcategoria_id } = resolverCategoriaImport(nomeCat, item.subNome, catalogo);
     const row = {
       dataISO: item.data, natureza: item.natureza, esfera: "pessoal",
@@ -705,10 +710,10 @@ if (typeof document !== "undefined") {
         </span>`).join("");
       return `<div class="ajcat">
         <div class="ajcathead">
-          <b>${esc(c.nome)}</b><span class="ajnat">${esc(c.natureza)}</span>
+          <b>${esc(c.nome)}</b><span class="ajnat">${esc(c.natureza)}</span>${c.padrao ? `<span class="ajnat" title="recebe o que ninguém classificou (modelo, texto sem categoria, import)">padrão</span>` : ""}
           <span class="ajactions">
             <button class="miniBtn" data-act="renomeiacat" data-id="${esc(c.id)}">renomear</button>
-            <button class="miniBtn" data-act="apagarcat" data-id="${esc(c.id)}">desativar</button>
+            ${c.padrao ? "" : `<button class="miniBtn" data-act="apagarcat" data-id="${esc(c.id)}">desativar</button>`}
           </span>
         </div>
         <div class="ajsubs">${subChips}<button class="chip" data-act="novasub" data-id="${esc(c.id)}" type="button">＋ sub</button></div>
@@ -944,7 +949,7 @@ if (typeof document !== "undefined") {
       <tr data-i="${i}">
         <td class="dt">${fmtData(it.data)}</td>
         <td>${esc(it.descricaoFinal ?? it.descricao)}</td>
-        <td>${esc(it.categoriaOrg || it.categoriaNome || "Outros")}${it.subNome ? " › " + esc(it.subNome) : ""}</td>
+        <td>${esc(it.categoriaOrg || it.categoriaNome || categoriaPadrao(estado.catalogo)?.nome || "—")}${it.subNome ? " › " + esc(it.subNome) : ""}</td>
         <td class="val">${it.natureza === "receita" ? "+" : ""}R$ ${centavosBR(String(it.valorCents / 100))}</td>
         ${comAmbiguo ? `<td><button class="chip impResolve" type="button" data-i="${i}">tratar como novo</button></td>` : "<td></td>"}
       </tr>`).join("");

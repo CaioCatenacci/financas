@@ -334,6 +334,32 @@ substituições da Fase 2 tinham deixado sem nenhuma chamada) saíram do código
 
 ---
 
+## 15. Categoria padrão por flag (bug do Telegram mudo, 25/09/2026)
+
+O bot parou de responder a texto manual e a foto. O webhook devolvia 500 porque a categoria
+`Outros` tinha sido **renomeada** na aba Ajustes pra `Não Identificado`, e o fallback de
+`resolverCategoria` procurava o nome literal `"Outros"` → `categoria_id` null → not-null no
+insert → exceção sem try/catch → 500. Sem logs persistidos, só apareceu com `wrangler tail`.
+
+**Decisão:** o padrão passa a ser uma **flag** (`categorias.padrao`, migração `0008`), não um
+nome. A invariante "sempre existe uma categoria pra onde cair" vira invariante do banco (índice
+parcial único + `desativarCategoria` que ignora a padrão), em vez de depender de o Caio nunca
+renomear uma linha que a tela de Ajustes deixa renomear. **Por que não simplesmente renomear de
+volta:** resolveria em um minuto e quebraria de novo na próxima edição — a tela de gestão existe
+justamente pra renomear/mesclar sem cascata, então o código não pode depender de nomes.
+
+**Semântica (decisão do Caio):** `Não Identificado` é o padrão — o que ninguém classificou, a fila
+do que ele precisa analisar pra dar destino. `Outros` volta a existir como **miscelânea
+deliberada** — categoria que ele escolhe, não fallback. Por isso o import (`montarDecisao`,
+`importar_extrato.py`, `importar_fatura.py`) deixou de preencher `"Outros"` quando não há
+categoria: manda `null`, e o resolvedor leva pra padrão.
+
+**Por que try/catch no `handleTelegram` e responder 200:** com 500 o Telegram retenta o mesmo
+update em loop e o usuário não vê nada — é o pior dos dois mundos (nem grava, nem avisa). Com
+200 + mensagem de erro no chat, o ciclo fecha: o Caio sabe que falhou e reenvia depois.
+
+---
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

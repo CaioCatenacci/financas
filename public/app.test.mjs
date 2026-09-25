@@ -439,3 +439,19 @@ test("paceOrcamento: reta linear de 0 ao total no último dia", () => {
   assert.equal(r[29].alvo_cents, 300000);
   assert.equal(r[14].alvo_cents, Math.round(300000 * 15 / 30)); // dia 15
 });
+
+test("montarDecisao: item sem categoria cai na categoria padrão (flag), não em Outros", () => {
+  // "Outros" agora é miscelânea deliberada; o que o import não classifica vai pra triagem (padrão).
+  const catalogo = {
+    categorias: [{ id: "cOut", nome: "Outros" }, { id: "cNI", nome: "Não Identificado", padrao: true }],
+    subcategorias: [],
+  };
+  const preview = {
+    checksum: { ok: true, diferencaCents: 0 }, resumo: { novos: 1 },
+    itens: [{ status: "novo", data: "2026-03-01", natureza: "despesa", valorCents: 1000, descricao: "x",
+              linhaHash: "h1", matchId: null, computaResumo: true, categoriaNome: null, subNome: null,
+              categoriaOrg: null, contraparteNome: null }],
+  };
+  const d = montarDecisao(preview, catalogo, "extrato");
+  assert.equal(d.novos[0].categoria_id, "cNI");
+});

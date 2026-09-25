@@ -40,7 +40,7 @@ export function criarDb(sql) {
 
     // catálogo do modelo por id (categorias + subcategorias ativas). Alimenta selects e resolução.
     async catalogo() {
-      const categorias = await sql`select id, nome, natureza, ativa from categorias where ativa order by nome`;
+      const categorias = await sql`select id, nome, natureza, ativa, padrao from categorias where ativa order by nome`;
       const subcategorias = await sql`select id, categoria_id, nome, ativa from subcategorias where ativa order by nome`;
       return { categorias, subcategorias };
     },
@@ -177,7 +177,8 @@ export function criarDb(sql) {
       await sql`update categorias set nome = ${nome} where id = ${id}`;
     },
     async desativarCategoria(id) {
-      await sql`update categorias set ativa = false where id = ${id}`;
+      // a padrão nunca sai do catálogo: sem ela o fallback de resolverCategoria volta a dar null
+      await sql`update categorias set ativa = false where id = ${id} and not padrao`;
     },
     async criarSub(categoria_id, nome) {
       const rows = await sql`insert into subcategorias (categoria_id, nome) values (${categoria_id}, ${nome})
