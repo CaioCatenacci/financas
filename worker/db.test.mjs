@@ -319,15 +319,6 @@ test("hashesNaJanela devolve os hashes não-nulos", async () => {
   assert.match(sql.chamadas[0].text, /linha_hash is not null/i);
 });
 
-test("carimbarLinhaHash carimba só se ainda não conciliada (linha_hash is null)", async () => {
-  const sql = fakeSql([]);
-  const db = criarDb(sql);
-  await db.carimbarLinhaHash("t9", "abc123");
-  assert.match(sql.chamadas[0].text, /update transacoes set linha_hash/i);
-  assert.match(sql.chamadas[0].text, /linha_hash is null/i);
-  assert.deepEqual(sql.chamadas[0].values, ["abc123", "t9"]);
-});
-
 test("associacoesPorNome monta dict camelCase chaveado por normalizarNome, só tipo_chave=nome", async () => {
   const sql = fakeSql([
     { chave: "loja x", categoria_nome: "Casa", sub_nome: "Limpeza" },
@@ -374,19 +365,20 @@ test("marcarPagamentoFaturaNaoGasto não marca com >1 candidato (ambíguo, deixa
 test("aplicarImportacao grava tudo numa ÚNICA transação (1 subrequest, atômica)", async () => {
   const sql = fakeSql([{ id: "x" }]);
   const db = criarDb(sql);
+  const linha = { dataISO: "2026-02-02", natureza: "despesa", esfera: "pessoal", valorCents: 1500, categoria_id: "cCasa",
+    descricao: "PIX", fonte: "extrato", origem_categoria: "modelo", computa_resumo: true, linha_hash: "h3", grupo_id: "G1", representante: false };
   const r = await db.aplicarImportacao({
     novos: [{ dataISO: "2026-02-01", natureza: "despesa", esfera: "pessoal", valorCents: 1000, fonte: "extrato", origem_categoria: "modelo", linha_hash: "h1" }],
-    naoGasto: [{ dataISO: "2026-02-02", natureza: "despesa", esfera: "pessoal", valorCents: 2000, fonte: "extrato", origem_categoria: "modelo", computa_resumo: false, linha_hash: "h2" }],
-    casados: [{ matchId: "t9", linhaHash: "h3" }],
+    naoGasto: [{ dataISO: "2026-02-03", natureza: "despesa", esfera: "pessoal", valorCents: 2000, fonte: "extrato", origem_categoria: "modelo", computa_resumo: false, linha_hash: "h2" }],
+    casados: [{ linha, matchId: "t9", grupoExistente: false }],
   });
-  // 2 inserts + 1 update, todos numa transação só
-  assert.equal(sql.transacao.length, 3);
-  assert.deepEqual(r, { gravados: 2, conciliados: 1, naoGasto: 1 });
-  assert.ok(sql.chamadas.some(c => /insert into transacoes/i.test(c.text)), "deve construir insert");
-  const upd = sql.chamadas.find(c => /update transacoes set linha_hash/i.test(c.text));
-  assert.ok(upd, "deve construir update de carimbo");
-  assert.match(upd.text, /linha_hash is null/i); // guard de não re-carimbar
-  assert.deepEqual(upd.values, ["h3", "t9"]);
+  // 2 inserts (novo+naoGasto) + 1 insert (linha do extrato) + 1 update (representante), numa transação só
+  assert.equal(sql.transacao.length, 4);
+  assert.deepEqual(r, { gravados: 2, agrupados: 1, naoGasto: 1 });
+  assert.equal(sql.chamadas.filter(c => /insert into transacoes/i.test(c.text)).length, 3, "deve construir 3 inserts");
+  const upd = sql.chamadas.find(c => /update transacoes set grupo_id = \?, representante = true/i.test(c.text));
+  assert.ok(upd, "deve construir update de representante");
+  assert.deepEqual(upd.values, ["G1", "t9"]);
 });
 
 test("aplicarImportacao com decisão vazia não abre transação", async () => {
@@ -394,7 +386,7 @@ test("aplicarImportacao com decisão vazia não abre transação", async () => {
   const db = criarDb(sql);
   const r = await db.aplicarImportacao({ novos: [], naoGasto: [], casados: [] });
   assert.equal(sql.transacao, undefined); // não chamou sql.transaction
-  assert.deepEqual(r, { gravados: 0, conciliados: 0, naoGasto: 0 });
+  assert.deepEqual(r, { gravados: 0, agrupados: 0, naoGasto: 0 });
 });
 
 test("atualizarTransacoesLote: UPDATE único com guard por campo (any(ids)) + aprende em lote", async () => {
@@ -614,4 +606,41 @@ test("gravarGrupo sem mudanças nem delete não abre transação", async () => {
   const db = criarDb(sql);
   assert.deepEqual(await db.gravarGrupo({ mudancas: [] }), { alterados: 0, apagados: 0 });
   assert.equal(sql.transacao, undefined);
+});
+
+test("transacoesNaJanela: só candidatas legítimas ao casamento (nem extrato/fatura, nem hash antigo, nem grupo que já tem extrato) e devolve grupo_id", async () => {
+  const sql = fakeSql([{ id: "m1", data: "2026-09-02", valor_cents: "250000", grupo_id: "G0" }]);
+  const db = criarDb(sql);
+  const r = await db.transacoesNaJanela("2026-09-01", "2026-09-30");
+  const q = sql.chamadas[0].text;
+  assert.match(q, /fonte not in \('extrato', ?'fatura'\)/i);
+  assert.match(q, /linha_hash is null/i);
+  assert.match(q, /not exists \(select 1 from transacoes x where x\.grupo_id = t\.grupo_id and x\.fonte = 'extrato'\)/i);
+  assert.deepEqual(r, [{ id: "m1", data: "2026-09-02", valorCents: 250000, grupo_id: "G0" }]);
+});
+
+test("aplicarImportacao: casado insere a linha do extrato no grupo e põe o casado como representante (grupo novo) — tudo numa transação", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const linha = { dataISO: "2026-09-30", natureza: "despesa", esfera: "pessoal", valorCents: 250000, reembolsoCents: 0,
+    categoria_id: "cCasa", subcategoria_id: null, descricao: "PIX ALUGUEL", fonte: "extrato", origem_categoria: "modelo",
+    computa_resumo: true, linha_hash: "h1", grupo_id: "G1", representante: false };
+  const r = await db.aplicarImportacao({ novos: [], naoGasto: [], casados: [{ linha, matchId: "m1", grupoExistente: false }] });
+  assert.deepEqual(r, { gravados: 0, agrupados: 1, naoGasto: 0 });
+  assert.equal(sql.transacao.length, 2);
+  assert.match(sql.chamadas[0].text, /insert into transacoes/i);
+  assert.match(sql.chamadas[0].text, /grupo_id, representante\)/i);
+  assert.ok(sql.chamadas[0].values.includes("G1") && sql.chamadas[0].values.includes(false));
+  assert.match(sql.chamadas[1].text, /update transacoes set grupo_id = \?, representante = true where id = \? and grupo_id is null/i);
+  assert.deepEqual(sql.chamadas[1].values, ["G1", "m1"]);
+});
+
+test("aplicarImportacao: casado com grupoExistente só insere a linha do extrato (representante fica quem era)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const linha = { dataISO: "2026-09-30", natureza: "despesa", esfera: "pessoal", valorCents: 250000, categoria_id: "cCasa",
+    descricao: "PIX ALUGUEL", fonte: "extrato", origem_categoria: "modelo", computa_resumo: true, linha_hash: "h1", grupo_id: "G0", representante: false };
+  await db.aplicarImportacao({ casados: [{ linha, matchId: "m1", grupoExistente: true }] });
+  assert.equal(sql.transacao.length, 1);
+  assert.match(sql.chamadas[0].text, /insert into transacoes/i);
 });

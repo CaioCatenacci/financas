@@ -8,14 +8,14 @@ export function criarDb(sql) {
     insert into transacoes
       (data, natureza, esfera, valor_total, valor_reembolso, categoria_id, subcategoria_id,
        descricao, pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
-       contraparte_nome, contraparte_chave, computa_resumo, linha_hash)
+       contraparte_nome, contraparte_chave, computa_resumo, linha_hash, grupo_id, representante)
     values
       (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
        ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.categoria_id ?? null}, ${t.subcategoria_id ?? null},
        ${t.descricao}, ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria},
        ${t.extraido_por ?? null}, ${t.confianca ?? null}, ${t.documento_id ?? null},
        ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null},
-       ${t.computa_resumo ?? true}, ${t.linha_hash ?? null})
+       ${t.computa_resumo ?? true}, ${t.linha_hash ?? null}, ${t.grupo_id ?? null}, ${t.representante ?? false})
     returning id`;
   return {
     async documentoPorHash(hash) {
@@ -372,13 +372,20 @@ export function criarDb(sql) {
     },
 
     // ---- apoio à importação: consultas de reconciliação ----
+    // Candidatas ao casamento do import (Inc 4.6): lançamentos do Caio (não extrato/fatura), sem
+    // hash antigo carimbado (= já conciliado no modelo velho) e que não estejam num grupo que já
+    // tem uma linha de extrato (um lançamento casa com o banco UMA vez). Devolve grupo_id pra o
+    // app decidir "entra no grupo existente" vs "grupo novo".
     async transacoesNaJanela(de, ate) {
       const rows = await sql`
         select id, to_char(data,'YYYY-MM-DD') as data,
-          (round(valor_final*100))::bigint as valor_cents
-        from transacoes
-        where data between ${de} and ${ate} and linha_hash is null`;
-      return rows.map(r => ({ id: String(r.id), data: r.data, valorCents: Number(r.valor_cents) }));
+          (round(valor_final*100))::bigint as valor_cents, grupo_id
+        from transacoes t
+        where data between ${de} and ${ate}
+          and fonte not in ('extrato','fatura')
+          and linha_hash is null
+          and not exists (select 1 from transacoes x where x.grupo_id = t.grupo_id and x.fonte = 'extrato')`;
+      return rows.map(r => ({ id: String(r.id), data: r.data, valorCents: Number(r.valor_cents), grupo_id: r.grupo_id ?? null }));
     },
 
     async hashesNaJanela(de, ate) {
@@ -393,14 +400,20 @@ export function criarDb(sql) {
     // Neon faz 1 subrequest por query, então o loop antigo (1 await por linha) estourava o limite
     // de subrequests do Worker num extrato grande (~236 linhas). sql.transaction manda todas as
     // queries num POST só — e, sendo atômica, ou grava tudo ou nada (nunca import pela metade).
+    // Inc 4.6: um "casado" não carimba mais o hash no lançamento do Caio — INSERE a linha do
+    // extrato (com o hash, dentro do grupo, sem ser representante) e, se o grupo é novo, põe o
+    // lançamento casado como representante. Se ele já estava num grupo, só a linha entra nele.
     async aplicarImportacao({ novos = [], naoGasto = [], casados = [] }) {
       const queries = [];
       for (const t of [...novos, ...naoGasto]) queries.push(qInserirTransacao(t));
       for (const c of casados) {
-        queries.push(sql`update transacoes set linha_hash = ${c.linhaHash} where id = ${c.matchId} and linha_hash is null`);
+        queries.push(qInserirTransacao(c.linha));
+        if (!c.grupoExistente) {
+          queries.push(sql`update transacoes set grupo_id = ${c.linha.grupo_id}, representante = true where id = ${c.matchId} and grupo_id is null`);
+        }
       }
       if (queries.length) await sql.transaction(queries);
-      return { gravados: novos.length + naoGasto.length, conciliados: casados.length, naoGasto: naoGasto.length };
+      return { gravados: novos.length + naoGasto.length, agrupados: casados.length, naoGasto: naoGasto.length };
     },
 
     // Marca o pagamento da fatura no extrato como fora do resumo (computa_resumo=false): procura
@@ -419,13 +432,6 @@ export function criarDb(sql) {
         return { marcados: 1, candidatos: 1 };
       }
       return { marcados: 0, candidatos: rows.length };
-    },
-
-    // carimba a linha_hash na transação já existente que casou (reconciliação) — só se ainda
-    // não tiver sido carimbada, senão mascararia um bug de duplo-match (espelha
-    // tools/importar_extrato.py::_gravar).
-    async carimbarLinhaHash(id, hash) {
-      await sql`update transacoes set linha_hash = ${hash} where id = ${id} and linha_hash is null`;
     },
 
     // associações aprendidas por nome, no formato que classificar() espera: dict chaveado por
