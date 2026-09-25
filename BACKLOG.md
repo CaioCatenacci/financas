@@ -24,7 +24,7 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 
 | # | Item | Prioridade | Origem |
 |---|---|---|---|
-| X1 | **Inc 4.6 — agrupamento de transações** (duplicatas explícitas com representante). Spec: `docs/superpowers/specs/2026-09-25-agrupamento-transacoes-design.md`. | P1 | pedido do Caio, 25/09/2026 |
+| X1 | **Inc 4.6 — agrupamento de transações** (duplicatas explícitas com representante). Fase A entregue (25/09/2026); Fase B (import grava grupo) em andamento. Spec: `docs/superpowers/specs/2026-09-25-agrupamento-transacoes-design.md`. | P1 | pedido do Caio, 25/09/2026 |
 
 ## A. Incrementos grandes (roadmap)
 

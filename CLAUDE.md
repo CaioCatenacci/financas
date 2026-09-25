@@ -152,6 +152,29 @@ uma só). Motivo: "Outros" foi renomeada na aba Ajustes e o fallback por nome li
 e esconde o botão desativar. Renomear a padrão é livre. `handleTelegram` tem try/catch: erro vira
 resposta "⚠ Deu erro ao registrar…" + `200` (nunca 500 — o Telegram retentaria em loop, mudo).
 
+### Grupos de transações (Incremento 4.6)
+
+Duplicatas (lançamento do Caio × linha do extrato) ficam **ligadas explicitamente**: mesmo
+`grupo_id`, exatamente um membro `representante`, e só ele conta. A regra "quem conta" mora na
+coluna gerada `conta_no_resumo = computa_resumo and (grupo_id is null or representante)`; **toda
+leitura agregada filtra por `conta_no_resumo`**, nunca por `computa_resumo` (que segue sendo a
+flag do usuário, "fora do resumo").
+
+| Coluna | Tabela | Descrição |
+|---|---|---|
+| `grupo_id` | `transacoes` | uuid compartilhado pelos membros; null = solta |
+| `representante` | `transacoes` | o membro que conta e que aparece como a linha do grupo (um por grupo, índice parcial) |
+| `conta_no_resumo` | `transacoes` | gerada; a única coluna que as agregações consultam |
+
+Regras em `worker/grupos.js` (puro): agrupar (representante = não-extrato mais antigo; entrar
+num grupo existente não troca o representante; dois grupos → recusa), representar (troca
+atômica), tirar (representante com outros membros → recusa; sobra 1 → dissolve), desagrupar,
+apagar (representante com membros → recusa). Cada ação grava numa única `sql.transaction`
+(`db.gravarGrupo`). Rotas: `POST/DELETE/PATCH /api/grupos[...]`. Na tela, o grupo é uma linha
+expansível na posição do representante; membros não são editáveis; busca por texto acha o grupo
+por qualquer membro; chip "Só agrupados". Não há regra de soma: valores diferentes só geram o
+selo "valores diferem". `Outros`/`Não Identificado` seguem como na seção anterior.
+
 ---
 
 ## Segurança — inegociável
@@ -203,6 +226,7 @@ O CI (`.github/workflows/ci.yml`) roda os dois.
 | 2 | Classificador que aprende | app grava correções; sistema passa a acertar | implementado |
 | 3 | Extrato + fatura | PDF → parsing → transações; conciliação | Incremento 3 |
 | 4 | Planejamento | metas/realizado vs alvo | implementado (mês + grade) |
+| 4.6 | Agrupamento | duplicatas explícitas com representante; import grava o grupo | Fase A implementada |
 | 5 | Camada PJ | receita empresa → cascata → despesas casa | Incremento 5 |
 | 6 | Plus | investimentos; estrutura fina Dropbox | Incremento 6 |
 

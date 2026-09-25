@@ -360,6 +360,56 @@ update em loop e o usuário não vê nada — é o pior dos dois mundos (nem gra
 
 ---
 
+## 16. Incremento 4.6 — grupos com representante (duplicatas explícitas)
+
+Quase todo lançamento manual do Caio também aparece no extrato do Itaú no fechamento do mês.
+O import já reconciliava isso, mas de dois jeitos ruins: valor exato ±3 dias "casava" a linha
+do banco com o lançamento e **carimbava** o hash nele — a linha do banco nunca chegava a
+existir como transação, e nada na tela dizia que aquele lançamento tinha sido conferido contra
+o extrato; valor diferente (o caso real: entrada de R$ 56.200 = salário de R$ 36.200 + R$
+20.000 de repasse pra transferir) virava uma linha nova que o Caio marcava "fora do resumo" na
+mão, sem registrar o porquê — daqui a um ano, ninguém lembra.
+
+**Decisão:** duplicatas viram um **grupo com representante**: linhas com o mesmo `grupo_id`,
+exatamente um membro `representante`, e só ele conta no Resumo. **Por que:** o Caio foi
+explícito na conversa — "um grupo funciona como uma linha; só um representa" — e é exatamente
+isso que a tela precisa mostrar: uma linha expansível, não duas linhas concorrendo. Isso também
+descartou as outras duas formas discutidas. Não é "soma que fecha" (decompor uma linha do banco
+em partes que somam o valor) porque o caso real (salário + repasse) não é uma decomposição
+alinhada ao lançamento — é ruído que o Caio prefere anotar na descrição, não modelar; forçar
+soma criaria uma regra que quebra no primeiro caso torto. E não é uma tabela própria N:M (um
+lançamento em vários grupos) porque nenhum caso real pede isso — cada duplicata é conferida
+contra exatamente um lançamento do banco, e a tabela extra seria infraestrutura sem uso.
+
+**Por que "quem conta" virou coluna gerada:** antes, quem conta no Resumo era só
+`computa_resumo` (a flag "fora do resumo" que o Caio controla). Com grupos, a regra efetiva
+passa a ser "`computa_resumo` E (solta OU representante)". Calcular isso em cada uma das sete
+leituras agregadas (Resumo, `resumoDiario`, `resumoMesVsAnterior`, `porPessoa`, Planejamento/
+metas etc.) seria repetir a mesma lógica sete vezes — e divergir uma vez é o tipo de bug que só
+aparece quando o número já está errado num dashboard. A coluna gerada `conta_no_resumo` calcula
+a regra **um lugar só**, no banco, auditável por SQL direto; as sete leituras trocam um
+identificador (`computa_resumo` → `conta_no_resumo`) sem lógica nova.
+
+**Por que apagar ou tirar o representante recusa em vez de promover outro membro
+automaticamente:** promover é uma decisão de "qual desses é o de verdade" que o sistema não
+tem como acertar sozinho — é ambíguo por natureza (o extrato não é candidato, mas entre dois
+lançamentos manuais não há critério óbvio). O Caio escolhe: a API devolve erro legível
+("escolha outro representante antes de tirar este") e ele troca antes, de propósito.
+
+**Por que membros não são editáveis na tela:** um membro existe só como evidência ligada; ele
+não entra no Resumo, então editar sua categoria ou pessoa daria a impressão de que aquilo
+importa quando não importa — é fácil achar que se está editando "o lançamento" quando na
+verdade é o lado que não conta. Pra editar de verdade, o caminho é tirar do grupo ou tornar
+representante primeiro; aí a edição acontece na linha que efetivamente é contada.
+
+**Por que o caso salário ficou fora do modelo, e como o modelo ainda cobre ele:** decompor uma
+entrada em partes com soma obrigatória foi descartado — é a mesma armadilha da "soma que
+fecha", uma regra rígida pra um caso que na prática é só "essa entrada tem duas origens, uma
+delas não é minha". O modelo cobre isso sem decomposição: agrupa a linha do banco (R$ 56.200)
+com o lançamento do salário (R$ 36.200, representante) e o porquê vai na descrição; a diferença
+gera o selo **"valores diferem"**, que é aviso, nunca bloqueio — o grupo não precisa fechar em
+centavos pra existir.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
