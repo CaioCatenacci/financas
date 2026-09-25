@@ -212,14 +212,16 @@ export function criarDb(sql) {
       await sql`update pessoas set ativa = false where id = ${id}`;
     },
 
-    // ---- resumos (join p/ nomes; apelidam c.nome as macro p/ manter a forma que os gráficos usam) ----
+    // ---- resumos ---- (join p/ nomes; apelidam c.nome as macro p/ manter a forma que os gráficos usam)
+    // Inc 4.6: filtram por conta_no_resumo (coluna gerada: computa_resumo AND (sem grupo OU
+    // representante)) — um membro de grupo nunca conta, mesmo com computa_resumo=true.
     async resumoPorCategoria(de, ate) {
       return await sql`
         select c.nome as macro, s.nome as sub, t.natureza, sum(t.valor_final) as total, count(*) as n
         from transacoes t
         left join categorias c    on c.id = t.categoria_id
         left join subcategorias s on s.id = t.subcategoria_id
-        where t.data >= ${de} and t.data <= ${ate} and t.computa_resumo
+        where t.data >= ${de} and t.data <= ${ate} and t.conta_no_resumo
         group by c.nome, s.nome, t.natureza order by total desc`;
     },
 
@@ -229,7 +231,7 @@ export function criarDb(sql) {
           coalesce(sum(valor_final) filter (where natureza = 'receita'), 0) as receita,
           coalesce(sum(valor_final) filter (where natureza = 'despesa'), 0) as despesa,
           coalesce(sum(valor_reembolso), 0) as reembolso
-        from transacoes where data >= ${de} and data <= ${ate} and computa_resumo`;
+        from transacoes where data >= ${de} and data <= ${ate} and conta_no_resumo`;
       return rows[0];
     },
 
@@ -238,7 +240,7 @@ export function criarDb(sql) {
         select to_char(data,'YYYY-MM-DD') as dia,
                (round(sum(valor_final)*100))::bigint as total_cents
         from transacoes
-        where natureza = 'despesa' and computa_resumo
+        where natureza = 'despesa' and conta_no_resumo
           and data >= ${de} and data < ${ateExcl}
         group by 1 order by 1`;
       // driver do Neon devolve ::bigint como string — converte na borda para operações numéricas.
@@ -255,7 +257,7 @@ export function criarDb(sql) {
           coalesce(sum(t.valor_final) filter (where date_trunc('month', t.data) = (select cur from m) - interval '1 month'), 0) as ant
         from transacoes t
         left join categorias c on c.id = t.categoria_id
-        where t.natureza = 'despesa' and t.computa_resumo
+        where t.natureza = 'despesa' and t.conta_no_resumo
           and t.data >= (select cur from m) - interval '1 month'
           and t.data <  (select cur from m) + interval '1 month'
         group by c.nome
@@ -268,7 +270,7 @@ export function criarDb(sql) {
                sum(t.valor_total) as bruto, sum(t.valor_reembolso) as reembolsado, sum(t.valor_final) as liquido
         from transacoes t
         left join categorias c on c.id = t.categoria_id
-        where t.valor_reembolso > 0 and t.computa_resumo
+        where t.valor_reembolso > 0 and t.conta_no_resumo
         group by 1, 2 order by 1, 2`;
     },
 
@@ -277,7 +279,7 @@ export function criarDb(sql) {
         select coalesce(p.nome, '—') as pessoa, t.natureza, sum(t.valor_final) as total
         from transacoes t
         left join pessoas p on p.id = t.pessoa_id
-        where t.data >= ${de} and t.data <= ${ate} and t.computa_resumo
+        where t.data >= ${de} and t.data <= ${ate} and t.conta_no_resumo
         group by 1, 2
         order by 3 desc`;
     },
@@ -307,7 +309,7 @@ export function criarDb(sql) {
         select t.categoria_id, to_char(t.data,'YYYY-MM') as mes,
                (round(sum(t.valor_final)*100))::bigint as realizado_cents
         from transacoes t
-        where t.natureza = 'despesa' and t.computa_resumo
+        where t.natureza = 'despesa' and t.conta_no_resumo
           and t.data >= ${de} and t.data < ${ateExcl}
         group by t.categoria_id, to_char(t.data,'YYYY-MM')`;
       return rows.map(r => ({ ...r, realizado_cents: Number(r.realizado_cents) }));

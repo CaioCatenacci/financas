@@ -269,25 +269,25 @@ test("pessoaPorNome retorna null quando não acha", async () => {
   assert.equal(await db.pessoaPorNome("Xuxa"), null);
 });
 
-test("resumoKPIs ignora não-gasto (computa_resumo)", async () => {
+test("resumoKPIs ignora não-gasto (conta_no_resumo)", async () => {
   const sql = fakeSql([{ receita: "0", despesa: "0", reembolso: "0" }]);
   const db = criarDb(sql);
   await db.resumoKPIs("2026-01-01", "2026-12-31");
-  assert.match(sql.chamadas[0].text, /computa_resumo/i);
+  assert.match(sql.chamadas[0].text, /conta_no_resumo/i);
 });
 
 test("resumoPorCategoria ignora não-gasto", async () => {
   const sql = fakeSql([{ macro: "Casa", total: "1" }]);
   const db = criarDb(sql);
   await db.resumoPorCategoria("2026-01-01", "2026-12-31");
-  assert.match(sql.chamadas[0].text, /computa_resumo/i);
+  assert.match(sql.chamadas[0].text, /conta_no_resumo/i);
 });
 
 test("resumoPorPessoa ignora não-gasto", async () => {
   const sql = fakeSql([{ pessoa: "Caio", natureza: "despesa", total: "1" }]);
   const db = criarDb(sql);
   await db.resumoPorPessoa("2026-01-01", "2026-12-31");
-  assert.match(sql.chamadas[0].text, /computa_resumo/i);
+  assert.match(sql.chamadas[0].text, /conta_no_resumo/i);
 });
 
 test("atualizarTransacao alterna computa_resumo", async () => {
@@ -449,13 +449,13 @@ test("metasBaselines lê baselines em centavos", async () => {
   assert.match(sql.chamadas[0].text, /round\(valor_alvo\*100\)/i);
 });
 
-test("realizadoPorCategoriaMes: só despesa+computa_resumo, janela meio-aberta", async () => {
+test("realizadoPorCategoriaMes: só despesa+conta_no_resumo, janela meio-aberta", async () => {
   const sql = fakeSql([]);
   const db = criarDb(sql);
   await db.realizadoPorCategoriaMes("2026-06-01", "2026-09-01");
   const c = sql.chamadas[0];
   assert.match(c.text, /natureza = 'despesa'/i);
-  assert.match(c.text, /computa_resumo/i);
+  assert.match(c.text, /conta_no_resumo/i);
   assert.match(c.text, /data >= .* and .*data < /is);
   assert.deepEqual(c.values, ["2026-06-01", "2026-09-01"]);
 });
@@ -515,7 +515,7 @@ test("apagarExcecao remove pela chave (categoria, mes)", async () => {
   assert.deepEqual(c.values, ["c1", "2026-08-01"]);
 });
 
-test("resumoDiario: despesa+computa_resumo por dia, meio-aberto, cents numérico", async () => {
+test("resumoDiario: despesa+conta_no_resumo por dia, meio-aberto, cents numérico", async () => {
   const sql = fakeSql([{ dia: "2026-09-03", total_cents: "1500" }]); // Neon devolve bigint como STRING
   const db = criarDb(sql);
   const r = await db.resumoDiario("2026-09-01", "2026-10-01");
@@ -523,7 +523,7 @@ test("resumoDiario: despesa+computa_resumo por dia, meio-aberto, cents numérico
   assert.equal(r[0].total_cents, 1500);
   const c = sql.chamadas[0];
   assert.match(c.text, /natureza = 'despesa'/i);
-  assert.match(c.text, /computa_resumo/i);
+  assert.match(c.text, /conta_no_resumo/i);
   assert.match(c.text, /data >= .* and .*data < /is);
   assert.deepEqual(c.values, ["2026-09-01", "2026-10-01"]);
 });
@@ -550,4 +550,25 @@ test("desativarCategoria nunca desativa a categoria padrão (guard no próprio S
   const db = criarDb(sql);
   await db.desativarCategoria("c1");
   assert.match(sql.chamadas[0].text, /not padrao/i);
+});
+
+// ---- Inc 4.6: grupos ----
+// A regra "quem conta" mora na coluna gerada conta_no_resumo (computa_resumo AND (sem grupo OU
+// representante)). Se alguma leitura agregada ainda filtrar por computa_resumo, um membro de
+// grupo volta a contar e o Resumo dobra o valor da duplicata.
+test("leituras agregadas filtram por conta_no_resumo, não por computa_resumo", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.resumoPorCategoria("2026-09-01", "2026-09-30");
+  await db.resumoKPIs("2026-09-01", "2026-09-30");
+  await db.resumoDiario("2026-09-01", "2026-10-01");
+  await db.resumoMesVsAnterior("2026-09");
+  await db.resumoReembolsoAno();
+  await db.resumoPorPessoa("2026-09-01", "2026-09-30");
+  await db.realizadoPorCategoriaMes("2026-09-01", "2026-10-01");
+  assert.equal(sql.chamadas.length, 7);
+  for (const c of sql.chamadas) {
+    assert.match(c.text, /conta_no_resumo/, c.text);
+    assert.doesNotMatch(c.text, /\bcomputa_resumo\b/, c.text);
+  }
 });
