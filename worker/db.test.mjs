@@ -536,3 +536,18 @@ test("resumoMesVsAnterior ancora no mês passado (não em max(data))", async () 
   assert.ok(c.values.includes("2026-09-01") || c.text.includes("2026-09"), "usa o mês passado por parâmetro");
   assert.doesNotMatch(c.text, /max\(data\)/i);
 });
+
+test("catalogo devolve a flag padrao das categorias (fallback por flag, não por nome)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.catalogo();
+  assert.match(sql.chamadas[0].text, /padrao/i);
+});
+
+test("desativarCategoria nunca desativa a categoria padrão (guard no próprio SQL)", async () => {
+  // se a padrão sumisse do catálogo, o fallback voltaria a devolver null (o bug do Telegram mudo)
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.desativarCategoria("c1");
+  assert.match(sql.chamadas[0].text, /not padrao/i);
+});

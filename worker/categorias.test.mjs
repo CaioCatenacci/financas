@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolverCategoria, subsDaCategoria, catalogoParaLista, nomesDeCategoria } from "./categorias.js";
+import { resolverCategoria, subsDaCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao } from "./categorias.js";
 
 // catálogo de teste: 2 categorias + 2 subs + fallback Outros
 const catalogo = {
@@ -63,4 +63,39 @@ test("nomesDeCategoria: resolve ids -> nomes; ids ausentes -> null", () => {
   assert.deepEqual(nomesDeCategoria(catalogo, "cE", "sEsc"), { categoria: "Educação", subcategoria: "Escola" });
   assert.deepEqual(nomesDeCategoria(catalogo, "cS", null), { categoria: "Saúde", subcategoria: null });
   assert.deepEqual(nomesDeCategoria(catalogo, "xxx", "yyy"), { categoria: null, subcategoria: null });
+});
+
+// ---- categoria padrão por FLAG, não por nome ----
+// Bug de 25/09/2026: "Outros" foi renomeada na aba Ajustes pra "Não Identificado" e o fallback
+// por nome literal devolveu categoria_id null → not-null no insert → Telegram mudo (500).
+// A partir daqui o padrão é a categoria com `padrao=true`; "Outros" volta a ser miscelânea
+// deliberada (o Caio escolhe), e "Não Identificado" é o que precisa de triagem.
+const comPadrao = {
+  categorias: [
+    { id: "cE", nome: "Educação", natureza: "despesa", padrao: false },
+    { id: "cO", nome: "Outros", natureza: "despesa", padrao: false },
+    { id: "cNI", nome: "Não Identificado", natureza: "despesa", padrao: true },
+  ],
+  subcategorias: [],
+};
+
+test("categoriaPadrao: devolve a categoria com flag padrao, mesmo existindo Outros", () => {
+  assert.equal(categoriaPadrao(comPadrao).id, "cNI");
+});
+
+test("categoriaPadrao: sem flag no catálogo, cai no nome Outros (compatibilidade)", () => {
+  assert.equal(categoriaPadrao(catalogo).id, "cO");
+});
+
+test("categoriaPadrao: sem flag nem Outros → null", () => {
+  assert.equal(categoriaPadrao({ categorias: [{ id: "cE", nome: "Educação" }] }), null);
+});
+
+test("resolverCategoria: macro inexistente ou nula cai na padrão (flag), não em Outros", () => {
+  assert.deepEqual(resolverCategoria("Marte", null, comPadrao), { categoria_id: "cNI", subcategoria_id: null });
+  assert.deepEqual(resolverCategoria(null, null, comPadrao), { categoria_id: "cNI", subcategoria_id: null });
+});
+
+test("resolverCategoria: 'Outros' pedido explicitamente resolve pra Outros (miscelânea deliberada)", () => {
+  assert.deepEqual(resolverCategoria("Outros", null, comPadrao), { categoria_id: "cO", subcategoria_id: null });
 });

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tratarUpdate } from "./index.js";
+import { tratarUpdate, handleTelegram } from "./index.js";
 
 function dbFake() {
   const estado = { inseridos: [], docs: [], apagados: [] };
@@ -12,6 +12,7 @@ function dbFake() {
         { id: "cCasa", nome: "Casa", natureza: "despesa" },
         { id: "cEdu", nome: "Educação", natureza: "despesa" },
         { id: "cOut", nome: "Outros", natureza: "despesa" },
+        { id: "cNI", nome: "Não Identificado", natureza: "despesa", padrao: true },
       ],
       subcategorias: [
         { id: "sLimp", categoria_id: "cCasa", nome: "Limpeza" },
@@ -189,7 +190,7 @@ test("texto estruturado vira transação manual, resolvendo categoria e pessoa",
   assert.ok(enviados.some((t) => /57,50/.test(t)));
 });
 
-test("texto sem categoria cai em Outros e avisa pessoa inexistente", async () => {
+test("texto sem categoria cai na categoria padrão (flag) e avisa pessoa inexistente", async () => {
   const enviados = [];
   const db = dbFake();
   db.pessoaPorNome = async () => null; // ninguém casa
@@ -197,9 +198,36 @@ test("texto sem categoria cai em Outros e avisa pessoa inexistente", async () =>
   const update = { message: { chat: { id: 7 }, message_id: 1, text: "mercado 30,00 01/03/2026 pessoa=Xuxa" } };
   await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
   const ins = db.estado.inseridos[0];
-  assert.equal(ins.categoria_id, "cOut");    // Outros (fallback do resolverCategoria)
+  assert.equal(ins.categoria_id, "cNI");     // padrão por flag (fallback do resolverCategoria)
   assert.equal(ins.pessoa_id, null);
   assert.ok(enviados.some((t) => /Xuxa/.test(t)));  // avisou o não-encontrado
+});
+
+test("texto com categoria inexistente cai na padrão e o aviso cita o nome dela", async () => {
+  const enviados = [];
+  const db = dbFake();
+  const deps = { db, confirmar: async (c, t) => enviados.push(t), responderImpl: async () => {} };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "mercado 30,00 01/03/2026 categoria=Marte" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.estado.inseridos[0].categoria_id, "cNI");
+  assert.ok(enviados.some((t) => /Não Identificado/.test(t)));
+});
+
+test("handleTelegram: exceção no fluxo responde 200 e avisa o usuário (nunca 500 mudo)", async () => {
+  // 500 faz o Telegram retentar em loop e o usuário fica sem resposta; 200 + aviso fecha o ciclo.
+  const respostas = [];
+  const db = dbFake();
+  db.inserirTransacao = async () => { throw new Error("boom no banco"); };
+  const deps = { db, confirmar: async () => {}, responderImpl: async (c, t) => respostas.push(t) };
+  const env = { TELEGRAM_SECRET: "s", ALLOWLIST: "7", TELEGRAM_TOKEN: "t" };
+  const request = new Request("http://localhost/telegram", {
+    method: "POST", headers: { "X-Telegram-Bot-Api-Secret-Token": "s", "content-type": "application/json" },
+    body: JSON.stringify({ message: { chat: { id: 7 }, message_id: 1, text: "mercado 30,00 01/03/2026" } }),
+  });
+  const resp = await handleTelegram(request, env, deps);
+  assert.equal(resp.status, 200);
+  assert.equal(respostas.length, 1);
+  assert.match(respostas[0], /erro/i);
 });
 
 test("texto inválido responde com o formato e não grava", async () => {

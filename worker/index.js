@@ -8,7 +8,7 @@ import { centsToBR } from "./money.js";
 import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
 import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
 import { parseAprender } from "./teach.js";
-import { resolverCategoria, catalogoParaLista, nomesDeCategoria } from "./categorias.js";
+import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
@@ -46,7 +46,7 @@ export async function tratarUpdate(update, env, deps) {
         const s = catalogo.subcategorias.find((x) => x.categoria_id === c.id && x.nome.toLowerCase() === d.subcategoria.toLowerCase());
         if (s) subNome = s.nome; else avisos.push(`subcategoria "${d.subcategoria}" não existe`);
       } }
-      else avisos.push(`categoria "${d.categoria}" não existe — usei Outros`);
+      else avisos.push(`categoria "${d.categoria}" não existe — usei ${categoriaPadrao(catalogo)?.nome ?? "a padrão"}`);
     }
     const { categoria_id, subcategoria_id } = resolverCategoria(macroNome, subNome, catalogo);
     // resolve pessoa por nome
@@ -131,15 +131,29 @@ export async function tratarUpdate(update, env, deps) {
   await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat}${selo} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id);
 }
 
-async function handleTelegram(request, env) {
+// depsOpt: injeção p/ teste (mesmo padrão do dbOpt em handleApi).
+export async function handleTelegram(request, env, depsOpt = null) {
   if (!segredoTelegramValido(request, env.TELEGRAM_SECRET)) return new Response("no", { status: 401 });
   const update = await request.json();
   const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
   if (!chatPermitido(chatId, env.ALLOWLIST)) return new Response("ok"); // falha fechada, silencioso
 
+  const deps = depsOpt ?? montarDepsTelegram(env);
+  try {
+    await tratarUpdate(update, env, deps);
+  } catch (err) {
+    // Nunca devolver 500: o Telegram retenta o mesmo update em loop e o usuário fica sem resposta
+    // (foi assim que o bug da categoria padrão ficou "mudo"). Avisa, loga e devolve 200 pra fechar.
+    console.error("telegram: falha ao tratar update:", err?.stack || err);
+    try { await deps.responderImpl(chatId, `⚠ Deu erro ao registrar: ${err?.message ?? err}. Tente de novo ou confira no app.`, env); } catch {}
+  }
+  return new Response("ok");
+}
+
+function montarDepsTelegram(env) {
   const sql = neon(env.DATABASE_URL);
   const db = criarDb(sql);
-  const deps = {
+  return {
     db,
     baixar: (fileId) => downloadArquivo(env.TELEGRAM_TOKEN, fileId),
     hashBytes: sha256hex,
@@ -152,8 +166,6 @@ async function handleTelegram(request, env) {
     confirmar: (chat, texto, id) => enviarConfirmacao(env.TELEGRAM_TOKEN, chat, texto, id),
     responderImpl: (chat, texto) => responder(env.TELEGRAM_TOKEN, chat, texto),
   };
-  await tratarUpdate(update, env, deps);
-  return new Response("ok");
 }
 
 export async function handleApi(request, env, url, dbOpt = null) {
