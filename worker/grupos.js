@@ -8,7 +8,11 @@
 // atual antes de pôr no novo, e o db grava a lista em sequência numa única transação.
 
 const ehBanco = (l) => l.fonte === "extrato" || l.fonte === "fatura";
-const maisAntiga = (a, b) => (String(a.criado_em) <= String(b.criado_em) ? a : b);
+// Compara por tempo (ms desde epoch), não por String: o driver Neon devolve objetos Date,
+// cuja toString() não é cronologicamente ordenável (p.ex. "Wed Sep 02 …" > "Wed Oct 01 …" lex).
+// Aceita string ISO e Date, extrai tempo e compara por valor numérico.
+const tempo = (l) => new Date(l.criado_em).getTime();
+const maisAntiga = (a, b) => (tempo(a) <= tempo(b) ? a : b);
 
 // Quem representa um grupo novo: a linha que NÃO veio do banco — é onde mora o contexto que o
 // Caio escreveu na hora (categoria, pessoa, descrição). Havendo várias, a mais antiga. Se todas

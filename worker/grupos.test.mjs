@@ -21,6 +21,35 @@ test("escolherRepresentante: só linhas do banco → a mais antiga", () => {
   assert.equal(escolherRepresentante([extrato2, extrato]).id, "e1");
 });
 
+test("escolherRepresentante: criado_em como Date objects (driver Neon) — pega o cronologicamente mais antigo", () => {
+  // O driver Neon devolve Date objects. String(Date) não é cronologicamente ordenável:
+  // "Wed Oct 01 …" < "Wed Sep 02 …" lexicograficamente, mas Oct é depois. Precisa comparar .getTime().
+  const set1 = [
+    { ...manual, criado_em: new Date("2026-10-01T09:00:00Z") },
+    { ...foto, criado_em: new Date("2026-09-02T10:00:00Z") },
+  ];
+  // Foto é setembro, mais antiga → deve representar (manual é não-banco, mas foto é anterior)
+  assert.equal(escolherRepresentante(set1).id, "f1");
+
+  // Só banco: mais antigo (set a setembro) deve ganhar
+  const set2 = [
+    { ...extrato, criado_em: new Date("2026-10-01T20:00:00Z") },
+    { ...extrato2, criado_em: new Date("2026-09-30T20:00:00Z") },
+  ];
+  assert.equal(escolherRepresentante(set2).id, "e2");
+});
+
+test("escolherRepresentante: misto (string ISO + Date objects) — compara cronologicamente", () => {
+  // O driver pode devolver um misto num mesmo grupo (p.ex. uma linha vem do app, outra do db).
+  // A comparação precisa funcionar misturado.
+  const misto = [
+    { ...manual, criado_em: "2026-10-01T09:00:00Z" },           // string ISO (outubro)
+    { ...foto, criado_em: new Date("2026-09-02T10:00:00Z") },   // Date object (setembro)
+  ];
+  // Foto é setembro, mais antiga
+  assert.equal(escolherRepresentante(misto).id, "f1");
+});
+
 test("decidirAgrupar: nenhuma em grupo → grupo novo, representante não-extrato, todas com grupo_id", () => {
   const d = decidirAgrupar([extrato, manual], "G1");
   assert.equal(d.ok, true);
