@@ -193,21 +193,18 @@ function resolverCategoriaImport(nomeMacro, nomeSub, catalogo) {
 }
 
 // monta a decisao revisada (novos/naoGasto/casados) a partir do preview + catálogo, espelhando
-// tools/importar_extrato.py::_gravar / importar_fatura.py: só "novo"/"naoGasto" viram linha de
-// inserirTransacao (categoria já resolvida por id); "casado" só carimba linha_hash; "ambiguo" e
-// "jaTem" não são aplicados por padrão (o app pode resolver um ambíguo mutando status antes).
-export function montarDecisao(preview, catalogo, fonte) {
+// tools/importar_extrato.py::_gravar / importar_fatura.py, e — Inc 4.6 — a linha do "casado"
+// também vira transação: entra no grupo do lançamento que ela casou (nunca é a representante).
+// "ambiguo" e "jaTem" não são aplicados por padrão (o app pode resolver um ambíguo mutando
+// status antes). `gerarId` é injetável (default crypto.randomUUID) pra dar id de grupo novo
+// determinístico em teste.
+export function montarDecisao(preview, catalogo, fonte, gerarId = () => crypto.randomUUID()) {
   const novos = [], naoGasto = [], casados = [];
-  for (const item of preview.itens) {
-    if (item.status === "casado") {
-      casados.push({ matchId: item.matchId, linhaHash: item.linhaHash });
-      continue;
-    }
-    if (item.status !== "novo" && item.status !== "naoGasto") continue; // ambiguo/jaTem: skip
-
+  // linha de inserirTransacao a partir de um item do preview (paridade com _gravar do Python)
+  const linhaDe = (item) => {
     const nomeCat = item.categoriaOrg || item.categoriaNome || null; // null → padrão
     const { categoria_id, subcategoria_id } = resolverCategoriaImport(nomeCat, item.subNome, catalogo);
-    const row = {
+    return {
       dataISO: item.data, natureza: item.natureza, esfera: "pessoal",
       valorCents: item.valorCents, reembolsoCents: 0,
       categoria_id, subcategoria_id,
@@ -216,7 +213,21 @@ export function montarDecisao(preview, catalogo, fonte) {
       contraparte_nome: item.contraparteNome,
       computa_resumo: item.computaResumo, linha_hash: item.linhaHash,
     };
-    (item.status === "novo" ? novos : naoGasto).push(row);
+  };
+  for (const item of preview.itens) {
+    if (item.status === "casado") {
+      // Inc 4.6: a linha do extrato ENTRA como transação, dentro do grupo do lançamento casado
+      // (grupo novo, ou o que ele já tinha); ela nunca é o representante — quem conta é o que o
+      // Caio lançou. computa_resumo=true de propósito: se um dia desagrupar, ela volta a contar.
+      const grupo_id = item.matchGrupoId || gerarId();
+      casados.push({
+        matchId: item.matchId, grupoExistente: !!item.matchGrupoId,
+        linha: { ...linhaDe(item), computa_resumo: true, grupo_id, representante: false },
+      });
+      continue;
+    }
+    if (item.status !== "novo" && item.status !== "naoGasto") continue; // ambiguo/jaTem: skip
+    (item.status === "novo" ? novos : naoGasto).push(linhaDe(item));
   }
   return { novos, naoGasto, casados };
 }
@@ -241,7 +252,7 @@ export function resumoTexto(preview) {
   } else {
     r = preview.resumo || {};
   }
-  return `novos ${r.novos ?? 0} · conciliados ${r.casados ?? 0} · fora do resumo ${r.naoGasto ?? 0} · ` +
+  return `novos ${r.novos ?? 0} · a agrupar ${r.casados ?? 0} · fora do resumo ${r.naoGasto ?? 0} · ` +
     `ambíguos ${r.ambiguos ?? 0} · já tinha ${r.jaTem ?? 0}`;
 }
 
@@ -1057,7 +1068,7 @@ if (typeof document !== "undefined") {
         ? " · pagamento da fatura no extrato marcado fora do resumo"
         : ` · pagamento no extrato não marcado automaticamente (${r.pagamentoCandidatos} candidato(s)) — ajuste em Lançamentos se preciso`;
     }
-    return `<p class="impresultado">✅ gravados ${r.gravados} (${r.naoGasto} fora do resumo) · conciliados ${r.conciliados}${extra}. Atualize Resumo/Lançamentos para ver.</p>`;
+    return `<p class="impresultado">✅ gravados ${r.gravados} (${r.naoGasto} fora do resumo) · agrupados ${r.agrupados ?? 0}${extra}. Atualize Resumo/Lançamentos para ver.</p>`;
   }
 
   function drawImportar() {

@@ -171,9 +171,9 @@ function previewFixture() {
         categoriaNome: null, subNome: null, categoriaOrg: "Transferências",
         contraparteNome: null,
       },
-      { // casado — só matchId+linhaHash importam
+      { // casado — vira linha do extrato dentro do grupo do lançamento casado (Inc 4.6)
         status: "casado", data: "2026-08-03", descricao: "PIX RECEBIDO", valorCents: 2000,
-        natureza: "receita", linhaHash: "h3", matchId: "m1", computaResumo: true,
+        natureza: "receita", linhaHash: "h3", matchId: "m1", matchGrupoId: null, computaResumo: true,
         categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
       },
       { // ambiguo — não aplicado por padrão
@@ -223,10 +223,26 @@ test("montarDecisao: item naoGasto resolve categoriaOrg (sem sub) e computa_resu
   assert.equal(ng.fonte, "extrato");
 });
 
-test("montarDecisao: item casado vira {matchId,linhaHash}", () => {
+test("montarDecisao: casado vira linha do extrato dentro do grupo (novo ou existente), nunca só um carimbo", () => {
   const preview = previewFixture();
-  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato");
-  assert.deepEqual(d.casados, [{ matchId: "m1", linhaHash: "h3" }]);
+  // o item "casado" da fixture é o de status "casado" (h3): com matchGrupoId null → grupo novo
+  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato", () => "G-novo");
+  assert.equal(d.casados.length, 1);
+  const c = d.casados[0];
+  assert.equal(c.matchId, "m1");
+  assert.equal(c.grupoExistente, false);
+  assert.equal(c.linha.grupo_id, "G-novo");
+  assert.equal(c.linha.representante, false);
+  assert.equal(c.linha.fonte, "extrato");
+  assert.equal(c.linha.linha_hash, "h3");
+  assert.equal(c.linha.computa_resumo, true);
+  assert.ok(c.linha.categoria_id, "categoria resolvida como um novo (cai na padrão se não houver nome)");
+  // com matchGrupoId → reutiliza o grupo e marca grupoExistente
+  const p2 = previewFixture();
+  p2.itens.find(i => i.status === "casado").matchGrupoId = "G0";
+  const d2 = montarDecisao(p2, CATALOGO_IMPORT, "extrato", () => "ignorado");
+  assert.equal(d2.casados[0].grupoExistente, true);
+  assert.equal(d2.casados[0].linha.grupo_id, "G0");
 });
 
 test("montarDecisao: ambíguo e jáTem não são aplicados (fora de novos/naoGasto/casados)", () => {
@@ -264,7 +280,7 @@ test("resumoTexto: conta cada grupo (inclui 'fora do resumo') a partir dos itens
   const preview = previewFixture();
   const txt = resumoTexto(preview);
   assert.match(txt, /novos 1/i);
-  assert.match(txt, /conciliad\w* 1/i);
+  assert.match(txt, /a agrupar 1/i);
   assert.match(txt, /fora do resumo 1/i); // naoGasto — o grupo que faltava cobrir
   assert.match(txt, /ambígu\w* 1/i);
   assert.match(txt, /já tinha 1/i);

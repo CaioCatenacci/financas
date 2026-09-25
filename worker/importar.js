@@ -47,7 +47,7 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
     if (hashesSet.has(lh)) {
       // já gravada em import anterior (idempotência) — nem classifica, nem reconcilia.
       itens.push({
-        ...l, linhaHash: lh, status: "jaTem", matchId: null, computaResumo: null,
+        ...l, linhaHash: lh, status: "jaTem", matchId: null, matchGrupoId: null, computaResumo: null,
         categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
       });
       resumo.jaTem++;
@@ -58,6 +58,7 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
 
     let status;
     let matchId = null;
+    let matchGrupoId = null;
     if (!info.computaResumo) {
       // não-gasto (transferência p/ conta própria, aplicação, pagamento de fatura): não entra
       // na reconciliação — não é candidato a "casar" com nada em `existentes`.
@@ -67,12 +68,13 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
       status = rec.status; // "novo" | "casado" | "ambiguo"
       if (status === "casado") {
         matchId = rec.matchId;
+        matchGrupoId = rec.matchGrupoId;
         disponiveis = disponiveis.filter(e => e.id !== matchId);
       }
     }
 
     itens.push({
-      ...l, linhaHash: lh, status, matchId,
+      ...l, linhaHash: lh, status, matchId, matchGrupoId,
       computaResumo: info.computaResumo,
       categoriaNome: info.categoriaNome, subNome: info.subNome, categoriaOrg: info.categoriaOrg,
       contraparteNome: info.contraparteNome,

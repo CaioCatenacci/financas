@@ -313,7 +313,7 @@ function dbImportarFake() {
     hashesNaJanela: async () => [],
     aplicarImportacao: async (d) => {
       estado.aplicado = d;
-      return { gravados: (d.novos || []).length + (d.naoGasto || []).length, conciliados: (d.casados || []).length, naoGasto: (d.naoGasto || []).length };
+      return { gravados: (d.novos || []).length + (d.naoGasto || []).length, agrupados: (d.casados || []).length, naoGasto: (d.naoGasto || []).length };
     },
     marcarPagamentoFaturaNaoGasto: async (totalCents, de, ate) => {
       estado.pagamento = { totalCents, de, ate };
@@ -402,7 +402,6 @@ test("POST /api/importar/preview (extrato) amplia a janela de reconciliação ±
     },
     hashesNaJanela: async () => [],
     inserirTransacao: async () => ({ id: "x" }),
-    carimbarLinhaHash: async () => {},
   };
   const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
   const request = new Request("http://localhost/api/importar/preview", {

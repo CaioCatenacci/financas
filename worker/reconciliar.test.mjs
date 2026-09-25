@@ -15,7 +15,15 @@ test("linhaHash muda com o ordinal", () => {
 test("reconciliarLinha: 1 candidato na janela ±3d → casado", () => {
   const r = reconciliarLinha({ data:"2025-12-10", valorCents:19478 },
     [{ id:"t1", data:"2025-12-11", valorCents:19478 }]);
-  assert.deepEqual(r, { status:"casado", matchId:"t1" });
+  assert.deepEqual(r, { status:"casado", matchId:"t1", matchGrupoId: null });
+});
+
+test("reconciliarLinha: casado devolve matchGrupoId da candidata (null se ela não tem grupo)", () => {
+  const linha = { data: "2026-09-30", valorCents: 250000 };
+  const semGrupo = [{ id: "m1", data: "2026-09-29", valorCents: 250000, grupo_id: null }];
+  assert.deepEqual(reconciliarLinha(linha, semGrupo), { status: "casado", matchId: "m1", matchGrupoId: null });
+  const comGrupo = [{ id: "m1", data: "2026-09-29", valorCents: 250000, grupo_id: "G0" }];
+  assert.deepEqual(reconciliarLinha(linha, comGrupo), { status: "casado", matchId: "m1", matchGrupoId: "G0" });
 });
 
 test("reconciliarLinha: >1 → ambiguo; 0/valor≠/fora da janela → novo", () => {
