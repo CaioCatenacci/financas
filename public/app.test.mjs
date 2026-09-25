@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
-  acumularDiario, paceOrcamento,
+  acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas,
 } from "./app.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
@@ -454,4 +454,43 @@ test("montarDecisao: item sem categoria cai na categoria padrão (flag), não em
   };
   const d = montarDecisao(preview, catalogo, "extrato");
   assert.equal(d.novos[0].categoria_id, "cNI");
+});
+
+// ---------- Inc 4.6: montarLinhas / filtrarLinhas ----------
+// rows já vêm ordenadas por data desc do servidor; o grupo aparece na posição do representante.
+const R = [
+  { id: "a", data: "2026-09-30", descricao: "PIX ALUGUEL", contraparte_nome: null, categoria: "Casa", pessoa: null, pessoa_id: null, origem_categoria: "regra", computa_resumo: true, grupo_id: "G1", representante: false, valor_final: "2500.00", fonte: "extrato" },
+  { id: "b", data: "2026-09-15", descricao: "Cinema", contraparte_nome: null, categoria: "Lazer", pessoa: "Caio", pessoa_id: 1, origem_categoria: "manual", computa_resumo: true, grupo_id: null, representante: false, valor_final: "60.00", fonte: "manual" },
+  { id: "c", data: "2026-09-02", descricao: "Aluguel", contraparte_nome: "Imobiliária X", categoria: "Casa", pessoa: "Casa", pessoa_id: 5, origem_categoria: "manual", computa_resumo: true, grupo_id: "G1", representante: true, valor_final: "2500.00", fonte: "manual" },
+];
+
+test("montarLinhas: grupo vira uma linha na posição do representante, com os membros dentro", () => {
+  const L = montarLinhas(R);
+  assert.deepEqual(L.map((l) => l.t.id), ["b", "c"]);       // "a" (membro) não vira linha própria
+  const g = L.find((l) => l.grupo_id === "G1");
+  assert.deepEqual(g.membros.map((m) => m.id), ["a"]);
+  assert.equal(g.diferem, false);
+  assert.equal(g.orfao, false);
+});
+
+test("montarLinhas: valores diferentes marcam diferem", () => {
+  const rows = R.map((r) => (r.id === "a" ? { ...r, valor_final: "56200.00" } : r));
+  assert.equal(montarLinhas(rows).find((l) => l.grupo_id === "G1").diferem, true);
+});
+
+test("montarLinhas: membros órfãos (representante fora do período carregado) viram linhas soltas", () => {
+  const semRep = R.filter((r) => r.id !== "c"); // o representante ficou fora da janela
+  const L = montarLinhas(semRep);
+  assert.deepEqual(L.map((l) => l.t.id), ["a", "b"]); // nada some da tela
+  assert.equal(L[0].orfao, true);
+  assert.deepEqual(L[0].membros, []);
+});
+
+test("filtrarLinhas: dimensões pelo representante; texto acha o grupo por membro; 'agrupados' lista só grupos", () => {
+  const L = montarLinhas(R);
+  assert.deepEqual(filtrarLinhas(L, { categoria: "Casa" }).map((l) => l.t.id), ["c"]);
+  assert.deepEqual(filtrarLinhas(L, { texto: "pix aluguel" }).map((l) => l.t.id), ["c"]); // bateu no membro "a"
+  assert.deepEqual(filtrarLinhas(L, { texto: "cinema" }).map((l) => l.t.id), ["b"]);
+  assert.deepEqual(filtrarLinhas(L, { computa: "agrupados" }).map((l) => l.t.id), ["c"]);
+  assert.deepEqual(filtrarLinhas(L, { computa: "gasto" }).map((l) => l.t.id), ["b", "c"]);
 });

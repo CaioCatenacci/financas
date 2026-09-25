@@ -103,6 +103,53 @@ export function filtrarTransacoes(rows, filtro = {}) {
   });
 }
 
+// ---------- Inc 4.6: grupos (duplicatas explícitas com representante) ----------
+// Transforma a lista plana do servidor em linhas de tabela: { t, membros, grupo_id, diferem, orfao }.
+// t = a transação solta ou o REPRESENTANTE do grupo; membros = os outros do grupo (nunca viram
+// linha própria — aparecem só ao expandir). O grupo fica na posição do representante (a lista já
+// vem ordenada por data). Grupo cujo representante NÃO veio na lista (Lançamentos carrega um mês;
+// a linha do banco pode estar em outro) mostra os membros como linhas soltas com orfao=true —
+// nada some da tela.
+export function montarLinhas(rows) {
+  const porGrupo = new Map();
+  for (const r of rows) {
+    if (!r.grupo_id) continue;
+    if (!porGrupo.has(r.grupo_id)) porGrupo.set(r.grupo_id, []);
+    porGrupo.get(r.grupo_id).push(r);
+  }
+  const out = [];
+  for (const r of rows) {
+    if (!r.grupo_id) { out.push({ t: r, membros: [], grupo_id: null, diferem: false, orfao: false }); continue; }
+    const grupo = porGrupo.get(r.grupo_id);
+    const rep = grupo.find((g) => g.representante);
+    if (!rep) { out.push({ t: r, membros: [], grupo_id: r.grupo_id, diferem: false, orfao: true }); continue; }
+    if (r.id !== rep.id) continue; // membro: só dentro do grupo
+    const membros = grupo.filter((g) => g.id !== rep.id);
+    const diferem = membros.some((m) => Number(m.valor_final) !== Number(r.valor_final));
+    out.push({ t: r, membros, grupo_id: r.grupo_id, diferem, orfao: false });
+  }
+  return out;
+}
+
+// Filtro por cima das linhas montadas: categoria/pessoa/origem/gasto pelo representante (é a
+// linha que conta); TEXTO bate no representante OU em qualquer membro — é assim que se acha uma
+// linha do banco que "sumiu" dentro de um grupo; computa="agrupados" lista só grupos.
+export function filtrarLinhas(linhas, filtro = {}) {
+  const { texto, computa, ...dims } = filtro;
+  const txt = texto && texto.trim() ? normalizarBusca(texto.trim()) : "";
+  const soGrupos = computa === "agrupados";
+  return linhas.filter((l) => {
+    if (soGrupos && !l.membros.length) return false;
+    if (!filtrarTransacoes([l.t], { ...dims, computa: soGrupos ? "" : computa }).length) return false;
+    if (txt) {
+      const alvo = [l.t, ...l.membros]
+        .map((x) => normalizarBusca((x.descricao ?? "") + " " + (x.contraparte_nome ?? ""))).join(" | ");
+      if (!alvo.includes(txt)) return false;
+    }
+    return true;
+  });
+}
+
 // ---------- edição em massa (Lançamentos) ----------
 // monta o objeto `mudancas` a partir dos valores da barra de ação em massa. Só inclui um campo
 // quando ele NÃO está em "— não mexer —" ("__nao__"). Sentinelas: categoria "__nao__" = não mexe;
