@@ -20,12 +20,6 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 |---|---|---|---|
 | B1 | **Telegram sem retorno** (texto manual e foto): webhook devolvia 500 porque `Outros` foi renomeada pra `Não Identificado` e o fallback era por nome. **Corrigido no código** (categoria padrão por flag, migração `0008`, try/catch no handler — ver CONTEXTO §15). Pendente: aplicar `0008` no Neon e fazer deploy. | P1 | relato do Caio, 25/09/2026; `wrangler tail` |
 
-## Em andamento
-
-| # | Item | Prioridade | Origem |
-|---|---|---|---|
-| X1 | **Inc 4.6 — agrupamento de transações** (duplicatas explícitas com representante). Fase A entregue (25/09/2026); Fase B (import grava grupo) em andamento. Spec: `docs/superpowers/specs/2026-09-25-agrupamento-transacoes-design.md`. | P1 | pedido do Caio, 25/09/2026 |
-
 ## A. Incrementos grandes (roadmap)
 
 | # | Item | Prioridade | Origem |

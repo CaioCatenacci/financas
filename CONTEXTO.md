@@ -410,6 +410,23 @@ com o lançamento do salário (R$ 36.200, representante) e o porquê vai na desc
 gera o selo **"valores diferem"**, que é aviso, nunca bloqueio — o grupo não precisa fechar em
 centavos pra existir.
 
+**Fase B — o import grava o grupo, não mais o hash:** um casado passa a inserir a linha do
+extrato **dentro** do grupo do lançamento (novo ou existente) em vez de só carimbar `linha_hash`
+nele — a linha do banco vira uma transação de verdade, visível como membro, em vez de um carimbo
+invisível. **Por que a linha entra com `computa_resumo=true`:** desagrupar essa linha depois tem
+que devolver a contagem — se ela nascesse com `computa_resumo=false`, tirar do grupo deixaria uma
+transação "fora do resumo" por acidente, sem ninguém ter decidido isso; nascendo `true`, a coluna
+gerada `conta_no_resumo` já cuida de excluí-la do Resumo enquanto ela for membro não-representante,
+e desagrupar simplesmente devolve o comportamento normal. **Por que o grupo nasce no navegador:**
+o `grupo_id` é gerado em `montarDecisao` (`crypto.randomUUID()`) antes de chegar no Worker — o
+servidor só grava, do mesmo jeito que o resto do fluxo de import (o app decide a decisão revisada,
+`db.aplicarImportacao` só persiste). **Por que candidatos excluem grupo que já tem uma linha de
+extrato:** um lançamento casa com o banco **uma vez** — se o grupo já tem a linha do extrato como
+membro, oferecer esse lançamento de novo como candidato deixaria o import tentar casar o mesmo
+banco duas vezes. Os hashes carimbados no modelo antigo (Fase A e antes) ficam como estão — não há
+migração de carimbo pra grupo; eles só saem de circulação quando os importadores Python forem
+alinhados ou aposentados (BACKLOG C6).
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

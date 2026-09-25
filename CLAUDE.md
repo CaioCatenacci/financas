@@ -175,6 +175,10 @@ expansível na posição do representante; membros não são editáveis; busca p
 por qualquer membro; chip "Só agrupados". Não há regra de soma: valores diferentes só geram o
 selo "valores diferem". `Outros`/`Não Identificado` seguem como na seção anterior.
 
+**Import:** um casado insere a linha do extrato no grupo do lançamento (novo ou existente),
+nunca carimba o hash nele; candidatos ao casamento excluem extrato/fatura, hash antigo e grupo
+que já tem extrato; os importadores Python seguem no modelo antigo (BACKLOG C6).
+
 ---
 
 ## Segurança — inegociável
@@ -226,7 +230,7 @@ O CI (`.github/workflows/ci.yml`) roda os dois.
 | 2 | Classificador que aprende | app grava correções; sistema passa a acertar | implementado |
 | 3 | Extrato + fatura | PDF → parsing → transações; conciliação | Incremento 3 |
 | 4 | Planejamento | metas/realizado vs alvo | implementado (mês + grade) |
-| 4.6 | Agrupamento | duplicatas explícitas com representante; import grava o grupo | Fase A implementada |
+| 4.6 | Agrupamento | duplicatas explícitas com representante; import grava o grupo | implementado (A+B) |
 | 5 | Camada PJ | receita empresa → cascata → despesas casa | Incremento 5 |
 | 6 | Plus | investimentos; estrutura fina Dropbox | Incremento 6 |
 

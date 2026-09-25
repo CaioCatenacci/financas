@@ -170,8 +170,10 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
 
 /**
  * Aplica a decisão já revisada (pelo usuário, no app) no banco, delegando pro
- * `db.aplicarImportacao`, que grava novos+não-gasto (insert) e carimba a linha_hash dos casados
- * numa ÚNICA transação HTTP (1 subrequest, atômica). `db` é injetado — único efeito colateral.
+ * `db.aplicarImportacao`, que grava novos+não-gasto (insert) e, pros casados, insere a linha do
+ * extrato dentro do grupo do lançamento (e, se o grupo for novo, marca o lançamento casado como
+ * representante) — tudo numa ÚNICA transação HTTP (1 subrequest, atômica). `db` é injetado —
+ * único efeito colateral.
  *
  * `decisao.novos`/`decisao.naoGasto` já devem chegar com `categoria_id`/`subcategoria_id`
  * resolvidos (nome→id) por quem monta a decisão — este módulo não resolve categoria.
