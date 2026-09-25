@@ -335,10 +335,14 @@ test("marcarPagamentoFaturaNaoGasto marca quando há exatamente 1 candidato", as
   const sql = fakeSql([{ id: "pg1" }]); // select devolve 1 candidato
   const db = criarDb(sql);
   const r = await db.marcarPagamentoFaturaNaoGasto(16700, "2025-05-01", "2025-07-02");
-  // 1º call: select dos candidatos (extrato/despesa/no resumo/valor bate/janela)
+  // 1º call: select dos candidatos (extrato/despesa/conta no resumo/valor bate/janela). Fase B:
+  // filtra por conta_no_resumo, não computa_resumo=true — uma linha de extrato dentro de um grupo
+  // tem computa_resumo=true mas já não conta (quem conta é o representante); marcar computa_resumo
+  // nela não evita a dupla contagem no card.
   assert.match(sql.chamadas[0].text, /from transacoes/i);
   assert.match(sql.chamadas[0].text, /fonte = 'extrato'/i);
-  assert.match(sql.chamadas[0].text, /computa_resumo = true/i);
+  assert.match(sql.chamadas[0].text, /conta_no_resumo/i);
+  assert.doesNotMatch(sql.chamadas[0].text, /computa_resumo = true/i);
   assert.ok(sql.chamadas[0].values.includes(16700));
   // 2º call: update marcando fora do resumo
   assert.match(sql.chamadas[1].text, /update transacoes set computa_resumo = false/i);

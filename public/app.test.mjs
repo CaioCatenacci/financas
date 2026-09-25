@@ -510,3 +510,25 @@ test("filtrarLinhas: dimensões pelo representante; texto acha o grupo por membr
   assert.deepEqual(filtrarLinhas(L, { computa: "agrupados" }).map((l) => l.t.id), ["c"]);
   assert.deepEqual(filtrarLinhas(L, { computa: "gasto" }).map((l) => l.t.id), ["b", "c"]);
 });
+
+// Fase B: grupo pode ligar transações de meses diferentes (ex.: lançamento manual em 29/09
+// casado com a linha do extrato em 01/10). GET /api/transacoes só traz o mês selecionado — o
+// representante chega sozinho, sem nenhum outro membro carregado. Antes desta correção isso
+// virava uma linha "solta" (sem selo, sem ⛓ desagrupar) e sumia do filtro "Só agrupados".
+const REP_SEM_MEMBROS = { id: "d", data: "2026-09-29", descricao: "Escola", contraparte_nome: null, categoria: "Educação", pessoa: null, pessoa_id: null, origem_categoria: "manual", computa_resumo: true, grupo_id: "G2", representante: true, valor_final: "500.00", fonte: "manual" };
+
+test("montarLinhas: representante carregado sem seus membros (fora do período) ainda vira linha de grupo", () => {
+  const L = montarLinhas([REP_SEM_MEMBROS, R[1]]); // R[1] = "b", transação solta
+  const g = L.find((l) => l.t.id === "d");
+  assert.equal(g.membrosFora, true);
+  assert.deepEqual(g.membros, []);
+  assert.equal(g.orfao, false);
+  assert.equal(g.grupo_id, "G2");
+  const solta = L.find((l) => l.t.id === "b");
+  assert.equal(solta.membrosFora, false); // linha solta nunca tem membrosFora
+});
+
+test("filtrarLinhas: computa='agrupados' inclui grupo cujos membros estão fora do período (membrosFora)", () => {
+  const L = montarLinhas([REP_SEM_MEMBROS, R[1]]);
+  assert.deepEqual(filtrarLinhas(L, { computa: "agrupados" }).map((l) => l.t.id), ["d"]);
+});

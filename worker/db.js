@@ -417,14 +417,18 @@ export function criarDb(sql) {
     },
 
     // Marca o pagamento da fatura no extrato como fora do resumo (computa_resumo=false): procura
-    // UMA despesa de extrato ainda no resumo cujo valor bata com o total da fatura, dentro de
-    // [de,ate]. Espelha tools/importar_fatura.py: 1 candidato → marca; 0 ou >1 → não mexe (devolve
-    // a contagem p/ quem chama avisar). Sem isso, os itens da fatura + o pagamento no extrato
-    // contariam o gasto do cartão duas vezes no Resumo.
+    // UMA despesa de extrato que ainda CONTA no resumo (conta_no_resumo) cujo valor bata com o
+    // total da fatura, dentro de [de,ate]. Espelha tools/importar_fatura.py: 1 candidato → marca;
+    // 0 ou >1 → não mexe (devolve a contagem p/ quem chama avisar). Sem isso, os itens da fatura +
+    // o pagamento no extrato contariam o gasto do cartão duas vezes no Resumo.
+    // Fase B (Inc 4.6): filtra por conta_no_resumo, não computa_resumo=true — uma linha de extrato
+    // que já está DENTRO de um grupo tem computa_resumo=true mas conta_no_resumo=false (quem conta
+    // é o representante). Marcar computa_resumo nela não evita dupla contagem nenhuma; o candidato
+    // certo é sempre a linha que hoje soma no card.
     async marcarPagamentoFaturaNaoGasto(totalCents, de, ate) {
       const rows = await sql`
         select id from transacoes
-        where fonte = 'extrato' and natureza = 'despesa' and computa_resumo = true
+        where fonte = 'extrato' and natureza = 'despesa' and conta_no_resumo = true
           and (round(valor_final*100))::bigint = ${totalCents}
           and data between ${de} and ${ate}`;
       if (rows.length === 1) {

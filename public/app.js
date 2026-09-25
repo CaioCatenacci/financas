@@ -119,14 +119,18 @@ export function montarLinhas(rows) {
   }
   const out = [];
   for (const r of rows) {
-    if (!r.grupo_id) { out.push({ t: r, membros: [], grupo_id: null, diferem: false, orfao: false }); continue; }
+    if (!r.grupo_id) { out.push({ t: r, membros: [], grupo_id: null, diferem: false, orfao: false, membrosFora: false }); continue; }
     const grupo = porGrupo.get(r.grupo_id);
     const rep = grupo.find((g) => g.representante);
-    if (!rep) { out.push({ t: r, membros: [], grupo_id: r.grupo_id, diferem: false, orfao: true }); continue; }
+    if (!rep) { out.push({ t: r, membros: [], grupo_id: r.grupo_id, diferem: false, orfao: true, membrosFora: false }); continue; }
     if (r.id !== rep.id) continue; // membro: só dentro do grupo
     const membros = grupo.filter((g) => g.id !== rep.id);
     const diferem = membros.some((m) => Number(m.valor_final) !== Number(r.valor_final));
-    out.push({ t: r, membros, grupo_id: r.grupo_id, diferem, orfao: false });
+    // Fase B: grupo pode ligar meses diferentes (manual casado com extrato de outro mês). Se só o
+    // representante veio na janela do mês carregado, os membros existem no banco mas não aqui —
+    // ainda tem que contar como grupo (selo + ⛓ desagrupar), senão ele parece uma linha solta.
+    const membrosFora = membros.length === 0;
+    out.push({ t: r, membros, grupo_id: r.grupo_id, diferem, orfao: false, membrosFora });
   }
   return out;
 }
@@ -139,7 +143,7 @@ export function filtrarLinhas(linhas, filtro = {}) {
   const txt = texto && texto.trim() ? normalizarBusca(texto.trim()) : "";
   const soGrupos = computa === "agrupados";
   return linhas.filter((l) => {
-    if (soGrupos && !l.membros.length) return false;
+    if (soGrupos && !l.membros.length && !l.membrosFora) return false;
     if (!filtrarTransacoes([l.t], { ...dims, computa: soGrupos ? "" : computa }).length) return false;
     if (txt) {
       const alvo = [l.t, ...l.membros]
@@ -695,9 +699,12 @@ if (typeof document !== "undefined") {
 
   function drawRows() {
     const cats = estado.catalogo.categorias;
-    const linhas = filtrarLinhas(montarLinhas(estado.transacoes), estado.filtro);
+    // "N de M": M tem que ser o nº de LINHAS da tabela, não de transações — senão o total inclui
+    // membros de grupo (que não viram linha própria) e "N de M" não fecha.
+    const todas = montarLinhas(estado.transacoes);
+    const linhas = filtrarLinhas(todas, estado.filtro);
     const contador = $("#fcontador");
-    if (contador) contador.textContent = `${linhas.length} de ${estado.transacoes.length}`;
+    if (contador) contador.textContent = `${linhas.length} de ${todas.length}`;
     if (!linhas.length) {
       $("#rows").innerHTML = `<tr><td colspan="9" class="vazio">nenhum lançamento com esses filtros</td></tr>`;
       atualizarMassaBar();
@@ -720,8 +727,12 @@ if (typeof document !== "undefined") {
         ? `<button class="grpToggle" type="button" title="${aberto ? "Recolher" : "Ver"} os lançamentos agrupados">${aberto ? "▾" : "▸"} ${nMem}</button>` +
           `<span class="selo-grupo">grupo</span>` +
           (l.diferem ? `<span class="selo-diferem" title="algum membro tem valor diferente do representante">valores diferem</span>` : "")
-        : (l.orfao ? `<span class="selo-grupo" title="o representante deste grupo está fora do período carregado">membro de grupo</span>` : "");
-      const acaoGrupo = nMem ? `<button class="desagrupar" title="Desagrupar">⛓</button>` : "";
+        : l.membrosFora
+          ? `<span class="selo-grupo" title="os outros lançamentos deste grupo estão fora do período carregado">grupo (membros em outro período)</span>`
+          : (l.orfao ? `<span class="selo-grupo" title="o representante deste grupo está fora do período carregado">membro de grupo</span>` : "");
+      // membrosFora: nada carregado pra expandir (▸ N), mas o grupo existe — ⛓ desagrupar continua
+      // disponível (funciona só por data-grupo, não depende dos membros estarem na tela).
+      const acaoGrupo = (nMem || l.membrosFora) ? `<button class="desagrupar" title="Desagrupar">⛓</button>` : "";
       const principal = `<tr data-id="${t.id}" data-grupo="${l.grupo_id || ""}">
         <td class="selcol"><input type="checkbox" class="selrow" ${sel}></td>
         <td class="dt">${fmtData(t.data)}</td>
@@ -1125,7 +1136,7 @@ if (typeof document !== "undefined") {
         </div>
       </div>
       ${tabelaItens("Novos", novos)}
-      ${tabelaItens("Conciliados (já existem no extrato)", casados)}
+      ${tabelaItens("A agrupar (já lançados; a linha do extrato entra no grupo)", casados)}
       ${tabelaItens("Fora do resumo (transferência/pagamento de fatura)", naoGasto)}
       ${tabelaItens("Ambíguos — não serão aplicados, a menos que você trate como novo", ambiguos, { comAmbiguo: true })}
       ${tabelaItens("Já importados antes (ignorados)", jaTem)}
