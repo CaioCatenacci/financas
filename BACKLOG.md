@@ -69,3 +69,14 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 | E4 | **Docs desatualizados:** roadmap em `CLAUDE.md` (1.5 e 3 já entregues), estrutura no `README.md` (`docs/index.html`, `test-worker.mjs`), `CLAUDE.md` sem seção do Inc 3. | P2 | análise 25/09/2026 |
 | E5 | **Branch `redesign-dashboard`** existe sem commits — decidir se vira algo ou apagar. | P3 | análise 25/09/2026 |
 | E6 | **Sem logs persistidos no Worker** (`[observability]` desligado no `wrangler.toml`) — um erro só aparece se alguém estiver com `wrangler tail` aberto na hora. | P2 | investigação do B1 |
+
+## F. Grupos (Inc 4.6) — residuais do review final
+
+| # | Item | Prioridade | Origem |
+|---|---|---|---|
+| F1 | **Grupo da Fase A com foto + manual de mesmo valor** deixa a linha do extrato `ambíguo` no import (dois candidatos). Colapsar candidatos que compartilham `grupo_id` casaria direto no grupo. | P3 | review final Inc 4.6 |
+| F2 | **Aplicar depois de preview velho** pode deixar a linha do extrato num grupo sem representante (guard `grupo_id is null` não pega; grupo dissolvido no meio). Único usuário, improvável; `decidirAgrupar` também não checa que o grupo existente tem representante. | P3 | review final Inc 4.6 |
+| F3 | **Entrada malformada nas rotas de grupo vira 500** (id não-uuid no cast `::uuid[]`, `ids` não-array). O app sempre manda uuid válido; validar e responder 400. | P3 | review final Inc 4.6 |
+| F4 | **Membros órfãos** (representante fora do período) renderizam com controles de edição completos; o toggle "fora do resumo" neles não afeta o Resumo. | P3 | review final Inc 4.6 |
+| F5 | **Teste do predicado de candidatos** (`transacoesNaJanela`) é só regex no SQL; a rota de tirar membro não testa "id de outro grupo" (mesmo caminho de `decidirTirar`). | P3 | review final Inc 4.6 |
+| F6 | **Edição em massa / PATCH em id de membro** pela API (UI não expõe): efeito é só o aprendizado por descrição de extrato. Decidir se restringe. | P3 | review final Inc 4.6 |
