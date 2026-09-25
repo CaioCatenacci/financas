@@ -339,6 +339,42 @@ export function criarDb(sql) {
       await sql`delete from metas_excecao where categoria_id = ${categoria_id} and mes = ${mesDia01}`;
     },
 
+    // ---- Inc 4.6: grupos (duplicatas explícitas com representante) ----
+    // As três leituras devolvem a forma mínima que worker/grupos.js consome. Quem decide é o
+    // módulo puro; aqui só se lê e se grava.
+    async transacoesPorIds(ids) {
+      if (!ids || !ids.length) return [];
+      return await sql`
+        select id, fonte, criado_em, grupo_id, representante, valor_final
+        from transacoes where id = any(${ids}::uuid[])`;
+    },
+
+    async membrosDoGrupo(grupo_id) {
+      return await sql`
+        select id, fonte, criado_em, grupo_id, representante, valor_final
+        from transacoes where grupo_id = ${grupo_id} order by criado_em`;
+    },
+
+    // membros do grupo da transação (ela inclusa); [] quando ela não tem grupo.
+    async grupoDaTransacao(id) {
+      return await sql`
+        select id, fonte, criado_em, grupo_id, representante, valor_final
+        from transacoes
+        where grupo_id = (select grupo_id from transacoes where id = ${id}) and grupo_id is not null
+        order by criado_em`;
+    },
+
+    // Grava a lista de mudanças de grupos.js NA ORDEM (o índice único de representante exige
+    // tirar antes de pôr) e, se pedido, apaga uma transação — tudo numa única sql.transaction
+    // (1 subrequest, atômica: ou o grupo fica consistente ou nada muda).
+    async gravarGrupo({ mudancas = [], apagarId = null } = {}) {
+      const queries = mudancas.map((m) => sql`
+        update transacoes set grupo_id = ${m.grupo_id}, representante = ${m.representante} where id = ${m.id}`);
+      if (apagarId) queries.push(sql`delete from transacoes where id = ${apagarId}`);
+      if (queries.length) await sql.transaction(queries);
+      return { alterados: mudancas.length, apagados: apagarId ? 1 : 0 };
+    },
+
     // ---- apoio à importação: consultas de reconciliação ----
     async transacoesNaJanela(de, ate) {
       const rows = await sql`

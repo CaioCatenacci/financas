@@ -572,3 +572,46 @@ test("leituras agregadas filtram por conta_no_resumo, não por computa_resumo", 
     assert.doesNotMatch(c.text, /\bcomputa_resumo\b/, c.text);
   }
 });
+
+test("transacoesPorIds/membrosDoGrupo/grupoDaTransacao devolvem a forma mínima que grupos.js precisa", async () => {
+  const sql = fakeSql([{ id: "t1", fonte: "manual", criado_em: "x", grupo_id: null, representante: false, valor_final: "1.00" }]);
+  const db = criarDb(sql);
+  await db.transacoesPorIds(["t1", "t2"]);
+  assert.match(sql.chamadas[0].text, /select id, fonte, criado_em, grupo_id, representante, valor_final/i);
+  assert.match(sql.chamadas[0].text, /id = any\(/i);
+  await db.membrosDoGrupo("G0");
+  assert.match(sql.chamadas[1].text, /where grupo_id = /i);
+  await db.grupoDaTransacao("t1");
+  assert.match(sql.chamadas[2].text, /grupo_id = \(select grupo_id from transacoes where id = /i);
+  // lista vazia não vai ao banco
+  assert.deepEqual(await db.transacoesPorIds([]), []);
+  assert.equal(sql.chamadas.length, 3);
+});
+
+test("gravarGrupo grava todas as mudanças (na ordem) e o delete opcional numa ÚNICA transação", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const r = await db.gravarGrupo({
+    mudancas: [
+      { id: "m1", grupo_id: "G0", representante: false },
+      { id: "e1", grupo_id: "G0", representante: true },
+    ],
+    apagarId: "x9",
+  });
+  assert.deepEqual(r, { alterados: 2, apagados: 1 });
+  assert.ok(Array.isArray(sql.transacao), "usa sql.transaction");
+  assert.equal(sql.transacao.length, 3);
+  // as queries da transação são construídas pelo fakeSql: verificamos a ordem via chamadas
+  assert.match(sql.chamadas[0].text, /update transacoes set grupo_id = \?, representante = \? where id = \?/i);
+  assert.deepEqual(sql.chamadas[0].values, ["G0", false, "m1"]);
+  assert.deepEqual(sql.chamadas[1].values, ["G0", true, "e1"]);
+  assert.match(sql.chamadas[2].text, /delete from transacoes where id = \?/i);
+  assert.deepEqual(sql.chamadas[2].values, ["x9"]);
+});
+
+test("gravarGrupo sem mudanças nem delete não abre transação", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  assert.deepEqual(await db.gravarGrupo({ mudancas: [] }), { alterados: 0, apagados: 0 });
+  assert.equal(sql.transacao, undefined);
+});
