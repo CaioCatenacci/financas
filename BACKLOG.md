@@ -20,6 +20,12 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 |---|---|---|---|
 | B1 | **Telegram sem retorno** (texto manual e foto): webhook devolvia 500 porque `Outros` foi renomeada pra `Não Identificado` e o fallback era por nome. **Corrigido no código** (categoria padrão por flag, migração `0008`, try/catch no handler — ver CONTEXTO §15). Pendente: aplicar `0008` no Neon e fazer deploy. | P1 | relato do Caio, 25/09/2026; `wrangler tail` |
 
+## Em andamento
+
+| # | Item | Prioridade | Origem |
+|---|---|---|---|
+| X1 | **Inc 4.6 — agrupamento de transações** (duplicatas explícitas com representante). Spec: `docs/superpowers/specs/2026-09-25-agrupamento-transacoes-design.md`. | P1 | pedido do Caio, 25/09/2026 |
+
 ## A. Incrementos grandes (roadmap)
 
 | # | Item | Prioridade | Origem |
@@ -45,6 +51,8 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 | C2 | **UX de ambíguos na aba Importar:** única ação é "tratar como novo"; casar manualmente com um candidato ficou pra depois. | P2 | spec upload-tela §7 |
 | C3 | **Re-aplicar fatura não é idempotente** na marcação do pagamento no extrato (só os inserts deduplicam por `linha_hash`). | P3 | ledger Inc 3 |
 | C4 | **Guardar o PDF original** (hoje só o texto é usado). | P3 | spec upload-tela §7 |
+| C5 | **Sugestão de casamento aproximado** no import (valor próximo/descrição), além do exato ±3d. | P3 | spec agrupamento §10 |
+| C6 | **Alinhar ou aposentar os importadores Python** (`importar_extrato.py`/`importar_fatura.py`): seguem no modelo antigo (hash carimbado), o app grava grupos. | P3 | spec agrupamento §5 |
 
 ## D. Planejamento e Resumo
 
