@@ -103,10 +103,6 @@ export function criarDb(sql) {
       }
     },
 
-    async apagarTransacao(id) {
-      await sql`delete from transacoes where id = ${id}`;
-    },
-
     // Edição em massa: aplica `mudancas` a todos os `ids` num ÚNICO update (guard por campo:
     // só mexe no que veio em `mudancas`; `id = any(ids)` → 1 subrequest, não estoura o limite).
     // Se a categoria mudou e `aprender`, aprende contraparte→categoria de cada linha em LOTE

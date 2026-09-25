@@ -14,6 +14,7 @@ import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.j
 import { parseExtrato } from "./extrato.js";
 import { parseFatura } from "./fatura.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
+import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
@@ -25,7 +26,11 @@ export async function tratarUpdate(update, env, deps) {
   const ev = parseUpdate(update);
 
   if (ev.tipo === "callback" && ev.data?.startsWith("del:")) {
-    await deps.db.apagarTransacao(ev.data.slice(4));
+    const idTx = ev.data.slice(4);
+    // Inc 4.6: apagar o representante de um grupo deixaria o grupo sem quem conta → recusa
+    const d = podeApagar(await deps.db.grupoDaTransacao(idTx), idTx);
+    if (!d.ok) { await deps.responderImpl(ev.chatId, `⚠ ${d.erro} (no app).`, env); return; }
+    await deps.db.gravarGrupo({ mudancas: d.mudancas, apagarId: idTx });
     await deps.responderImpl(ev.chatId, "🗑 Apagado.", env);
     return;
   }
@@ -195,8 +200,43 @@ export async function handleApi(request, env, url, dbOpt = null) {
     return j({ ok: true });
   }
   if (url.pathname.startsWith("/api/transacoes/") && request.method === "DELETE") {
-    await db.apagarTransacao(id());
+    const idTx = id();
+    const d = podeApagar(await db.grupoDaTransacao(idTx), idTx);
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas, apagarId: idTx });
     return j({ ok: true });
+  }
+
+  // ---- Inc 4.6: grupos (duplicatas explícitas com representante) ----
+  // Fluxo de cada rota: lê a forma mínima → grupos.js decide (puro) → gravarGrupo aplica numa
+  // única transação. Erro de regra → 400 legível.
+  if (url.pathname === "/api/grupos" && request.method === "POST") {
+    const b = await body();
+    const ids = [...new Set((b.ids || []).map(String))];
+    const linhas = await db.transacoesPorIds(ids);
+    const d = decidirAgrupar(linhas, crypto.randomUUID());
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ grupo_id: d.grupo_id, representante_id: d.representante_id });
+  }
+  const mMembro = url.pathname.match(/^\/api\/grupos\/([^/]+)\/membros\/([^/]+)$/);
+  if (mMembro && request.method === "DELETE") {
+    const d = decidirTirar(await db.membrosDoGrupo(mMembro[1]), mMembro[2]);
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ ok: true, dissolveu: d.dissolveu });
+  }
+  if (url.pathname.startsWith("/api/grupos/") && request.method === "PATCH") {
+    const b = await body();
+    const d = decidirRepresentar(await db.membrosDoGrupo(id()), String(b.representante_id));
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ ok: true });
+  }
+  if (url.pathname.startsWith("/api/grupos/") && request.method === "DELETE") {
+    const d = decidirDesagrupar(await db.membrosDoGrupo(id()));
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ ok: true, desagrupados: d.mudancas.length });
   }
 
   // ---- gestão de categorias ----
