@@ -276,6 +276,7 @@ if (typeof document !== "undefined") {
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
     lancTudo: false,
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
+    expandidos: new Set(), // Inc 4.6: grupo_ids abertos na tabela (só de tela, não persiste)
   };
 
   // API
@@ -290,8 +291,18 @@ if (typeof document !== "undefined") {
     }
     return r.json();
   };
-  const apiPatch = (p, body) => fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => { if (!r.ok) throw new Error(`PATCH ${p} ${r.status}`); return r; });
-  const apiDelete = p => fetch(p, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error(`DELETE ${p} ${r.status}`); return r; });
+  // lê {erro} do corpo p/ mostrar a mensagem real (400 de regra de grupo, etc.), senão o status
+  const erroDe = async (r, padrao) => { let msg = padrao; try { const e = await r.json(); if (e && e.erro) msg = e.erro; } catch { /* corpo não-JSON */ } return new Error(msg); };
+  const apiPatch = async (p, body) => {
+    const r = await fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw await erroDe(r, `PATCH ${p} ${r.status}`);
+    return r;
+  };
+  const apiDelete = async (p) => {
+    const r = await fetch(p, { method: "DELETE" });
+    if (!r.ok) throw await erroDe(r, `DELETE ${p} ${r.status}`);
+    return r;
+  };
 
   // corDe é keyed pelo NOME da categoria (não pelo id): os gráficos do Resumo recebem
   // nomes via resumo.porCategoria/mesVsAnterior (macro apelidado no backend), e a tabela
@@ -673,7 +684,7 @@ if (typeof document !== "undefined") {
 
   function drawRows() {
     const cats = estado.catalogo.categorias;
-    const linhas = filtrarTransacoes(estado.transacoes, estado.filtro);
+    const linhas = filtrarLinhas(montarLinhas(estado.transacoes), estado.filtro);
     const contador = $("#fcontador");
     if (contador) contador.textContent = `${linhas.length} de ${estado.transacoes.length}`;
     if (!linhas.length) {
@@ -681,7 +692,8 @@ if (typeof document !== "undefined") {
       atualizarMassaBar();
       return;
     }
-    $("#rows").innerHTML = linhas.map(t => {
+    $("#rows").innerHTML = linhas.map(l => {
+      const t = l.t;
       const rec = t.natureza === "receita";
       const sel = estado.selecao.has(t.id) ? "checked" : "";
       const catOpts = cats.map(c => `<option value="${esc(c.id)}" ${c.id === t.categoria_id ? "selected" : ""}>${esc(c.nome)}</option>`).join("");
@@ -689,30 +701,56 @@ if (typeof document !== "undefined") {
         subsDaCat(estado.catalogo, t.categoria_id).map(s => `<option value="${esc(s.id)}" ${s.id === t.subcategoria_id ? "selected" : ""}>${esc(s.nome)}</option>`).join("");
       const pessoaOpts = `<option value="">—</option>` +
         estado.pessoas.map(p => `<option value="${esc(p.id)}" ${p.id === t.pessoa_id ? "selected" : ""}>${esc(p.nome)}</option>`).join("");
-      // fora do resumo (extrato/fatura não-gasto: transferência, pagamento de fatura etc.) — selo
-      // só aparece quando computa_resumo é false; o toggle (botão) inverte o valor nas duas direções.
       const selo = !t.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : "";
-      return `<tr data-id="${t.id}">
+      // Inc 4.6: linha de grupo = o representante + controle pra expandir os membros + selos
+      const nMem = l.membros.length;
+      const aberto = estado.expandidos.has(l.grupo_id);
+      const seloGrupo = nMem
+        ? `<button class="grpToggle" type="button" title="${aberto ? "Recolher" : "Ver"} os lançamentos agrupados">${aberto ? "▾" : "▸"} ${nMem}</button>` +
+          `<span class="selo-grupo">grupo</span>` +
+          (l.diferem ? `<span class="selo-diferem" title="algum membro tem valor diferente do representante">valores diferem</span>` : "")
+        : (l.orfao ? `<span class="selo-grupo" title="o representante deste grupo está fora do período carregado">membro de grupo</span>` : "");
+      const acaoGrupo = nMem ? `<button class="desagrupar" title="Desagrupar">⛓</button>` : "";
+      const principal = `<tr data-id="${t.id}" data-grupo="${l.grupo_id || ""}">
         <td class="selcol"><input type="checkbox" class="selrow" ${sel}></td>
         <td class="dt">${fmtData(t.data)}</td>
-        <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—">${selo}</td>
+        <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—">${selo}${seloGrupo}</td>
         <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.categoria)})"></i><select class="edcat">${catOpts}</select></span></td>
         <td><select class="edsub">${subOpts}</select></td>
         <td><select class="edpessoa">${pessoaOpts}</select></td>
         <td class="val" style="color:${rec ? "var(--receita)" : "var(--ink)"}">${rec ? "+" : ""}R$ ${centavosBR(t.valor_total)}</td>
         <td class="val" style="color:var(--mut)">${+t.valor_reembolso ? "R$ " + centavosBR(t.valor_reembolso) : "—"}</td>
         <td>
+          ${acaoGrupo}
           <button class="toggle-computa" title="${t.computa_resumo ? "Marcar fora do resumo" : "Incluir no resumo"}">${t.computa_resumo ? "⊘" : "↩"}</button>
           <button class="del" title="Apagar">✕</button>
         </td>
       </tr>`;
+      if (!nMem || !aberto) return principal;
+      // membros: só leitura (pra editar, tire do grupo ou torne representante) + 2 ações
+      const membros = l.membros.map(m => `<tr class="membro" data-id="${m.id}" data-grupo="${l.grupo_id}">
+        <td class="selcol"></td>
+        <td class="dt">${fmtData(m.data)}</td>
+        <td>${esc(m.descricao || "—")}<span class="selo-grupo">${esc(m.fonte)}</span>${!m.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : ""}</td>
+        <td>${esc(m.categoria || "—")}</td>
+        <td>${esc(m.subcategoria || "—")}</td>
+        <td>${esc(m.pessoa || "—")}</td>
+        <td class="val">${m.natureza === "receita" ? "+" : ""}R$ ${centavosBR(m.valor_total)}</td>
+        <td class="val" style="color:var(--mut)">—</td>
+        <td>
+          <button class="miniBtn representar" title="Tornar representante (passa a ser o que conta)">★</button>
+          <button class="miniBtn tirar" title="Tirar do grupo">⤴</button>
+        </td>
+      </tr>`).join("");
+      return principal + membros;
     }).join("");
     atualizarMassaBar();
   }
 
-  // ids atualmente visíveis (respeitando o filtro) — base do "selecionar todos".
+  // ids atualmente visíveis (respeitando o filtro) — base do "selecionar todos". Linha de grupo
+  // conta pelo representante (membros não são selecionáveis).
   function idsFiltrados() {
-    return filtrarTransacoes(estado.transacoes, estado.filtro).map(t => t.id);
+    return filtrarLinhas(montarLinhas(estado.transacoes), estado.filtro).map(l => l.t.id);
   }
 
   // atualiza a barra de massa: contagem, visibilidade e o estado do "selecionar todos".
@@ -722,6 +760,8 @@ if (typeof document !== "undefined") {
     if (bar) bar.classList.toggle("hidden", n === 0);
     const cnt = $("#massacount");
     if (cnt) cnt.textContent = `${n} selecionado${n === 1 ? "" : "s"}`;
+    const mg = $("#magrupar");
+    if (mg) mg.disabled = n < 2; // agrupar precisa de 2+
     const selall = $("#selall");
     if (selall) {
       const vis = idsFiltrados();
@@ -1299,6 +1339,20 @@ if (typeof document !== "undefined") {
       if (!t) return;
       try { await apiPatch(`/api/transacoes/${tr.dataset.id}`, { computa_resumo: !t.computa_resumo }); carregar(); }
       catch (err) { alert("Falha ao atualizar: " + err.message); }
+    } else if (e.target.classList.contains("grpToggle")) {
+      const g = tr.dataset.grupo;
+      if (estado.expandidos.has(g)) estado.expandidos.delete(g); else estado.expandidos.add(g);
+      drawRows();
+    } else if (e.target.classList.contains("desagrupar")) {
+      if (!confirm("Desagrupar? Cada lançamento volta a contar sozinho no Resumo.")) return;
+      try { await apiDelete(`/api/grupos/${tr.dataset.grupo}`); carregar(); }
+      catch (err) { alert("Falha ao desagrupar: " + err.message); }
+    } else if (e.target.classList.contains("representar")) {
+      try { await apiPatch(`/api/grupos/${tr.dataset.grupo}`, { representante_id: tr.dataset.id }); carregar(); }
+      catch (err) { alert("Falha ao trocar o representante: " + err.message); }
+    } else if (e.target.classList.contains("tirar")) {
+      try { await apiDelete(`/api/grupos/${tr.dataset.grupo}/membros/${tr.dataset.id}`); carregar(); }
+      catch (err) { alert("Falha ao tirar do grupo: " + err.message); }
     }
   });
 
@@ -1319,6 +1373,17 @@ if (typeof document !== "undefined") {
       subsDaCat(estado.catalogo, catId).map(s => `<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join("");
   });
   $("#mlimpar").addEventListener("click", () => { estado.selecao.clear(); drawRows(); });
+  // Inc 4.6: agrupar a seleção (2+). O servidor decide o representante e recusa misturar grupos.
+  $("#magrupar").addEventListener("click", async () => {
+    const ids = [...estado.selecao];
+    if (ids.length < 2) { alert("Selecione pelo menos 2 lançamentos pra agrupar."); return; }
+    try {
+      const r = await apiPost("/api/grupos", { ids });
+      estado.selecao.clear();
+      estado.expandidos.add(r.grupo_id); // abre o grupo recém-criado pra conferir
+      await carregar();
+    } catch (err) { alert("Falha ao agrupar: " + err.message); }
+  });
   $("#maplicar").addEventListener("click", async () => {
     const ids = [...estado.selecao];
     if (!ids.length) return;
