@@ -47,7 +47,7 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
     if (hashesSet.has(lh)) {
       // já gravada em import anterior (idempotência) — nem classifica, nem reconcilia.
       itens.push({
-        ...l, linhaHash: lh, status: "jaTem", matchId: null, computaResumo: null,
+        ...l, linhaHash: lh, status: "jaTem", matchId: null, matchGrupoId: null, computaResumo: null,
         categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
       });
       resumo.jaTem++;
@@ -58,6 +58,7 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
 
     let status;
     let matchId = null;
+    let matchGrupoId = null;
     if (!info.computaResumo) {
       // não-gasto (transferência p/ conta própria, aplicação, pagamento de fatura): não entra
       // na reconciliação — não é candidato a "casar" com nada em `existentes`.
@@ -67,12 +68,13 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
       status = rec.status; // "novo" | "casado" | "ambiguo"
       if (status === "casado") {
         matchId = rec.matchId;
+        matchGrupoId = rec.matchGrupoId;
         disponiveis = disponiveis.filter(e => e.id !== matchId);
       }
     }
 
     itens.push({
-      ...l, linhaHash: lh, status, matchId,
+      ...l, linhaHash: lh, status, matchId, matchGrupoId,
       computaResumo: info.computaResumo,
       categoriaNome: info.categoriaNome, subNome: info.subNome, categoriaOrg: info.categoriaOrg,
       contraparteNome: info.contraparteNome,
@@ -168,8 +170,10 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
 
 /**
  * Aplica a decisão já revisada (pelo usuário, no app) no banco, delegando pro
- * `db.aplicarImportacao`, que grava novos+não-gasto (insert) e carimba a linha_hash dos casados
- * numa ÚNICA transação HTTP (1 subrequest, atômica). `db` é injetado — único efeito colateral.
+ * `db.aplicarImportacao`, que grava novos+não-gasto (insert) e, pros casados, insere a linha do
+ * extrato dentro do grupo do lançamento (e, se o grupo for novo, marca o lançamento casado como
+ * representante) — tudo numa ÚNICA transação HTTP (1 subrequest, atômica). `db` é injetado —
+ * único efeito colateral.
  *
  * `decisao.novos`/`decisao.naoGasto` já devem chegar com `categoria_id`/`subcategoria_id`
  * resolvidos (nome→id) por quem monta a decisão — este módulo não resolve categoria.

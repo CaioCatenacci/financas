@@ -334,6 +334,99 @@ substituições da Fase 2 tinham deixado sem nenhuma chamada) saíram do código
 
 ---
 
+## 15. Categoria padrão por flag (bug do Telegram mudo, 25/09/2026)
+
+O bot parou de responder a texto manual e a foto. O webhook devolvia 500 porque a categoria
+`Outros` tinha sido **renomeada** na aba Ajustes pra `Não Identificado`, e o fallback de
+`resolverCategoria` procurava o nome literal `"Outros"` → `categoria_id` null → not-null no
+insert → exceção sem try/catch → 500. Sem logs persistidos, só apareceu com `wrangler tail`.
+
+**Decisão:** o padrão passa a ser uma **flag** (`categorias.padrao`, migração `0008`), não um
+nome. A invariante "sempre existe uma categoria pra onde cair" vira invariante do banco (índice
+parcial único + `desativarCategoria` que ignora a padrão), em vez de depender de o Caio nunca
+renomear uma linha que a tela de Ajustes deixa renomear. **Por que não simplesmente renomear de
+volta:** resolveria em um minuto e quebraria de novo na próxima edição — a tela de gestão existe
+justamente pra renomear/mesclar sem cascata, então o código não pode depender de nomes.
+
+**Semântica (decisão do Caio):** `Não Identificado` é o padrão — o que ninguém classificou, a fila
+do que ele precisa analisar pra dar destino. `Outros` volta a existir como **miscelânea
+deliberada** — categoria que ele escolhe, não fallback. Por isso o import (`montarDecisao`,
+`importar_extrato.py`, `importar_fatura.py`) deixou de preencher `"Outros"` quando não há
+categoria: manda `null`, e o resolvedor leva pra padrão.
+
+**Por que try/catch no `handleTelegram` e responder 200:** com 500 o Telegram retenta o mesmo
+update em loop e o usuário não vê nada — é o pior dos dois mundos (nem grava, nem avisa). Com
+200 + mensagem de erro no chat, o ciclo fecha: o Caio sabe que falhou e reenvia depois.
+
+---
+
+## 16. Incremento 4.6 — grupos com representante (duplicatas explícitas)
+
+Quase todo lançamento manual do Caio também aparece no extrato do Itaú no fechamento do mês.
+O import já reconciliava isso, mas de dois jeitos ruins: valor exato ±3 dias "casava" a linha
+do banco com o lançamento e **carimbava** o hash nele — a linha do banco nunca chegava a
+existir como transação, e nada na tela dizia que aquele lançamento tinha sido conferido contra
+o extrato; valor diferente (o caso real: entrada de R$ 56.200 = salário de R$ 36.200 + R$
+20.000 de repasse pra transferir) virava uma linha nova que o Caio marcava "fora do resumo" na
+mão, sem registrar o porquê — daqui a um ano, ninguém lembra.
+
+**Decisão:** duplicatas viram um **grupo com representante**: linhas com o mesmo `grupo_id`,
+exatamente um membro `representante`, e só ele conta no Resumo. **Por que:** o Caio foi
+explícito na conversa — "um grupo funciona como uma linha; só um representa" — e é exatamente
+isso que a tela precisa mostrar: uma linha expansível, não duas linhas concorrendo. Isso também
+descartou as outras duas formas discutidas. Não é "soma que fecha" (decompor uma linha do banco
+em partes que somam o valor) porque o caso real (salário + repasse) não é uma decomposição
+alinhada ao lançamento — é ruído que o Caio prefere anotar na descrição, não modelar; forçar
+soma criaria uma regra que quebra no primeiro caso torto. E não é uma tabela própria N:M (um
+lançamento em vários grupos) porque nenhum caso real pede isso — cada duplicata é conferida
+contra exatamente um lançamento do banco, e a tabela extra seria infraestrutura sem uso.
+
+**Por que "quem conta" virou coluna gerada:** antes, quem conta no Resumo era só
+`computa_resumo` (a flag "fora do resumo" que o Caio controla). Com grupos, a regra efetiva
+passa a ser "`computa_resumo` E (solta OU representante)". Calcular isso em cada uma das sete
+leituras agregadas (Resumo, `resumoDiario`, `resumoMesVsAnterior`, `porPessoa`, Planejamento/
+metas etc.) seria repetir a mesma lógica sete vezes — e divergir uma vez é o tipo de bug que só
+aparece quando o número já está errado num dashboard. A coluna gerada `conta_no_resumo` calcula
+a regra **um lugar só**, no banco, auditável por SQL direto; as sete leituras trocam um
+identificador (`computa_resumo` → `conta_no_resumo`) sem lógica nova.
+
+**Por que apagar ou tirar o representante recusa em vez de promover outro membro
+automaticamente:** promover é uma decisão de "qual desses é o de verdade" que o sistema não
+tem como acertar sozinho — é ambíguo por natureza (o extrato não é candidato, mas entre dois
+lançamentos manuais não há critério óbvio). O Caio escolhe: a API devolve erro legível
+("escolha outro representante antes de tirar este") e ele troca antes, de propósito.
+
+**Por que membros não são editáveis na tela:** um membro existe só como evidência ligada; ele
+não entra no Resumo, então editar sua categoria ou pessoa daria a impressão de que aquilo
+importa quando não importa — é fácil achar que se está editando "o lançamento" quando na
+verdade é o lado que não conta. Pra editar de verdade, o caminho é tirar do grupo ou tornar
+representante primeiro; aí a edição acontece na linha que efetivamente é contada.
+
+**Por que o caso salário ficou fora do modelo, e como o modelo ainda cobre ele:** decompor uma
+entrada em partes com soma obrigatória foi descartado — é a mesma armadilha da "soma que
+fecha", uma regra rígida pra um caso que na prática é só "essa entrada tem duas origens, uma
+delas não é minha". O modelo cobre isso sem decomposição: agrupa a linha do banco (R$ 56.200)
+com o lançamento do salário (R$ 36.200, representante) e o porquê vai na descrição; a diferença
+gera o selo **"valores diferem"**, que é aviso, nunca bloqueio — o grupo não precisa fechar em
+centavos pra existir.
+
+**Fase B — o import grava o grupo, não mais o hash:** um casado passa a inserir a linha do
+extrato **dentro** do grupo do lançamento (novo ou existente) em vez de só carimbar `linha_hash`
+nele — a linha do banco vira uma transação de verdade, visível como membro, em vez de um carimbo
+invisível. **Por que a linha entra com `computa_resumo=true`:** desagrupar essa linha depois tem
+que devolver a contagem — se ela nascesse com `computa_resumo=false`, tirar do grupo deixaria uma
+transação "fora do resumo" por acidente, sem ninguém ter decidido isso; nascendo `true`, a coluna
+gerada `conta_no_resumo` já cuida de excluí-la do Resumo enquanto ela for membro não-representante,
+e desagrupar simplesmente devolve o comportamento normal. **Por que o grupo nasce no navegador:**
+o `grupo_id` é gerado em `montarDecisao` (`crypto.randomUUID()`) antes de chegar no Worker — o
+servidor só grava, do mesmo jeito que o resto do fluxo de import (o app decide a decisão revisada,
+`db.aplicarImportacao` só persiste). **Por que candidatos excluem grupo que já tem uma linha de
+extrato:** um lançamento casa com o banco **uma vez** — se o grupo já tem a linha do extrato como
+membro, oferecer esse lançamento de novo como candidato deixaria o import tentar casar o mesmo
+banco duas vezes. Os hashes carimbados no modelo antigo (Fase A e antes) ficam como estão — não há
+migração de carimbo pra grupo; eles só saem de circulação quando os importadores Python forem
+alinhados ou aposentados (BACKLOG C6).
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

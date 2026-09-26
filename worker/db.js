@@ -8,14 +8,14 @@ export function criarDb(sql) {
     insert into transacoes
       (data, natureza, esfera, valor_total, valor_reembolso, categoria_id, subcategoria_id,
        descricao, pessoa_id, fonte, origem_categoria, extraido_por, confianca, documento_id,
-       contraparte_nome, contraparte_chave, computa_resumo, linha_hash)
+       contraparte_nome, contraparte_chave, computa_resumo, linha_hash, grupo_id, representante)
     values
       (${t.dataISO}, ${t.natureza}, ${t.esfera}, ${centsToNumeric(t.valorCents)},
        ${centsToNumeric(t.reembolsoCents ?? 0)}, ${t.categoria_id ?? null}, ${t.subcategoria_id ?? null},
        ${t.descricao}, ${t.pessoa_id ?? null}, ${t.fonte}, ${t.origem_categoria},
        ${t.extraido_por ?? null}, ${t.confianca ?? null}, ${t.documento_id ?? null},
        ${t.contraparte_nome ?? null}, ${t.contraparte_chave ?? null},
-       ${t.computa_resumo ?? true}, ${t.linha_hash ?? null})
+       ${t.computa_resumo ?? true}, ${t.linha_hash ?? null}, ${t.grupo_id ?? null}, ${t.representante ?? false})
     returning id`;
   return {
     async documentoPorHash(hash) {
@@ -40,7 +40,7 @@ export function criarDb(sql) {
 
     // catálogo do modelo por id (categorias + subcategorias ativas). Alimenta selects e resolução.
     async catalogo() {
-      const categorias = await sql`select id, nome, natureza, ativa from categorias where ativa order by nome`;
+      const categorias = await sql`select id, nome, natureza, ativa, padrao from categorias where ativa order by nome`;
       const subcategorias = await sql`select id, categoria_id, nome, ativa from subcategorias where ativa order by nome`;
       return { categorias, subcategorias };
     },
@@ -101,10 +101,6 @@ export function criarDb(sql) {
         const d = derivarChave({ contraparte_nome: t.contraparte_nome, contraparte_chave: t.contraparte_chave });
         if (d) await this.upsertAssociacao({ chave: d.chave, tipo: d.tipo, categoria_id, subcategoria_id });
       }
-    },
-
-    async apagarTransacao(id) {
-      await sql`delete from transacoes where id = ${id}`;
     },
 
     // Edição em massa: aplica `mudancas` a todos os `ids` num ÚNICO update (guard por campo:
@@ -177,7 +173,8 @@ export function criarDb(sql) {
       await sql`update categorias set nome = ${nome} where id = ${id}`;
     },
     async desativarCategoria(id) {
-      await sql`update categorias set ativa = false where id = ${id}`;
+      // a padrão nunca sai do catálogo: sem ela o fallback de resolverCategoria volta a dar null
+      await sql`update categorias set ativa = false where id = ${id} and not padrao`;
     },
     async criarSub(categoria_id, nome) {
       const rows = await sql`insert into subcategorias (categoria_id, nome) values (${categoria_id}, ${nome})
@@ -211,14 +208,16 @@ export function criarDb(sql) {
       await sql`update pessoas set ativa = false where id = ${id}`;
     },
 
-    // ---- resumos (join p/ nomes; apelidam c.nome as macro p/ manter a forma que os gráficos usam) ----
+    // ---- resumos ---- (join p/ nomes; apelidam c.nome as macro p/ manter a forma que os gráficos usam)
+    // Inc 4.6: filtram por conta_no_resumo (coluna gerada: computa_resumo AND (sem grupo OU
+    // representante)) — um membro de grupo nunca conta, mesmo com computa_resumo=true.
     async resumoPorCategoria(de, ate) {
       return await sql`
         select c.nome as macro, s.nome as sub, t.natureza, sum(t.valor_final) as total, count(*) as n
         from transacoes t
         left join categorias c    on c.id = t.categoria_id
         left join subcategorias s on s.id = t.subcategoria_id
-        where t.data >= ${de} and t.data <= ${ate} and t.computa_resumo
+        where t.data >= ${de} and t.data <= ${ate} and t.conta_no_resumo
         group by c.nome, s.nome, t.natureza order by total desc`;
     },
 
@@ -228,7 +227,7 @@ export function criarDb(sql) {
           coalesce(sum(valor_final) filter (where natureza = 'receita'), 0) as receita,
           coalesce(sum(valor_final) filter (where natureza = 'despesa'), 0) as despesa,
           coalesce(sum(valor_reembolso), 0) as reembolso
-        from transacoes where data >= ${de} and data <= ${ate} and computa_resumo`;
+        from transacoes where data >= ${de} and data <= ${ate} and conta_no_resumo`;
       return rows[0];
     },
 
@@ -237,7 +236,7 @@ export function criarDb(sql) {
         select to_char(data,'YYYY-MM-DD') as dia,
                (round(sum(valor_final)*100))::bigint as total_cents
         from transacoes
-        where natureza = 'despesa' and computa_resumo
+        where natureza = 'despesa' and conta_no_resumo
           and data >= ${de} and data < ${ateExcl}
         group by 1 order by 1`;
       // driver do Neon devolve ::bigint como string — converte na borda para operações numéricas.
@@ -254,7 +253,7 @@ export function criarDb(sql) {
           coalesce(sum(t.valor_final) filter (where date_trunc('month', t.data) = (select cur from m) - interval '1 month'), 0) as ant
         from transacoes t
         left join categorias c on c.id = t.categoria_id
-        where t.natureza = 'despesa' and t.computa_resumo
+        where t.natureza = 'despesa' and t.conta_no_resumo
           and t.data >= (select cur from m) - interval '1 month'
           and t.data <  (select cur from m) + interval '1 month'
         group by c.nome
@@ -267,7 +266,7 @@ export function criarDb(sql) {
                sum(t.valor_total) as bruto, sum(t.valor_reembolso) as reembolsado, sum(t.valor_final) as liquido
         from transacoes t
         left join categorias c on c.id = t.categoria_id
-        where t.valor_reembolso > 0 and t.computa_resumo
+        where t.valor_reembolso > 0 and t.conta_no_resumo
         group by 1, 2 order by 1, 2`;
     },
 
@@ -276,7 +275,7 @@ export function criarDb(sql) {
         select coalesce(p.nome, '—') as pessoa, t.natureza, sum(t.valor_final) as total
         from transacoes t
         left join pessoas p on p.id = t.pessoa_id
-        where t.data >= ${de} and t.data <= ${ate} and t.computa_resumo
+        where t.data >= ${de} and t.data <= ${ate} and t.conta_no_resumo
         group by 1, 2
         order by 3 desc`;
     },
@@ -306,7 +305,7 @@ export function criarDb(sql) {
         select t.categoria_id, to_char(t.data,'YYYY-MM') as mes,
                (round(sum(t.valor_final)*100))::bigint as realizado_cents
         from transacoes t
-        where t.natureza = 'despesa' and t.computa_resumo
+        where t.natureza = 'despesa' and t.conta_no_resumo
           and t.data >= ${de} and t.data < ${ateExcl}
         group by t.categoria_id, to_char(t.data,'YYYY-MM')`;
       return rows.map(r => ({ ...r, realizado_cents: Number(r.realizado_cents) }));
@@ -336,14 +335,57 @@ export function criarDb(sql) {
       await sql`delete from metas_excecao where categoria_id = ${categoria_id} and mes = ${mesDia01}`;
     },
 
+    // ---- Inc 4.6: grupos (duplicatas explícitas com representante) ----
+    // As três leituras devolvem a forma mínima que worker/grupos.js consome. Quem decide é o
+    // módulo puro; aqui só se lê e se grava.
+    async transacoesPorIds(ids) {
+      if (!ids || !ids.length) return [];
+      return await sql`
+        select id, fonte, criado_em, grupo_id, representante, valor_final
+        from transacoes where id = any(${ids}::uuid[])`;
+    },
+
+    async membrosDoGrupo(grupo_id) {
+      return await sql`
+        select id, fonte, criado_em, grupo_id, representante, valor_final
+        from transacoes where grupo_id = ${grupo_id} order by criado_em`;
+    },
+
+    // membros do grupo da transação (ela inclusa); [] quando ela não tem grupo.
+    async grupoDaTransacao(id) {
+      return await sql`
+        select id, fonte, criado_em, grupo_id, representante, valor_final
+        from transacoes
+        where grupo_id = (select grupo_id from transacoes where id = ${id}) and grupo_id is not null
+        order by criado_em`;
+    },
+
+    // Grava a lista de mudanças de grupos.js NA ORDEM (o índice único de representante exige
+    // tirar antes de pôr) e, se pedido, apaga uma transação — tudo numa única sql.transaction
+    // (1 subrequest, atômica: ou o grupo fica consistente ou nada muda).
+    async gravarGrupo({ mudancas = [], apagarId = null } = {}) {
+      const queries = mudancas.map((m) => sql`
+        update transacoes set grupo_id = ${m.grupo_id}, representante = ${m.representante} where id = ${m.id}`);
+      if (apagarId) queries.push(sql`delete from transacoes where id = ${apagarId}`);
+      if (queries.length) await sql.transaction(queries);
+      return { alterados: mudancas.length, apagados: apagarId ? 1 : 0 };
+    },
+
     // ---- apoio à importação: consultas de reconciliação ----
+    // Candidatas ao casamento do import (Inc 4.6): lançamentos do Caio (não extrato/fatura), sem
+    // hash antigo carimbado (= já conciliado no modelo velho) e que não estejam num grupo que já
+    // tem uma linha de extrato (um lançamento casa com o banco UMA vez). Devolve grupo_id pra o
+    // app decidir "entra no grupo existente" vs "grupo novo".
     async transacoesNaJanela(de, ate) {
       const rows = await sql`
         select id, to_char(data,'YYYY-MM-DD') as data,
-          (round(valor_final*100))::bigint as valor_cents
-        from transacoes
-        where data between ${de} and ${ate} and linha_hash is null`;
-      return rows.map(r => ({ id: String(r.id), data: r.data, valorCents: Number(r.valor_cents) }));
+          (round(valor_final*100))::bigint as valor_cents, grupo_id
+        from transacoes t
+        where data between ${de} and ${ate}
+          and fonte not in ('extrato','fatura')
+          and linha_hash is null
+          and not exists (select 1 from transacoes x where x.grupo_id = t.grupo_id and x.fonte = 'extrato')`;
+      return rows.map(r => ({ id: String(r.id), data: r.data, valorCents: Number(r.valor_cents), grupo_id: r.grupo_id ?? null }));
     },
 
     async hashesNaJanela(de, ate) {
@@ -358,25 +400,35 @@ export function criarDb(sql) {
     // Neon faz 1 subrequest por query, então o loop antigo (1 await por linha) estourava o limite
     // de subrequests do Worker num extrato grande (~236 linhas). sql.transaction manda todas as
     // queries num POST só — e, sendo atômica, ou grava tudo ou nada (nunca import pela metade).
+    // Inc 4.6: um "casado" não carimba mais o hash no lançamento do Caio — INSERE a linha do
+    // extrato (com o hash, dentro do grupo, sem ser representante) e, se o grupo é novo, põe o
+    // lançamento casado como representante. Se ele já estava num grupo, só a linha entra nele.
     async aplicarImportacao({ novos = [], naoGasto = [], casados = [] }) {
       const queries = [];
       for (const t of [...novos, ...naoGasto]) queries.push(qInserirTransacao(t));
       for (const c of casados) {
-        queries.push(sql`update transacoes set linha_hash = ${c.linhaHash} where id = ${c.matchId} and linha_hash is null`);
+        queries.push(qInserirTransacao(c.linha));
+        if (!c.grupoExistente) {
+          queries.push(sql`update transacoes set grupo_id = ${c.linha.grupo_id}, representante = true where id = ${c.matchId} and grupo_id is null`);
+        }
       }
       if (queries.length) await sql.transaction(queries);
-      return { gravados: novos.length + naoGasto.length, conciliados: casados.length, naoGasto: naoGasto.length };
+      return { gravados: novos.length + naoGasto.length, agrupados: casados.length, naoGasto: naoGasto.length };
     },
 
     // Marca o pagamento da fatura no extrato como fora do resumo (computa_resumo=false): procura
-    // UMA despesa de extrato ainda no resumo cujo valor bata com o total da fatura, dentro de
-    // [de,ate]. Espelha tools/importar_fatura.py: 1 candidato → marca; 0 ou >1 → não mexe (devolve
-    // a contagem p/ quem chama avisar). Sem isso, os itens da fatura + o pagamento no extrato
-    // contariam o gasto do cartão duas vezes no Resumo.
+    // UMA despesa de extrato que ainda CONTA no resumo (conta_no_resumo) cujo valor bata com o
+    // total da fatura, dentro de [de,ate]. Espelha tools/importar_fatura.py: 1 candidato → marca;
+    // 0 ou >1 → não mexe (devolve a contagem p/ quem chama avisar). Sem isso, os itens da fatura +
+    // o pagamento no extrato contariam o gasto do cartão duas vezes no Resumo.
+    // Fase B (Inc 4.6): filtra por conta_no_resumo, não computa_resumo=true — uma linha de extrato
+    // que já está DENTRO de um grupo tem computa_resumo=true mas conta_no_resumo=false (quem conta
+    // é o representante). Marcar computa_resumo nela não evita dupla contagem nenhuma; o candidato
+    // certo é sempre a linha que hoje soma no card.
     async marcarPagamentoFaturaNaoGasto(totalCents, de, ate) {
       const rows = await sql`
         select id from transacoes
-        where fonte = 'extrato' and natureza = 'despesa' and computa_resumo = true
+        where fonte = 'extrato' and natureza = 'despesa' and conta_no_resumo = true
           and (round(valor_final*100))::bigint = ${totalCents}
           and data between ${de} and ${ate}`;
       if (rows.length === 1) {
@@ -384,13 +436,6 @@ export function criarDb(sql) {
         return { marcados: 1, candidatos: 1 };
       }
       return { marcados: 0, candidatos: rows.length };
-    },
-
-    // carimba a linha_hash na transação já existente que casou (reconciliação) — só se ainda
-    // não tiver sido carimbada, senão mascararia um bug de duplo-match (espelha
-    // tools/importar_extrato.py::_gravar).
-    async carimbarLinhaHash(id, hash) {
-      await sql`update transacoes set linha_hash = ${hash} where id = ${id} and linha_hash is null`;
     },
 
     // associações aprendidas por nome, no formato que classificar() espera: dict chaveado por

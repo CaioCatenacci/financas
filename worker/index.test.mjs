@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { tratarUpdate } from "./index.js";
+import { tratarUpdate, handleTelegram } from "./index.js";
 
 function dbFake() {
   const estado = { inseridos: [], docs: [], apagados: [] };
@@ -12,6 +12,7 @@ function dbFake() {
         { id: "cCasa", nome: "Casa", natureza: "despesa" },
         { id: "cEdu", nome: "Educação", natureza: "despesa" },
         { id: "cOut", nome: "Outros", natureza: "despesa" },
+        { id: "cNI", nome: "Não Identificado", natureza: "despesa", padrao: true },
       ],
       subcategorias: [
         { id: "sLimp", categoria_id: "cCasa", nome: "Limpeza" },
@@ -21,7 +22,9 @@ function dbFake() {
     documentoPorHash: async () => null,
     inserirDocumento: async (d) => { estado.docs.push(d); return { id: "doc1" }; },
     inserirTransacao: async (t) => { estado.inseridos.push(t); return { id: "tx1" }; },
-    apagarTransacao: async (id) => { estado.apagados.push(id); },
+    // Inc 4.6: apagar passa por podeApagar; sem grupo → gravarGrupo só apaga
+    grupoDaTransacao: async () => [],
+    gravarGrupo: async ({ apagarId }) => { if (apagarId) estado.apagados.push(apagarId); return { alterados: 0, apagados: 1 }; },
     buscarAssociacao: async () => null,
     upsertAssociacao: async () => {},
   };
@@ -189,7 +192,7 @@ test("texto estruturado vira transação manual, resolvendo categoria e pessoa",
   assert.ok(enviados.some((t) => /57,50/.test(t)));
 });
 
-test("texto sem categoria cai em Outros e avisa pessoa inexistente", async () => {
+test("texto sem categoria cai na categoria padrão (flag) e avisa pessoa inexistente", async () => {
   const enviados = [];
   const db = dbFake();
   db.pessoaPorNome = async () => null; // ninguém casa
@@ -197,9 +200,36 @@ test("texto sem categoria cai em Outros e avisa pessoa inexistente", async () =>
   const update = { message: { chat: { id: 7 }, message_id: 1, text: "mercado 30,00 01/03/2026 pessoa=Xuxa" } };
   await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
   const ins = db.estado.inseridos[0];
-  assert.equal(ins.categoria_id, "cOut");    // Outros (fallback do resolverCategoria)
+  assert.equal(ins.categoria_id, "cNI");     // padrão por flag (fallback do resolverCategoria)
   assert.equal(ins.pessoa_id, null);
   assert.ok(enviados.some((t) => /Xuxa/.test(t)));  // avisou o não-encontrado
+});
+
+test("texto com categoria inexistente cai na padrão e o aviso cita o nome dela", async () => {
+  const enviados = [];
+  const db = dbFake();
+  const deps = { db, confirmar: async (c, t) => enviados.push(t), responderImpl: async () => {} };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "mercado 30,00 01/03/2026 categoria=Marte" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.estado.inseridos[0].categoria_id, "cNI");
+  assert.ok(enviados.some((t) => /Não Identificado/.test(t)));
+});
+
+test("handleTelegram: exceção no fluxo responde 200 e avisa o usuário (nunca 500 mudo)", async () => {
+  // 500 faz o Telegram retentar em loop e o usuário fica sem resposta; 200 + aviso fecha o ciclo.
+  const respostas = [];
+  const db = dbFake();
+  db.inserirTransacao = async () => { throw new Error("boom no banco"); };
+  const deps = { db, confirmar: async () => {}, responderImpl: async (c, t) => respostas.push(t) };
+  const env = { TELEGRAM_SECRET: "s", ALLOWLIST: "7", TELEGRAM_TOKEN: "t" };
+  const request = new Request("http://localhost/telegram", {
+    method: "POST", headers: { "X-Telegram-Bot-Api-Secret-Token": "s", "content-type": "application/json" },
+    body: JSON.stringify({ message: { chat: { id: 7 }, message_id: 1, text: "mercado 30,00 01/03/2026" } }),
+  });
+  const resp = await handleTelegram(request, env, deps);
+  assert.equal(resp.status, 200);
+  assert.equal(respostas.length, 1);
+  assert.match(respostas[0], /erro/i);
 });
 
 test("texto inválido responde com o formato e não grava", async () => {
@@ -283,7 +313,7 @@ function dbImportarFake() {
     hashesNaJanela: async () => [],
     aplicarImportacao: async (d) => {
       estado.aplicado = d;
-      return { gravados: (d.novos || []).length + (d.naoGasto || []).length, conciliados: (d.casados || []).length, naoGasto: (d.naoGasto || []).length };
+      return { gravados: (d.novos || []).length + (d.naoGasto || []).length, agrupados: (d.casados || []).length, naoGasto: (d.naoGasto || []).length };
     },
     marcarPagamentoFaturaNaoGasto: async (totalCents, de, ate) => {
       estado.pagamento = { totalCents, de, ate };
@@ -372,7 +402,6 @@ test("POST /api/importar/preview (extrato) amplia a janela de reconciliação ±
     },
     hashesNaJanela: async () => [],
     inserirTransacao: async () => ({ id: "x" }),
-    carimbarLinhaHash: async () => {},
   };
   const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
   const request = new Request("http://localhost/api/importar/preview", {
@@ -605,4 +634,90 @@ test("/api/resumo?mes= devolve diario e mesVsAnterior do mês", async () => {
   assert.ok(Array.isArray(data.diario), "tem diario");
   assert.ok(Array.isArray(data.mesVsAnterior), "tem mesVsAnterior");
   assert.equal(db.estado.mesRef, "2026-09"); // resumoMesVsAnterior recebeu o mês
+});
+
+// ---------- Inc 4.6: grupos ----------
+function dbGruposFake(linhas) {
+  // `linhas`: o que transacoesPorIds/membrosDoGrupo/grupoDaTransacao devolvem (mesmo conjunto,
+  // pra simplificar); `gravado` guarda o que gravarGrupo recebeu.
+  const f = {
+    gravado: null,
+    transacoesPorIds: async (ids) => linhas.filter((l) => ids.includes(l.id)),
+    membrosDoGrupo: async (g) => linhas.filter((l) => l.grupo_id === g),
+    grupoDaTransacao: async (id) => { const t = linhas.find((l) => l.id === id); return t && t.grupo_id ? linhas.filter((l) => l.grupo_id === t.grupo_id) : []; },
+    gravarGrupo: async (arg) => { f.gravado = arg; return { alterados: arg.mudancas.length, apagados: arg.apagarId ? 1 : 0 }; },
+  };
+  return f;
+}
+const envApi = { APP_TOKEN: "token123", DATABASE_URL: "" };
+const reqApi = (path, method, body) => new Request(`http://localhost${path}`, {
+  method, headers: { "Cookie": "token=token123", "content-type": "application/json" },
+  body: body ? JSON.stringify(body) : undefined,
+});
+const manualG = { id: "m1", fonte: "manual",  criado_em: "2026-09-02", grupo_id: null, representante: false, valor_final: "2500.00" };
+const extratoG = { id: "e1", fonte: "extrato", criado_em: "2026-09-30", grupo_id: null, representante: false, valor_final: "2500.00" };
+
+test("POST /api/grupos agrupa e grava as mudanças; representante = o lançamento manual", async () => {
+  const db = dbGruposFake([manualG, extratoG]);
+  const r = await handleApi(reqApi("/api/grupos", "POST", { ids: ["m1", "e1"] }), envApi, new URL("http://localhost/api/grupos"), db);
+  assert.equal(r.status, 200);
+  const data = await r.json();
+  assert.equal(data.representante_id, "m1");
+  assert.ok(data.grupo_id, "gera um grupo_id");
+  assert.equal(db.gravado.mudancas.length, 2);
+  assert.ok(db.gravado.mudancas.every((m) => m.grupo_id === data.grupo_id));
+});
+
+test("POST /api/grupos com ids repetidos/inexistentes → 400 legível (não cria grupo de 1)", async () => {
+  const db = dbGruposFake([manualG, extratoG]);
+  const r = await handleApi(reqApi("/api/grupos", "POST", { ids: ["m1", "m1", "nao-existe"] }), envApi, new URL("http://localhost/api/grupos"), db);
+  assert.equal(r.status, 400);
+  assert.match((await r.json()).erro, /pelo menos 2/i);
+  assert.equal(db.gravado, null);
+});
+
+test("PATCH /api/grupos/:g troca o representante; id fora do grupo → 400", async () => {
+  const db = dbGruposFake([{ ...manualG, grupo_id: "G0", representante: true }, { ...extratoG, grupo_id: "G0" }]);
+  const ok = await handleApi(reqApi("/api/grupos/G0", "PATCH", { representante_id: "e1" }), envApi, new URL("http://localhost/api/grupos/G0"), db);
+  assert.equal(ok.status, 200);
+  assert.deepEqual(db.gravado.mudancas.map((m) => [m.id, m.representante]), [["m1", false], ["e1", true]]);
+  const bad = await handleApi(reqApi("/api/grupos/G0", "PATCH", { representante_id: "zzz" }), envApi, new URL("http://localhost/api/grupos/G0"), db);
+  assert.equal(bad.status, 400);
+});
+
+test("DELETE /api/grupos/:g/membros/:id tira o membro; tirar o representante → 400", async () => {
+  const db = dbGruposFake([{ ...manualG, grupo_id: "G0", representante: true }, { ...extratoG, grupo_id: "G0" }]);
+  const bad = await handleApi(reqApi("/api/grupos/G0/membros/m1", "DELETE"), envApi, new URL("http://localhost/api/grupos/G0/membros/m1"), db);
+  assert.equal(bad.status, 400);
+  assert.match((await bad.json()).erro, /escolha outro representante/i);
+  const ok = await handleApi(reqApi("/api/grupos/G0/membros/e1", "DELETE"), envApi, new URL("http://localhost/api/grupos/G0/membros/e1"), db);
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).dissolveu, true);
+});
+
+test("DELETE /api/grupos/:g desagrupa todos", async () => {
+  const db = dbGruposFake([{ ...manualG, grupo_id: "G0", representante: true }, { ...extratoG, grupo_id: "G0" }]);
+  const r = await handleApi(reqApi("/api/grupos/G0", "DELETE"), envApi, new URL("http://localhost/api/grupos/G0"), db);
+  assert.equal(r.status, 200);
+  assert.ok(db.gravado.mudancas.every((m) => m.grupo_id === null && m.representante === false));
+});
+
+test("DELETE /api/transacoes/:id recusa apagar representante com membros; membro comum apaga e dissolve", async () => {
+  const db = dbGruposFake([{ ...manualG, grupo_id: "G0", representante: true }, { ...extratoG, grupo_id: "G0" }]);
+  const bad = await handleApi(reqApi("/api/transacoes/m1", "DELETE"), envApi, new URL("http://localhost/api/transacoes/m1"), db);
+  assert.equal(bad.status, 400);
+  const ok = await handleApi(reqApi("/api/transacoes/e1", "DELETE"), envApi, new URL("http://localhost/api/transacoes/e1"), db);
+  assert.equal(ok.status, 200);
+  assert.equal(db.gravado.apagarId, "e1");
+  assert.deepEqual(db.gravado.mudancas, [{ id: "m1", grupo_id: null, representante: false }]);
+});
+
+test("Telegram del: recusa apagar representante com membros e avisa no chat", async () => {
+  const respostas = [];
+  const db = dbGruposFake([{ ...manualG, grupo_id: "G0", representante: true }, { ...extratoG, grupo_id: "G0" }]);
+  const deps = { db, confirmar: async () => {}, responderImpl: async (c, t) => respostas.push(t) };
+  const update = { callback_query: { message: { chat: { id: 7 }, message_id: 3 }, data: "del:m1" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.gravado, null);
+  assert.match(respostas[0], /escolha outro representante/i);
 });

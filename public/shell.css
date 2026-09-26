@@ -135,6 +135,14 @@ td.dt{font-family:var(--mono);color:var(--mut);white-space:nowrap;width:96px}
 .del:hover{color:var(--neg);background:var(--accent-soft)}
 /* fora do resumo (extrato/fatura: transferência, pagamento de fatura etc. não contam como gasto) */
 .selo-fora{font-size:11px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:1px 7px;margin-left:8px;white-space:nowrap}
+/* Inc 4.6: grupos */
+.selo-grupo{font-size:11px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:1px 7px;margin-left:6px;white-space:nowrap}
+.selo-diferem{font-size:11px;color:var(--ink);border:1px solid var(--ink);border-radius:999px;padding:1px 7px;margin-left:6px;white-space:nowrap;font-weight:600}
+.grpToggle{border:1px solid var(--line);background:var(--accent-soft);color:var(--ink);border-radius:999px;padding:1px 8px;margin-left:8px;cursor:pointer;font:inherit;font-size:12px}
+tr.membro td{color:var(--mut);font-size:12px}
+tr.membro td.dt{padding-left:28px}
+.desagrupar{border:0;background:transparent;color:var(--mut);cursor:pointer;font:inherit}
+.desagrupar:hover{color:var(--ink)}
 .toggle-computa{border:0;background:transparent;color:var(--dim);cursor:pointer;font-size:13px;padding:2px 6px;border-radius:6px}
 .toggle-computa:hover{color:var(--accent);background:var(--accent-soft)}
 select:focus,input:focus{outline:2px solid var(--accent);outline-offset:1px}

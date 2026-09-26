@@ -2,13 +2,23 @@
 // O modelo devolve NOMES (macro/sub); ao gravar, resolvemos para ids do catálogo.
 // catalogo = { categorias:[{id,nome}], subcategorias:[{id,categoria_id,nome}] }
 
+// categoria padrão = onde cai o que ninguém classificou (modelo devolveu nome fora do catálogo,
+// texto sem categoria, import sem regra). É marcada pela FLAG `padrao` (migração 0008), não pelo
+// nome: em 25/09/2026 "Outros" foi renomeada na aba Ajustes e o fallback por nome literal passou a
+// devolver null → not-null no insert → Telegram mudo. O nome "Outros" fica só como compatibilidade
+// (catálogo sem flag, ex. fixtures antigas) — e hoje é miscelânea deliberada, não o padrão.
+export function categoriaPadrao(catalogo) {
+  const cats = catalogo.categorias || [];
+  return cats.find(c => c.padrao) || cats.find(c => c.nome === "Outros") || null;
+}
+
 // nome de categoria + sub → { categoria_id, subcategoria_id }.
-// macro inexistente cai em 'Outros' (fallback); sub que não casa dentro da categoria → null.
+// macro inexistente/nula cai na categoria padrão; sub que não casa dentro da categoria → null.
 export function resolverCategoria(nomeMacro, nomeSub, catalogo) {
   const cats = catalogo.categorias || [];
   let cat = cats.find(c => c.nome === nomeMacro);
-  if (!cat) cat = cats.find(c => c.nome === "Outros"); // fallback
-  const categoria_id = cat ? cat.id : null;            // defensivo: sem Outros → null
+  if (!cat) cat = categoriaPadrao(catalogo);
+  const categoria_id = cat ? cat.id : null;            // defensivo: sem padrão → null (o chamador avisa)
 
   let subcategoria_id = null;
   if (categoria_id && nomeSub) {

@@ -41,7 +41,7 @@ def main(caminho, ano, mes, commit):
         if not commit:
             print("(dry-run — rode com --commit p/ gravar)"); return 0
         for x in novos:
-            nome_cat = x["categoria_nome"] or "Outros"
+            nome_cat = x["categoria_nome"] or None  # None → categoria padrão
             cat_id, sub_id = resolver_categoria(nome_cat, x.get("sub_nome"), catalogo)
             cur.execute(
                 """insert into transacoes

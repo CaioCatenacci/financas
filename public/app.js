@@ -103,6 +103,57 @@ export function filtrarTransacoes(rows, filtro = {}) {
   });
 }
 
+// ---------- Inc 4.6: grupos (duplicatas explícitas com representante) ----------
+// Transforma a lista plana do servidor em linhas de tabela: { t, membros, grupo_id, diferem, orfao }.
+// t = a transação solta ou o REPRESENTANTE do grupo; membros = os outros do grupo (nunca viram
+// linha própria — aparecem só ao expandir). O grupo fica na posição do representante (a lista já
+// vem ordenada por data). Grupo cujo representante NÃO veio na lista (Lançamentos carrega um mês;
+// a linha do banco pode estar em outro) mostra os membros como linhas soltas com orfao=true —
+// nada some da tela.
+export function montarLinhas(rows) {
+  const porGrupo = new Map();
+  for (const r of rows) {
+    if (!r.grupo_id) continue;
+    if (!porGrupo.has(r.grupo_id)) porGrupo.set(r.grupo_id, []);
+    porGrupo.get(r.grupo_id).push(r);
+  }
+  const out = [];
+  for (const r of rows) {
+    if (!r.grupo_id) { out.push({ t: r, membros: [], grupo_id: null, diferem: false, orfao: false, membrosFora: false }); continue; }
+    const grupo = porGrupo.get(r.grupo_id);
+    const rep = grupo.find((g) => g.representante);
+    if (!rep) { out.push({ t: r, membros: [], grupo_id: r.grupo_id, diferem: false, orfao: true, membrosFora: false }); continue; }
+    if (r.id !== rep.id) continue; // membro: só dentro do grupo
+    const membros = grupo.filter((g) => g.id !== rep.id);
+    const diferem = membros.some((m) => Number(m.valor_final) !== Number(r.valor_final));
+    // Fase B: grupo pode ligar meses diferentes (manual casado com extrato de outro mês). Se só o
+    // representante veio na janela do mês carregado, os membros existem no banco mas não aqui —
+    // ainda tem que contar como grupo (selo + ⛓ desagrupar), senão ele parece uma linha solta.
+    const membrosFora = membros.length === 0;
+    out.push({ t: r, membros, grupo_id: r.grupo_id, diferem, orfao: false, membrosFora });
+  }
+  return out;
+}
+
+// Filtro por cima das linhas montadas: categoria/pessoa/origem/gasto pelo representante (é a
+// linha que conta); TEXTO bate no representante OU em qualquer membro — é assim que se acha uma
+// linha do banco que "sumiu" dentro de um grupo; computa="agrupados" lista só grupos.
+export function filtrarLinhas(linhas, filtro = {}) {
+  const { texto, computa, ...dims } = filtro;
+  const txt = texto && texto.trim() ? normalizarBusca(texto.trim()) : "";
+  const soGrupos = computa === "agrupados";
+  return linhas.filter((l) => {
+    if (soGrupos && !l.membros.length && !l.membrosFora) return false;
+    if (!filtrarTransacoes([l.t], { ...dims, computa: soGrupos ? "" : computa }).length) return false;
+    if (txt) {
+      const alvo = [l.t, ...l.membros]
+        .map((x) => normalizarBusca((x.descricao ?? "") + " " + (x.contraparte_nome ?? ""))).join(" | ");
+      if (!alvo.includes(txt)) return false;
+    }
+    return true;
+  });
+}
+
 // ---------- edição em massa (Lançamentos) ----------
 // monta o objeto `mudancas` a partir dos valores da barra de ação em massa. Só inclui um campo
 // quando ele NÃO está em "— não mexer —" ("__nao__"). Sentinelas: categoria "__nao__" = não mexe;
@@ -124,12 +175,17 @@ export function montarMudancas(bar = {}) {
 
 // ---------- importação (Task 9: aba Importar) ----------
 // resolve nome→id igual worker/categorias.js::resolverCategoria (reimplementado aqui porque o
-// browser não importa worker/*.js): categoria por nome exato, fallback "Outros"; sub só se
+// browser não importa worker/*.js): categoria por nome exato, fallback na categoria padrão
+// (flag `padrao`; "Outros" só por compatibilidade — hoje é miscelânea deliberada); sub só se
 // bater dentro da categoria resolvida.
+export function categoriaPadrao(catalogo) {
+  const cats = catalogo.categorias || [];
+  return cats.find(c => c.padrao) || cats.find(c => c.nome === "Outros") || null;
+}
 function resolverCategoriaImport(nomeMacro, nomeSub, catalogo) {
   const cats = catalogo.categorias || [];
   let cat = cats.find(c => c.nome === nomeMacro);
-  if (!cat) cat = cats.find(c => c.nome === "Outros");
+  if (!cat) cat = categoriaPadrao(catalogo);
   const categoria_id = cat ? cat.id : null;
 
   let subcategoria_id = null;
@@ -141,21 +197,18 @@ function resolverCategoriaImport(nomeMacro, nomeSub, catalogo) {
 }
 
 // monta a decisao revisada (novos/naoGasto/casados) a partir do preview + catálogo, espelhando
-// tools/importar_extrato.py::_gravar / importar_fatura.py: só "novo"/"naoGasto" viram linha de
-// inserirTransacao (categoria já resolvida por id); "casado" só carimba linha_hash; "ambiguo" e
-// "jaTem" não são aplicados por padrão (o app pode resolver um ambíguo mutando status antes).
-export function montarDecisao(preview, catalogo, fonte) {
+// tools/importar_extrato.py::_gravar / importar_fatura.py, e — Inc 4.6 — a linha do "casado"
+// também vira transação: entra no grupo do lançamento que ela casou (nunca é a representante).
+// "ambiguo" e "jaTem" não são aplicados por padrão (o app pode resolver um ambíguo mutando
+// status antes). `gerarId` é injetável (default crypto.randomUUID) pra dar id de grupo novo
+// determinístico em teste.
+export function montarDecisao(preview, catalogo, fonte, gerarId = () => crypto.randomUUID()) {
   const novos = [], naoGasto = [], casados = [];
-  for (const item of preview.itens) {
-    if (item.status === "casado") {
-      casados.push({ matchId: item.matchId, linhaHash: item.linhaHash });
-      continue;
-    }
-    if (item.status !== "novo" && item.status !== "naoGasto") continue; // ambiguo/jaTem: skip
-
-    const nomeCat = item.categoriaOrg || item.categoriaNome || "Outros";
+  // linha de inserirTransacao a partir de um item do preview (paridade com _gravar do Python)
+  const linhaDe = (item) => {
+    const nomeCat = item.categoriaOrg || item.categoriaNome || null; // null → padrão
     const { categoria_id, subcategoria_id } = resolverCategoriaImport(nomeCat, item.subNome, catalogo);
-    const row = {
+    return {
       dataISO: item.data, natureza: item.natureza, esfera: "pessoal",
       valorCents: item.valorCents, reembolsoCents: 0,
       categoria_id, subcategoria_id,
@@ -164,7 +217,21 @@ export function montarDecisao(preview, catalogo, fonte) {
       contraparte_nome: item.contraparteNome,
       computa_resumo: item.computaResumo, linha_hash: item.linhaHash,
     };
-    (item.status === "novo" ? novos : naoGasto).push(row);
+  };
+  for (const item of preview.itens) {
+    if (item.status === "casado") {
+      // Inc 4.6: a linha do extrato ENTRA como transação, dentro do grupo do lançamento casado
+      // (grupo novo, ou o que ele já tinha); ela nunca é o representante — quem conta é o que o
+      // Caio lançou. computa_resumo=true de propósito: se um dia desagrupar, ela volta a contar.
+      const grupo_id = item.matchGrupoId || gerarId();
+      casados.push({
+        matchId: item.matchId, grupoExistente: !!item.matchGrupoId,
+        linha: { ...linhaDe(item), computa_resumo: true, grupo_id, representante: false },
+      });
+      continue;
+    }
+    if (item.status !== "novo" && item.status !== "naoGasto") continue; // ambiguo/jaTem: skip
+    (item.status === "novo" ? novos : naoGasto).push(linhaDe(item));
   }
   return { novos, naoGasto, casados };
 }
@@ -189,7 +256,7 @@ export function resumoTexto(preview) {
   } else {
     r = preview.resumo || {};
   }
-  return `novos ${r.novos ?? 0} · conciliados ${r.casados ?? 0} · fora do resumo ${r.naoGasto ?? 0} · ` +
+  return `novos ${r.novos ?? 0} · a agrupar ${r.casados ?? 0} · fora do resumo ${r.naoGasto ?? 0} · ` +
     `ambíguos ${r.ambiguos ?? 0} · já tinha ${r.jaTem ?? 0}`;
 }
 
@@ -224,6 +291,7 @@ if (typeof document !== "undefined") {
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
     lancTudo: false,
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
+    expandidos: new Set(), // Inc 4.6: grupo_ids abertos na tabela (só de tela, não persiste)
   };
 
   // API
@@ -238,8 +306,18 @@ if (typeof document !== "undefined") {
     }
     return r.json();
   };
-  const apiPatch = (p, body) => fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then(r => { if (!r.ok) throw new Error(`PATCH ${p} ${r.status}`); return r; });
-  const apiDelete = p => fetch(p, { method: "DELETE" }).then(r => { if (!r.ok) throw new Error(`DELETE ${p} ${r.status}`); return r; });
+  // lê {erro} do corpo p/ mostrar a mensagem real (400 de regra de grupo, etc.), senão o status
+  const erroDe = async (r, padrao) => { let msg = padrao; try { const e = await r.json(); if (e && e.erro) msg = e.erro; } catch { /* corpo não-JSON */ } return new Error(msg); };
+  const apiPatch = async (p, body) => {
+    const r = await fetch(p, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!r.ok) throw await erroDe(r, `PATCH ${p} ${r.status}`);
+    return r;
+  };
+  const apiDelete = async (p) => {
+    const r = await fetch(p, { method: "DELETE" });
+    if (!r.ok) throw await erroDe(r, `DELETE ${p} ${r.status}`);
+    return r;
+  };
 
   // corDe é keyed pelo NOME da categoria (não pelo id): os gráficos do Resumo recebem
   // nomes via resumo.porCategoria/mesVsAnterior (macro apelidado no backend), e a tabela
@@ -621,15 +699,19 @@ if (typeof document !== "undefined") {
 
   function drawRows() {
     const cats = estado.catalogo.categorias;
-    const linhas = filtrarTransacoes(estado.transacoes, estado.filtro);
+    // "N de M": M tem que ser o nº de LINHAS da tabela, não de transações — senão o total inclui
+    // membros de grupo (que não viram linha própria) e "N de M" não fecha.
+    const todas = montarLinhas(estado.transacoes);
+    const linhas = filtrarLinhas(todas, estado.filtro);
     const contador = $("#fcontador");
-    if (contador) contador.textContent = `${linhas.length} de ${estado.transacoes.length}`;
+    if (contador) contador.textContent = `${linhas.length} de ${todas.length}`;
     if (!linhas.length) {
       $("#rows").innerHTML = `<tr><td colspan="9" class="vazio">nenhum lançamento com esses filtros</td></tr>`;
       atualizarMassaBar();
       return;
     }
-    $("#rows").innerHTML = linhas.map(t => {
+    $("#rows").innerHTML = linhas.map(l => {
+      const t = l.t;
       const rec = t.natureza === "receita";
       const sel = estado.selecao.has(t.id) ? "checked" : "";
       const catOpts = cats.map(c => `<option value="${esc(c.id)}" ${c.id === t.categoria_id ? "selected" : ""}>${esc(c.nome)}</option>`).join("");
@@ -637,30 +719,60 @@ if (typeof document !== "undefined") {
         subsDaCat(estado.catalogo, t.categoria_id).map(s => `<option value="${esc(s.id)}" ${s.id === t.subcategoria_id ? "selected" : ""}>${esc(s.nome)}</option>`).join("");
       const pessoaOpts = `<option value="">—</option>` +
         estado.pessoas.map(p => `<option value="${esc(p.id)}" ${p.id === t.pessoa_id ? "selected" : ""}>${esc(p.nome)}</option>`).join("");
-      // fora do resumo (extrato/fatura não-gasto: transferência, pagamento de fatura etc.) — selo
-      // só aparece quando computa_resumo é false; o toggle (botão) inverte o valor nas duas direções.
       const selo = !t.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : "";
-      return `<tr data-id="${t.id}">
+      // Inc 4.6: linha de grupo = o representante + controle pra expandir os membros + selos
+      const nMem = l.membros.length;
+      const aberto = estado.expandidos.has(l.grupo_id);
+      const seloGrupo = nMem
+        ? `<button class="grpToggle" type="button" title="${aberto ? "Recolher" : "Ver"} os lançamentos agrupados">${aberto ? "▾" : "▸"} ${nMem}</button>` +
+          `<span class="selo-grupo">grupo</span>` +
+          (l.diferem ? `<span class="selo-diferem" title="algum membro tem valor diferente do representante">valores diferem</span>` : "")
+        : l.membrosFora
+          ? `<span class="selo-grupo" title="os outros lançamentos deste grupo estão fora do período carregado">grupo (membros em outro período)</span>`
+          : (l.orfao ? `<span class="selo-grupo" title="o representante deste grupo está fora do período carregado">membro de grupo</span>` : "");
+      // membrosFora: nada carregado pra expandir (▸ N), mas o grupo existe — ⛓ desagrupar continua
+      // disponível (funciona só por data-grupo, não depende dos membros estarem na tela).
+      const acaoGrupo = (nMem || l.membrosFora) ? `<button class="desagrupar" title="Desagrupar">⛓</button>` : "";
+      const principal = `<tr data-id="${t.id}" data-grupo="${l.grupo_id || ""}">
         <td class="selcol"><input type="checkbox" class="selrow" ${sel}></td>
         <td class="dt">${fmtData(t.data)}</td>
-        <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—">${selo}</td>
+        <td><input class="eddesc" value="${esc(t.descricao || "")}" placeholder="—">${selo}${seloGrupo}</td>
         <td><span class="macrochip"><i class="dot" style="background:var(${corDe(t.categoria)})"></i><select class="edcat">${catOpts}</select></span></td>
         <td><select class="edsub">${subOpts}</select></td>
         <td><select class="edpessoa">${pessoaOpts}</select></td>
         <td class="val" style="color:${rec ? "var(--receita)" : "var(--ink)"}">${rec ? "+" : ""}R$ ${centavosBR(t.valor_total)}</td>
         <td class="val" style="color:var(--mut)">${+t.valor_reembolso ? "R$ " + centavosBR(t.valor_reembolso) : "—"}</td>
         <td>
+          ${acaoGrupo}
           <button class="toggle-computa" title="${t.computa_resumo ? "Marcar fora do resumo" : "Incluir no resumo"}">${t.computa_resumo ? "⊘" : "↩"}</button>
           <button class="del" title="Apagar">✕</button>
         </td>
       </tr>`;
+      if (!nMem || !aberto) return principal;
+      // membros: só leitura (pra editar, tire do grupo ou torne representante) + 2 ações
+      const membros = l.membros.map(m => `<tr class="membro" data-id="${m.id}" data-grupo="${l.grupo_id}">
+        <td class="selcol"></td>
+        <td class="dt">${fmtData(m.data)}</td>
+        <td>${esc(m.descricao || "—")}<span class="selo-grupo">${esc(m.fonte)}</span>${!m.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : ""}</td>
+        <td>${esc(m.categoria || "—")}</td>
+        <td>${esc(m.subcategoria || "—")}</td>
+        <td>${esc(m.pessoa || "—")}</td>
+        <td class="val">${m.natureza === "receita" ? "+" : ""}R$ ${centavosBR(m.valor_total)}</td>
+        <td class="val" style="color:var(--mut)">—</td>
+        <td>
+          <button class="miniBtn representar" title="Tornar representante (passa a ser o que conta)">★</button>
+          <button class="miniBtn tirar" title="Tirar do grupo">⤴</button>
+        </td>
+      </tr>`).join("");
+      return principal + membros;
     }).join("");
     atualizarMassaBar();
   }
 
-  // ids atualmente visíveis (respeitando o filtro) — base do "selecionar todos".
+  // ids atualmente visíveis (respeitando o filtro) — base do "selecionar todos". Linha de grupo
+  // conta pelo representante (membros não são selecionáveis).
   function idsFiltrados() {
-    return filtrarTransacoes(estado.transacoes, estado.filtro).map(t => t.id);
+    return filtrarLinhas(montarLinhas(estado.transacoes), estado.filtro).map(l => l.t.id);
   }
 
   // atualiza a barra de massa: contagem, visibilidade e o estado do "selecionar todos".
@@ -670,6 +782,8 @@ if (typeof document !== "undefined") {
     if (bar) bar.classList.toggle("hidden", n === 0);
     const cnt = $("#massacount");
     if (cnt) cnt.textContent = `${n} selecionado${n === 1 ? "" : "s"}`;
+    const mg = $("#magrupar");
+    if (mg) mg.disabled = n < 2; // agrupar precisa de 2+
     const selall = $("#selall");
     if (selall) {
       const vis = idsFiltrados();
@@ -705,10 +819,10 @@ if (typeof document !== "undefined") {
         </span>`).join("");
       return `<div class="ajcat">
         <div class="ajcathead">
-          <b>${esc(c.nome)}</b><span class="ajnat">${esc(c.natureza)}</span>
+          <b>${esc(c.nome)}</b><span class="ajnat">${esc(c.natureza)}</span>${c.padrao ? `<span class="ajnat" title="recebe o que ninguém classificou (modelo, texto sem categoria, import)">padrão</span>` : ""}
           <span class="ajactions">
             <button class="miniBtn" data-act="renomeiacat" data-id="${esc(c.id)}">renomear</button>
-            <button class="miniBtn" data-act="apagarcat" data-id="${esc(c.id)}">desativar</button>
+            ${c.padrao ? "" : `<button class="miniBtn" data-act="apagarcat" data-id="${esc(c.id)}">desativar</button>`}
           </span>
         </div>
         <div class="ajsubs">${subChips}<button class="chip" data-act="novasub" data-id="${esc(c.id)}" type="button">＋ sub</button></div>
@@ -944,7 +1058,7 @@ if (typeof document !== "undefined") {
       <tr data-i="${i}">
         <td class="dt">${fmtData(it.data)}</td>
         <td>${esc(it.descricaoFinal ?? it.descricao)}</td>
-        <td>${esc(it.categoriaOrg || it.categoriaNome || "Outros")}${it.subNome ? " › " + esc(it.subNome) : ""}</td>
+        <td>${esc(it.categoriaOrg || it.categoriaNome || categoriaPadrao(estado.catalogo)?.nome || "—")}${it.subNome ? " › " + esc(it.subNome) : ""}</td>
         <td class="val">${it.natureza === "receita" ? "+" : ""}R$ ${centavosBR(String(it.valorCents / 100))}</td>
         ${comAmbiguo ? `<td><button class="chip impResolve" type="button" data-i="${i}">tratar como novo</button></td>` : "<td></td>"}
       </tr>`).join("");
@@ -965,7 +1079,7 @@ if (typeof document !== "undefined") {
         ? " · pagamento da fatura no extrato marcado fora do resumo"
         : ` · pagamento no extrato não marcado automaticamente (${r.pagamentoCandidatos} candidato(s)) — ajuste em Lançamentos se preciso`;
     }
-    return `<p class="impresultado">✅ gravados ${r.gravados} (${r.naoGasto} fora do resumo) · conciliados ${r.conciliados}${extra}. Atualize Resumo/Lançamentos para ver.</p>`;
+    return `<p class="impresultado">✅ gravados ${r.gravados} (${r.naoGasto} fora do resumo) · agrupados ${r.agrupados ?? 0}${extra}. Atualize Resumo/Lançamentos para ver.</p>`;
   }
 
   function drawImportar() {
@@ -1022,7 +1136,7 @@ if (typeof document !== "undefined") {
         </div>
       </div>
       ${tabelaItens("Novos", novos)}
-      ${tabelaItens("Conciliados (já existem no extrato)", casados)}
+      ${tabelaItens("A agrupar (já lançados; a linha do extrato entra no grupo)", casados)}
       ${tabelaItens("Fora do resumo (transferência/pagamento de fatura)", naoGasto)}
       ${tabelaItens("Ambíguos — não serão aplicados, a menos que você trate como novo", ambiguos, { comAmbiguo: true })}
       ${tabelaItens("Já importados antes (ignorados)", jaTem)}
@@ -1247,6 +1361,20 @@ if (typeof document !== "undefined") {
       if (!t) return;
       try { await apiPatch(`/api/transacoes/${tr.dataset.id}`, { computa_resumo: !t.computa_resumo }); carregar(); }
       catch (err) { alert("Falha ao atualizar: " + err.message); }
+    } else if (e.target.classList.contains("grpToggle")) {
+      const g = tr.dataset.grupo;
+      if (estado.expandidos.has(g)) estado.expandidos.delete(g); else estado.expandidos.add(g);
+      drawRows();
+    } else if (e.target.classList.contains("desagrupar")) {
+      if (!confirm("Desagrupar? Cada lançamento volta a contar sozinho no Resumo.")) return;
+      try { await apiDelete(`/api/grupos/${tr.dataset.grupo}`); carregar(); }
+      catch (err) { alert("Falha ao desagrupar: " + err.message); }
+    } else if (e.target.classList.contains("representar")) {
+      try { await apiPatch(`/api/grupos/${tr.dataset.grupo}`, { representante_id: tr.dataset.id }); carregar(); }
+      catch (err) { alert("Falha ao trocar o representante: " + err.message); }
+    } else if (e.target.classList.contains("tirar")) {
+      try { await apiDelete(`/api/grupos/${tr.dataset.grupo}/membros/${tr.dataset.id}`); carregar(); }
+      catch (err) { alert("Falha ao tirar do grupo: " + err.message); }
     }
   });
 
@@ -1267,6 +1395,17 @@ if (typeof document !== "undefined") {
       subsDaCat(estado.catalogo, catId).map(s => `<option value="${esc(s.id)}">${esc(s.nome)}</option>`).join("");
   });
   $("#mlimpar").addEventListener("click", () => { estado.selecao.clear(); drawRows(); });
+  // Inc 4.6: agrupar a seleção (2+). O servidor decide o representante e recusa misturar grupos.
+  $("#magrupar").addEventListener("click", async () => {
+    const ids = [...estado.selecao];
+    if (ids.length < 2) { alert("Selecione pelo menos 2 lançamentos pra agrupar."); return; }
+    try {
+      const r = await apiPost("/api/grupos", { ids });
+      estado.selecao.clear();
+      estado.expandidos.add(r.grupo_id); // abre o grupo recém-criado pra conferir
+      await carregar();
+    } catch (err) { alert("Falha ao agrupar: " + err.message); }
+  });
   $("#maplicar").addEventListener("click", async () => {
     const ids = [...estado.selecao];
     if (!ids.length) return;

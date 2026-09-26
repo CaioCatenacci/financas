@@ -8,12 +8,13 @@ import { centsToBR } from "./money.js";
 import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
 import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
 import { parseAprender } from "./teach.js";
-import { resolverCategoria, catalogoParaLista, nomesDeCategoria } from "./categorias.js";
+import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
 import { parseFatura } from "./fatura.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
+import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
@@ -25,7 +26,11 @@ export async function tratarUpdate(update, env, deps) {
   const ev = parseUpdate(update);
 
   if (ev.tipo === "callback" && ev.data?.startsWith("del:")) {
-    await deps.db.apagarTransacao(ev.data.slice(4));
+    const idTx = ev.data.slice(4);
+    // Inc 4.6: apagar o representante de um grupo deixaria o grupo sem quem conta → recusa
+    const d = podeApagar(await deps.db.grupoDaTransacao(idTx), idTx);
+    if (!d.ok) { await deps.responderImpl(ev.chatId, `⚠ ${d.erro} (no app).`, env); return; }
+    await deps.db.gravarGrupo({ mudancas: d.mudancas, apagarId: idTx });
     await deps.responderImpl(ev.chatId, "🗑 Apagado.", env);
     return;
   }
@@ -46,7 +51,7 @@ export async function tratarUpdate(update, env, deps) {
         const s = catalogo.subcategorias.find((x) => x.categoria_id === c.id && x.nome.toLowerCase() === d.subcategoria.toLowerCase());
         if (s) subNome = s.nome; else avisos.push(`subcategoria "${d.subcategoria}" não existe`);
       } }
-      else avisos.push(`categoria "${d.categoria}" não existe — usei Outros`);
+      else avisos.push(`categoria "${d.categoria}" não existe — usei ${categoriaPadrao(catalogo)?.nome ?? "a padrão"}`);
     }
     const { categoria_id, subcategoria_id } = resolverCategoria(macroNome, subNome, catalogo);
     // resolve pessoa por nome
@@ -131,15 +136,29 @@ export async function tratarUpdate(update, env, deps) {
   await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat}${selo} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id);
 }
 
-async function handleTelegram(request, env) {
+// depsOpt: injeção p/ teste (mesmo padrão do dbOpt em handleApi).
+export async function handleTelegram(request, env, depsOpt = null) {
   if (!segredoTelegramValido(request, env.TELEGRAM_SECRET)) return new Response("no", { status: 401 });
   const update = await request.json();
   const chatId = update.message?.chat?.id ?? update.callback_query?.message?.chat?.id;
   if (!chatPermitido(chatId, env.ALLOWLIST)) return new Response("ok"); // falha fechada, silencioso
 
+  const deps = depsOpt ?? montarDepsTelegram(env);
+  try {
+    await tratarUpdate(update, env, deps);
+  } catch (err) {
+    // Nunca devolver 500: o Telegram retenta o mesmo update em loop e o usuário fica sem resposta
+    // (foi assim que o bug da categoria padrão ficou "mudo"). Avisa, loga e devolve 200 pra fechar.
+    console.error("telegram: falha ao tratar update:", err?.stack || err);
+    try { await deps.responderImpl(chatId, `⚠ Deu erro ao registrar: ${err?.message ?? err}. Tente de novo ou confira no app.`, env); } catch {}
+  }
+  return new Response("ok");
+}
+
+function montarDepsTelegram(env) {
   const sql = neon(env.DATABASE_URL);
   const db = criarDb(sql);
-  const deps = {
+  return {
     db,
     baixar: (fileId) => downloadArquivo(env.TELEGRAM_TOKEN, fileId),
     hashBytes: sha256hex,
@@ -152,8 +171,6 @@ async function handleTelegram(request, env) {
     confirmar: (chat, texto, id) => enviarConfirmacao(env.TELEGRAM_TOKEN, chat, texto, id),
     responderImpl: (chat, texto) => responder(env.TELEGRAM_TOKEN, chat, texto),
   };
-  await tratarUpdate(update, env, deps);
-  return new Response("ok");
 }
 
 export async function handleApi(request, env, url, dbOpt = null) {
@@ -183,8 +200,43 @@ export async function handleApi(request, env, url, dbOpt = null) {
     return j({ ok: true });
   }
   if (url.pathname.startsWith("/api/transacoes/") && request.method === "DELETE") {
-    await db.apagarTransacao(id());
+    const idTx = id();
+    const d = podeApagar(await db.grupoDaTransacao(idTx), idTx);
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas, apagarId: idTx });
     return j({ ok: true });
+  }
+
+  // ---- Inc 4.6: grupos (duplicatas explícitas com representante) ----
+  // Fluxo de cada rota: lê a forma mínima → grupos.js decide (puro) → gravarGrupo aplica numa
+  // única transação. Erro de regra → 400 legível.
+  if (url.pathname === "/api/grupos" && request.method === "POST") {
+    const b = await body();
+    const ids = [...new Set((b.ids || []).map(String))];
+    const linhas = await db.transacoesPorIds(ids);
+    const d = decidirAgrupar(linhas, crypto.randomUUID());
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ grupo_id: d.grupo_id, representante_id: d.representante_id });
+  }
+  const mMembro = url.pathname.match(/^\/api\/grupos\/([^/]+)\/membros\/([^/]+)$/);
+  if (mMembro && request.method === "DELETE") {
+    const d = decidirTirar(await db.membrosDoGrupo(mMembro[1]), mMembro[2]);
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ ok: true, dissolveu: d.dissolveu });
+  }
+  if (url.pathname.startsWith("/api/grupos/") && request.method === "PATCH") {
+    const b = await body();
+    const d = decidirRepresentar(await db.membrosDoGrupo(id()), String(b.representante_id));
+    if (!d.ok) return erroJson(d.erro, 400);
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ ok: true });
+  }
+  if (url.pathname.startsWith("/api/grupos/") && request.method === "DELETE") {
+    const d = decidirDesagrupar(await db.membrosDoGrupo(id()));
+    await db.gravarGrupo({ mudancas: d.mudancas });
+    return j({ ok: true, desagrupados: d.mudancas.length });
   }
 
   // ---- gestão de categorias ----

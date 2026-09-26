@@ -13,7 +13,8 @@ function dias(a, b) {
 
 export function reconciliarLinha(linha, existentes) {
   const cand = existentes.filter(e => e.valorCents === linha.valorCents && dias(linha.data, e.data) <= 3);
-  if (cand.length === 1) return { status: "casado", matchId: cand[0].id };
-  if (cand.length > 1) return { status: "ambiguo", matchId: null };
-  return { status: "novo", matchId: null };
+  // Inc 4.6: matchGrupoId = grupo da candidata (se já agrupada) — o app usa pra entrar nele.
+  if (cand.length === 1) return { status: "casado", matchId: cand[0].id, matchGrupoId: cand[0].grupo_id ?? null };
+  if (cand.length > 1) return { status: "ambiguo", matchId: null, matchGrupoId: null };
+  return { status: "novo", matchId: null, matchGrupoId: null };
 }

@@ -38,3 +38,23 @@ def test_sub_nao_vaza_entre_categorias():
 def test_sem_outros_e_macro_inexistente_vira_none():
     cat = {"categorias": [{"id": "cE", "nome": "Educação"}], "subcategorias": []}
     assert resolver_categoria("Marte", None, cat) == (None, None)
+
+
+# Categoria padrão por FLAG, não por nome (bug de 25/09/2026: "Outros" renomeada quebrou o fallback).
+CATALOGO_PADRAO = {
+    "categorias": [
+        {"id": "cE", "nome": "Educação", "padrao": False},
+        {"id": "cO", "nome": "Outros", "padrao": False},
+        {"id": "cNI", "nome": "Não Identificado", "padrao": True},
+    ],
+    "subcategorias": [],
+}
+
+
+def test_macro_inexistente_ou_nula_cai_na_padrao_por_flag_nao_em_outros():
+    assert resolver_categoria("Marte", None, CATALOGO_PADRAO) == ("cNI", None)
+    assert resolver_categoria(None, None, CATALOGO_PADRAO) == ("cNI", None)
+
+
+def test_outros_explicito_resolve_outros():
+    assert resolver_categoria("Outros", None, CATALOGO_PADRAO) == ("cO", None)

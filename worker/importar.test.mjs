@@ -74,6 +74,16 @@ test("preview extrato: idempotência — hash já em hashes vira jaTem", () => {
   assert.equal(p.itens.find(i => i.status === "jaTem").linhaHash, lh);
 });
 
+test("montarPreviewExtrato: item casado carrega o matchGrupoId da candidata (null se ela está solta)", () => {
+  const solta = montarPreviewExtrato(TXT, "c1", { catalogo, associacoes: {}, existentes: [{ id: "t9", data: "2025-12-10", valorCents: 10000 }], hashes: [] });
+  const casado = solta.itens.find(i => i.status === "casado");
+  assert.equal(casado.matchId, "t9");
+  assert.equal(casado.matchGrupoId, null);
+  assert.ok(solta.itens.filter(i => i.status !== "casado").every(i => i.matchGrupoId === null), "não-casados levam null");
+  const agrupada = montarPreviewExtrato(TXT, "c1", { catalogo, associacoes: {}, existentes: [{ id: "t9", data: "2025-12-10", valorCents: 10000, grupo_id: "G0" }], hashes: [] });
+  assert.equal(agrupada.itens.find(i => i.status === "casado").matchGrupoId, "G0");
+});
+
 test("preview extrato: casamento consome a candidata do lote (2ª linha igual não recasa)", () => {
   const txtDuasIguais = `11/12/2025 SALDO DO DIA 9.176,46
 10/12/2025 PIX QRS LOJA X10/12 -100,00
@@ -149,7 +159,7 @@ test("aplicar: delega o lote inteiro p/ db.aplicarImportacao (uma transação, n
   const db = {
     async aplicarImportacao(d) {
       recebido = d;
-      return { gravados: d.novos.length + d.naoGasto.length, conciliados: d.casados.length, naoGasto: d.naoGasto.length };
+      return { gravados: d.novos.length + d.naoGasto.length, agrupados: d.casados.length, naoGasto: d.naoGasto.length };
     },
     // se aplicar voltasse a chamar linha a linha, estes explodiriam o teste
     async inserirTransacao() { throw new Error("não deve inserir linha a linha"); },
@@ -162,5 +172,5 @@ test("aplicar: delega o lote inteiro p/ db.aplicarImportacao (uma transação, n
   };
   const r = await aplicar(db, decisao);
   assert.deepEqual(recebido, decisao);                 // passou a decisão inteira
-  assert.deepEqual(r, { gravados: 2, conciliados: 1, naoGasto: 1 });
+  assert.deepEqual(r, { gravados: 2, agrupados: 1, naoGasto: 1 });
 });

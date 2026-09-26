@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
-  acumularDiario, paceOrcamento,
+  acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas,
 } from "./app.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
@@ -171,9 +171,9 @@ function previewFixture() {
         categoriaNome: null, subNome: null, categoriaOrg: "Transferências",
         contraparteNome: null,
       },
-      { // casado — só matchId+linhaHash importam
+      { // casado — vira linha do extrato dentro do grupo do lançamento casado (Inc 4.6)
         status: "casado", data: "2026-08-03", descricao: "PIX RECEBIDO", valorCents: 2000,
-        natureza: "receita", linhaHash: "h3", matchId: "m1", computaResumo: true,
+        natureza: "receita", linhaHash: "h3", matchId: "m1", matchGrupoId: null, computaResumo: true,
         categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
       },
       { // ambiguo — não aplicado por padrão
@@ -223,10 +223,26 @@ test("montarDecisao: item naoGasto resolve categoriaOrg (sem sub) e computa_resu
   assert.equal(ng.fonte, "extrato");
 });
 
-test("montarDecisao: item casado vira {matchId,linhaHash}", () => {
+test("montarDecisao: casado vira linha do extrato dentro do grupo (novo ou existente), nunca só um carimbo", () => {
   const preview = previewFixture();
-  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato");
-  assert.deepEqual(d.casados, [{ matchId: "m1", linhaHash: "h3" }]);
+  // o item "casado" da fixture é o de status "casado" (h3): com matchGrupoId null → grupo novo
+  const d = montarDecisao(preview, CATALOGO_IMPORT, "extrato", () => "G-novo");
+  assert.equal(d.casados.length, 1);
+  const c = d.casados[0];
+  assert.equal(c.matchId, "m1");
+  assert.equal(c.grupoExistente, false);
+  assert.equal(c.linha.grupo_id, "G-novo");
+  assert.equal(c.linha.representante, false);
+  assert.equal(c.linha.fonte, "extrato");
+  assert.equal(c.linha.linha_hash, "h3");
+  assert.equal(c.linha.computa_resumo, true);
+  assert.ok(c.linha.categoria_id, "categoria resolvida como um novo (cai na padrão se não houver nome)");
+  // com matchGrupoId → reutiliza o grupo e marca grupoExistente
+  const p2 = previewFixture();
+  p2.itens.find(i => i.status === "casado").matchGrupoId = "G0";
+  const d2 = montarDecisao(p2, CATALOGO_IMPORT, "extrato", () => "ignorado");
+  assert.equal(d2.casados[0].grupoExistente, true);
+  assert.equal(d2.casados[0].linha.grupo_id, "G0");
 });
 
 test("montarDecisao: ambíguo e jáTem não são aplicados (fora de novos/naoGasto/casados)", () => {
@@ -264,7 +280,7 @@ test("resumoTexto: conta cada grupo (inclui 'fora do resumo') a partir dos itens
   const preview = previewFixture();
   const txt = resumoTexto(preview);
   assert.match(txt, /novos 1/i);
-  assert.match(txt, /conciliad\w* 1/i);
+  assert.match(txt, /a agrupar 1/i);
   assert.match(txt, /fora do resumo 1/i); // naoGasto — o grupo que faltava cobrir
   assert.match(txt, /ambígu\w* 1/i);
   assert.match(txt, /já tinha 1/i);
@@ -438,4 +454,81 @@ test("paceOrcamento: reta linear de 0 ao total no último dia", () => {
   assert.equal(r.length, 30);
   assert.equal(r[29].alvo_cents, 300000);
   assert.equal(r[14].alvo_cents, Math.round(300000 * 15 / 30)); // dia 15
+});
+
+test("montarDecisao: item sem categoria cai na categoria padrão (flag), não em Outros", () => {
+  // "Outros" agora é miscelânea deliberada; o que o import não classifica vai pra triagem (padrão).
+  const catalogo = {
+    categorias: [{ id: "cOut", nome: "Outros" }, { id: "cNI", nome: "Não Identificado", padrao: true }],
+    subcategorias: [],
+  };
+  const preview = {
+    checksum: { ok: true, diferencaCents: 0 }, resumo: { novos: 1 },
+    itens: [{ status: "novo", data: "2026-03-01", natureza: "despesa", valorCents: 1000, descricao: "x",
+              linhaHash: "h1", matchId: null, computaResumo: true, categoriaNome: null, subNome: null,
+              categoriaOrg: null, contraparteNome: null }],
+  };
+  const d = montarDecisao(preview, catalogo, "extrato");
+  assert.equal(d.novos[0].categoria_id, "cNI");
+});
+
+// ---------- Inc 4.6: montarLinhas / filtrarLinhas ----------
+// rows já vêm ordenadas por data desc do servidor; o grupo aparece na posição do representante.
+const R = [
+  { id: "a", data: "2026-09-30", descricao: "PIX ALUGUEL", contraparte_nome: null, categoria: "Casa", pessoa: null, pessoa_id: null, origem_categoria: "regra", computa_resumo: true, grupo_id: "G1", representante: false, valor_final: "2500.00", fonte: "extrato" },
+  { id: "b", data: "2026-09-15", descricao: "Cinema", contraparte_nome: null, categoria: "Lazer", pessoa: "Caio", pessoa_id: 1, origem_categoria: "manual", computa_resumo: true, grupo_id: null, representante: false, valor_final: "60.00", fonte: "manual" },
+  { id: "c", data: "2026-09-02", descricao: "Aluguel", contraparte_nome: "Imobiliária X", categoria: "Casa", pessoa: "Casa", pessoa_id: 5, origem_categoria: "manual", computa_resumo: true, grupo_id: "G1", representante: true, valor_final: "2500.00", fonte: "manual" },
+];
+
+test("montarLinhas: grupo vira uma linha na posição do representante, com os membros dentro", () => {
+  const L = montarLinhas(R);
+  assert.deepEqual(L.map((l) => l.t.id), ["b", "c"]);       // "a" (membro) não vira linha própria
+  const g = L.find((l) => l.grupo_id === "G1");
+  assert.deepEqual(g.membros.map((m) => m.id), ["a"]);
+  assert.equal(g.diferem, false);
+  assert.equal(g.orfao, false);
+});
+
+test("montarLinhas: valores diferentes marcam diferem", () => {
+  const rows = R.map((r) => (r.id === "a" ? { ...r, valor_final: "56200.00" } : r));
+  assert.equal(montarLinhas(rows).find((l) => l.grupo_id === "G1").diferem, true);
+});
+
+test("montarLinhas: membros órfãos (representante fora do período carregado) viram linhas soltas", () => {
+  const semRep = R.filter((r) => r.id !== "c"); // o representante ficou fora da janela
+  const L = montarLinhas(semRep);
+  assert.deepEqual(L.map((l) => l.t.id), ["a", "b"]); // nada some da tela
+  assert.equal(L[0].orfao, true);
+  assert.deepEqual(L[0].membros, []);
+});
+
+test("filtrarLinhas: dimensões pelo representante; texto acha o grupo por membro; 'agrupados' lista só grupos", () => {
+  const L = montarLinhas(R);
+  assert.deepEqual(filtrarLinhas(L, { categoria: "Casa" }).map((l) => l.t.id), ["c"]);
+  assert.deepEqual(filtrarLinhas(L, { texto: "pix aluguel" }).map((l) => l.t.id), ["c"]); // bateu no membro "a"
+  assert.deepEqual(filtrarLinhas(L, { texto: "cinema" }).map((l) => l.t.id), ["b"]);
+  assert.deepEqual(filtrarLinhas(L, { computa: "agrupados" }).map((l) => l.t.id), ["c"]);
+  assert.deepEqual(filtrarLinhas(L, { computa: "gasto" }).map((l) => l.t.id), ["b", "c"]);
+});
+
+// Fase B: grupo pode ligar transações de meses diferentes (ex.: lançamento manual em 29/09
+// casado com a linha do extrato em 01/10). GET /api/transacoes só traz o mês selecionado — o
+// representante chega sozinho, sem nenhum outro membro carregado. Antes desta correção isso
+// virava uma linha "solta" (sem selo, sem ⛓ desagrupar) e sumia do filtro "Só agrupados".
+const REP_SEM_MEMBROS = { id: "d", data: "2026-09-29", descricao: "Escola", contraparte_nome: null, categoria: "Educação", pessoa: null, pessoa_id: null, origem_categoria: "manual", computa_resumo: true, grupo_id: "G2", representante: true, valor_final: "500.00", fonte: "manual" };
+
+test("montarLinhas: representante carregado sem seus membros (fora do período) ainda vira linha de grupo", () => {
+  const L = montarLinhas([REP_SEM_MEMBROS, R[1]]); // R[1] = "b", transação solta
+  const g = L.find((l) => l.t.id === "d");
+  assert.equal(g.membrosFora, true);
+  assert.deepEqual(g.membros, []);
+  assert.equal(g.orfao, false);
+  assert.equal(g.grupo_id, "G2");
+  const solta = L.find((l) => l.t.id === "b");
+  assert.equal(solta.membrosFora, false); // linha solta nunca tem membrosFora
+});
+
+test("filtrarLinhas: computa='agrupados' inclui grupo cujos membros estão fora do período (membrosFora)", () => {
+  const L = montarLinhas([REP_SEM_MEMBROS, R[1]]);
+  assert.deepEqual(filtrarLinhas(L, { computa: "agrupados" }).map((l) => l.t.id), ["d"]);
 });
