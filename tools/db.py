@@ -12,14 +12,26 @@ embutida — não é regra de prompt:
                                                o Caio presente (fora do allow de propósito)
 
 Cada comando imprime UMA linha de JSON e sai 1 quando ok=false. A URL nunca é
-impressa. Sem parâmetros, o psycopg manda o texto como uma query simples, então um
-arquivo com vários comandos roda de uma vez.
+impressa (nem em erro: ver redigir).
+
+Três camadas contra escrita por onde não deve (achados da revisão de 26/09: um
+COMMIT contrabandeado numa string ou num arquivo derrubava a guarda de texto e o
+ROLLBACK do ensaio):
+  1. guarda de texto — so_leitura/controla_transacao, com strings e comentários
+     removidos antes de olhar; dollar-quoting é recusado;
+  2. protocolo estendido (prepare=True) para o select e as consultas do ensaio: o
+     servidor recusa mais de um comando por chamada;
+  3. sessão com default_transaction_read_only=on no select: mesmo que algo escape,
+     a transação é read-only.
+O arquivo de migração (ensaiar/aplicar) segue pelo protocolo simples (vários
+comandos de uma vez), por isso não pode controlar a transação — o script controla.
 """
 import datetime
 import decimal
 import json
 import os
 import re
+import subprocess
 import sys
 import uuid
 from pathlib import Path
@@ -44,23 +56,66 @@ def ler_dev_vars(texto):
     return campos
 
 
-def url_do_banco(env=None, raiz=None):
+class DevVarsAusente(Exception):
+    """Exceção comum (não SystemExit): os comandos a transformam em JSON ok:false."""
+
+
+def _url_de(pasta):
+    arquivo = Path(pasta) / ".dev.vars"
+    if arquivo.exists():
+        return ler_dev_vars(arquivo.read_text(encoding="utf-8")).get("DATABASE_URL")
+    return None
+
+
+def _git_common_dir(raiz):
+    try:
+        r = subprocess.run(["git", "rev-parse", "--git-common-dir"], cwd=raiz, capture_output=True, text=True)
+        return r.stdout.strip() if r.returncode == 0 else None
+    except OSError:
+        return None
+
+
+def url_do_banco(env=None, raiz=None, git_common_dir="auto"):
+    """Ambiente → .dev.vars da pasta atual → .dev.vars do checkout principal (o pai do
+    git-common-dir): o reviewer roda dentro de uma worktree, onde o .dev.vars não existe."""
     env = os.environ if env is None else env
     if env.get("DATABASE_URL"):
         return env["DATABASE_URL"]
-    arquivo = Path(raiz or ".") / ".dev.vars"
-    if arquivo.exists():
-        url = ler_dev_vars(arquivo.read_text(encoding="utf-8")).get("DATABASE_URL")
+    raiz = Path(raiz or ".")
+    url = _url_de(raiz)
+    if url:
+        return url
+    comum = _git_common_dir(raiz) if git_common_dir == "auto" else git_common_dir
+    if comum:
+        url = _url_de(Path(raiz, comum).resolve().parent)
         if url:
             return url
-    raise SystemExit("DATABASE_URL: nem no ambiente nem em .dev.vars")
+    raise DevVarsAusente("DATABASE_URL: nem no ambiente nem em .dev.vars (da pasta atual ou do checkout principal)")
+
+
+def _limpar(sql):
+    """Tira strings ('...' com '' escapado) e comentários, nessa ordem: um "--" dentro de
+    string não é comentário, e o que vem depois dele não pode sumir da inspeção."""
+    sem_strings = re.sub(r"'(?:[^']|'')*'", "''", sql or "")
+    return re.sub(r"--[^\n]*|/\*.*?\*/", "", sem_strings, flags=re.S)
+
+
+def controla_transacao(sql):
+    """True se algum comando (separado por ;) começa com BEGIN/START/COMMIT/END/ROLLBACK/
+    SAVEPOINT/RELEASE/PREPARE/ABORT. O script é quem abre e fecha a transação; um
+    COMMIT no meio persistiria o ensaio e tiraria o select da transação read-only."""
+    for comando in _limpar(sql).split(";"):
+        if re.match(r"^\s*(begin|start|commit|end|rollback|savepoint|release|prepare|abort)\b", comando, re.I):
+            return True
+    return False
 
 
 def so_leitura(sql):
-    """Primeira barreira (a segunda é a transação read-only): uma consulta só, começando
-    por SELECT/WITH/EXPLAIN. Ponto-e-vírgula no meio recusa — "select 1; delete" não passa."""
-    limpo = re.sub(r"--[^\n]*|/\*.*?\*/", "", sql or "", flags=re.S).strip().rstrip(";")
-    if ";" in limpo:
+    """Primeira barreira (as outras são o protocolo estendido e a sessão read-only): uma
+    consulta só, começando por SELECT/WITH/EXPLAIN, sem controle de transação e sem
+    dollar-quoting (que esconderia um ; de outra forma)."""
+    limpo = _limpar(sql).strip().rstrip(";")
+    if ";" in limpo or re.search(r"\$\w*\$", limpo) or controla_transacao(limpo):
         return False
     return re.match(r"^(select|with|explain)\b", limpo, re.I) is not None
 
@@ -88,8 +143,20 @@ def _linhas(cur):
     return [dict(zip(colunas, linha)) for linha in cur.fetchmany(LIMITE_LINHAS)]
 
 
-def _erro(e):
-    return f"{type(e).__name__}: {e}"
+def redigir(texto, url):
+    """Nem a URL nem a senha aparecem em erro: o psycopg ecoa a URL malformada e a senha
+    com espaço na mensagem, e a saída deste script vai para relatório e PR."""
+    if not url:
+        return texto
+    texto = texto.replace(url, "<DATABASE_URL>")
+    m = re.match(r"[a-z]+://[^:/@]*:([^@]*)@", url)
+    if m and m.group(1):
+        texto = texto.replace(m.group(1), "***")
+    return texto
+
+
+def _erro(e, url=None):
+    return redigir(f"{type(e).__name__}: {e}", url)
 
 
 def cmd_select(sql):
@@ -97,16 +164,18 @@ def cmd_select(sql):
         return {"ok": False, "erro": "select: só SELECT/WITH/EXPLAIN, uma consulta por chamada"}
     import psycopg
     r = {"ok": True, "linhas": [], "n": 0}
+    url = None
     try:
-        with psycopg.connect(url_do_banco(), autocommit=True) as conn:
+        url = url_do_banco()
+        with psycopg.connect(url, autocommit=True, options="-c default_transaction_read_only=on") as conn:
             with conn.transaction():
                 conn.execute("set transaction read only")
-                cur = conn.execute(sql)
+                cur = conn.execute(sql, prepare=True)   # estendido: um comando só, o servidor garante
                 r["linhas"] = _linhas(cur)
                 r["n"] = cur.rowcount
                 raise psycopg.Rollback()
     except Exception as e:
-        r = {"ok": False, "erro": _erro(e)}
+        r = {"ok": False, "erro": _erro(e, url)}
     return r
 
 
@@ -118,16 +187,20 @@ def cmd_ensaiar(arquivo, consultas):
     import psycopg
     texto = Path(arquivo).read_text(encoding="utf-8")
     r = {"ok": True, "arquivo": arquivo, "pos_deploy": fase_pos_deploy(texto), "consultas": [], "erro": ""}
+    if controla_transacao(texto):
+        return {**r, "ok": False, "erro": "o arquivo controla a transação (begin/commit/rollback): o ensaio faz isso sozinho, tire esses comandos"}
+    url = None
     try:
-        with psycopg.connect(url_do_banco(), autocommit=True) as conn:
+        url = url_do_banco()
+        with psycopg.connect(url, autocommit=True) as conn:
             with conn.transaction():
                 conn.execute(texto)
                 for c in consultas:
-                    r["consultas"].append({"sql": c, "linhas": _linhas(conn.execute(c))})
+                    r["consultas"].append({"sql": c, "linhas": _linhas(conn.execute(c, prepare=True))})
                 raise psycopg.Rollback()   # o ensaio nunca persiste
     except Exception as e:
         r["ok"] = False
-        r["erro"] = _erro(e)
+        r["erro"] = _erro(e, url)
     return r
 
 
@@ -135,13 +208,17 @@ def cmd_aplicar(arquivo):
     import psycopg
     texto = Path(arquivo).read_text(encoding="utf-8")
     r = {"ok": True, "arquivo": arquivo, "erro": ""}
+    if controla_transacao(texto):
+        return {**r, "ok": False, "erro": "o arquivo controla a transação (begin/commit/rollback): o aplicar faz isso sozinho, tire esses comandos"}
+    url = None
     try:
-        with psycopg.connect(url_do_banco(), autocommit=True) as conn:
+        url = url_do_banco()
+        with psycopg.connect(url, autocommit=True) as conn:
             with conn.transaction():
                 conn.execute(texto)
     except Exception as e:
         r["ok"] = False
-        r["erro"] = _erro(e)
+        r["erro"] = _erro(e, url)
     return r
 
 
