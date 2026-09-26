@@ -648,3 +648,28 @@ test("aplicarImportacao: casado com grupoExistente só insere a linha do extrato
   assert.equal(sql.transacao.length, 1);
   assert.match(sql.chamadas[0].text, /insert into transacoes/i);
 });
+
+// ---- natureza segue a categoria ao reclassificar (bug do salário, 25/09/2026) ----
+test("atualizarTransacao: trocar p/ categoria de receita grava natureza receita (lê a natureza da categoria nova no mesmo SELECT)", async () => {
+  const existente = { id: "t1", data: "2026-09-22", categoria_id: "cOut", subcategoria_id: null,
+    valor_total: "36120.00", valor_reembolso: "0.00", pessoa_id: null, descricao: "Salário",
+    natureza: "despesa", esfera: "pessoal", fonte: "manual", contraparte_nome: null, contraparte_chave: null,
+    nova_cat_natureza: "receita" };
+  const sql = fakeSql([existente]);
+  const db = criarDb(sql);
+  await db.atualizarTransacao("t1", { categoria_id: "cRec", subcategoria_id: "" });
+  assert.match(sql.chamadas[0].text, /nova_cat_natureza/i, "o SELECT traz a natureza da categoria nova");
+  const upd = sql.chamadas[1];
+  assert.match(upd.text, /update transacoes/i);
+  assert.ok(upd.values.includes("receita"), "natureza virou receita");
+});
+
+test("atualizarTransacoesLote: com categoria nova, natureza segue a categoria (exceto crédito de extrato/fatura) no mesmo UPDATE", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.atualizarTransacoesLote(["id1"], { categoria_id: "cRec" }, { aprender: false });
+  const upd = sql.chamadas[0].text;
+  assert.match(upd, /natureza\s*=\s*case when/i);
+  assert.match(upd, /select natureza from categorias where id = /i);
+  assert.match(upd, /fonte in \('extrato', ?'fatura'\)/i);
+});
