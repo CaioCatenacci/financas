@@ -8,3 +8,6 @@ dados/
 __pycache__/
 *.pyc
 .vscode/
+.superpowers/            # relatórios e rascunhos de execução da fila
+.claude/worktrees/       # worktrees da rodada
+.claude/settings.local.json
