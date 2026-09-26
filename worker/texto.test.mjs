@@ -87,3 +87,11 @@ test("data inválida: 31/04/2026 (abril tem 30) → ok:false", () => {
   assert.equal(r.ok, false);
   assert.match(r.erro, /obrigat/i);
 });
+
+// B5 (BACKLOG): quem esquece natureza=receita num salário via texto gravava despesa. O parser
+// passa a dizer se a natureza veio explícita, pra que o fluxo possa seguir a categoria quando não veio.
+test("naturezaExplicita: true só quando o par natureza= foi escrito", () => {
+  assert.equal(parseLancamentoTexto("salário 5000,00 05/03/2026 natureza=receita").dados.naturezaExplicita, true);
+  assert.equal(parseLancamentoTexto("padaria 5,00 05/03/2026 natureza=despesa").dados.naturezaExplicita, true);
+  assert.equal(parseLancamentoTexto("padaria 5,00 05/03/2026").dados.naturezaExplicita, false);
+});
