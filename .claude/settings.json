@@ -14,7 +14,7 @@
       "Bash(gh auth status)", "Bash(gh auth status *)", "Bash(gh run list *)", "Bash(gh run view *)",
       "Bash(gh pr list *)", "Bash(gh pr view *)", "Bash(gh pr diff *)",
       "Bash(gh pr create *)", "Bash(gh pr checks *)", "Bash(gh pr merge *)",
-      "Edit(fila/**)", "Write(fila/**)", "Write(.superpowers/**)"
+      "Edit(fila/**)", "Edit(.superpowers/**)"
     ],
     "deny": [
       "Bash(git push * master)", "Bash(git push * master *)", "Bash(git push *:master*)",
