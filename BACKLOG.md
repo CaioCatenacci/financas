@@ -65,7 +65,7 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 |---|---|---|---|
 | E1 | **Teste servido como asset público:** `public/app.test.mjs` vai no deploy. Mover pra fora de `public/` (há worktree com essa mudança pendente) e ajustar o `npm test`. | P2 | ledger Inc 3 |
 | E2 | **XSS via `innerHTML`** em descrição/labels do app. Fonte confiável + token único, mas ficou "triar no review final" e nunca foi. | P3 | ledger Inc 1 |
-| E3 | **Sem cross-check `categoria.natureza` × `transacao.natureza`** ao gravar. | P3 | ledger Inc 1.5 |
+| E3 | ~~Sem cross-check `categoria.natureza` × `transacao.natureza`~~ **Feito (25/09/2026):** ao reclassificar, a natureza segue a categoria, exceto crédito/estorno de extrato/fatura (`naturezaAoReclassificar`). Falta só o texto manual do Telegram (B5). | — | ledger Inc 1.5 |
 | E4 | **Docs desatualizados:** roadmap em `CLAUDE.md` (1.5 e 3 já entregues), estrutura no `README.md` (`docs/index.html`, `test-worker.mjs`), `CLAUDE.md` sem seção do Inc 3. | P2 | análise 25/09/2026 |
 | E5 | **Branch `redesign-dashboard`** existe sem commits — decidir se vira algo ou apagar. | P3 | análise 25/09/2026 |
 | E6 | **Sem logs persistidos no Worker** (`[observability]` desligado no `wrangler.toml`) — um erro só aparece se alguém estiver com `wrangler tail` aberto na hora. | P2 | investigação do B1 |
