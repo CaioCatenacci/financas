@@ -118,7 +118,7 @@ const NEUTROS = [
 ];
 // A infra da própria fila: mudar as regras muda as rodadas seguintes. Nunca
 // neutra, nunca merge automático — igual a .claude/ e CLAUDE.md.
-const INFRA_FILA = ["tools/fila.mjs", "tools/fila-md.mjs", "tools/db.py", "tools/app.mjs"];
+const INFRA_FILA = ["tools/fila.mjs", "tools/fila-md.mjs", "tools/db.py", "tools/app.mjs", "tools/deploy.mjs"];
 
 export function tocaDeCaminhos(caminhos) {
   const derivado = new Set();

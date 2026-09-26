@@ -37,31 +37,30 @@ feature no ar, e "deployou" não é verificação.
       para cada arquivo **sem** `-- fase: pos-deploy`. `ok:false` → pare.
    2. `python tools/db.py aplicar migrations/00NN_<nome>.sql` (pede permissão: o Caio
       está presente). `ok:false` → pare e diga o que já entrou.
-3. Merge: `gh pr merge N --merge --delete-branch` (merge commit, como o repo faz).
-4. Deploy, a partir de uma worktree limpa do master (não mexa no checkout principal,
-   que pode ter trabalho do Caio):
-   ```bash
-   git fetch origin
-   git worktree add .claude/worktrees/deploy origin/master
-   npx wrangler deploy -c .claude/worktrees/deploy/wrangler.toml
-   git worktree remove --force .claude/worktrees/deploy
-   ```
-   (Se `.claude/worktrees/deploy` já existir, `git worktree remove --force` antes.)
+3. Antes do merge, tire a worktree do item, se existir:
+   `git worktree remove --force .claude/worktrees/fila-<id>`. O `--delete-branch` do
+   passo seguinte apaga a branch local, e o git recusa apagar uma branch que uma
+   worktree ainda tem em uso — o merge entraria e o comando sairia com erro.
+4. Merge: `gh pr merge N --merge --delete-branch` (merge commit, como o repo faz).
+5. Deploy: `node tools/deploy.mjs`. Ele faz o fetch, cria uma worktree limpa de
+   `origin/master`, roda o `wrangler deploy` a partir dela e a remove — nunca do
+   checkout principal (que pode ter trabalho do Caio) nem da worktree do item. Imprime
+   `{ok, passo, saida}`; `ok:false` → pare e diga o passo.
    Confira: `npx wrangler deployments list` mostra um deploy novo no topo (data de agora).
-5. Verificação de fora, com o token do app (`node tools/app.mjs`, rota **sem a barra
+6. Verificação de fora, com o token do app (`node tools/app.mjs`, rota **sem a barra
    inicial**: o Git Bash do Windows converteria `/api/...` em caminho do sistema):
    - `node tools/app.mjs api/catalogo` → `status:200`;
    - para cada rota que o item tocou, `node tools/app.mjs api/<rota>` responde no
-     formato novo (campo novo presente, sem `erro`). Tente por até 2 minutos, a cada
-     20 s, se a primeira resposta ainda vier no formato velho;
+     formato novo (campo novo presente, sem `erro`). Se a primeira resposta ainda vier
+     no formato velho, repita a chamada até 6 vezes (não há `sleep` liberado; a própria
+     chamada leva alguns segundos);
    - item que toca `app` (`public/`): `node tools/app.mjs app` → `status` 200 ou 307
      (o assets do Cloudflare redireciona `/index.html` para `/`; qualquer um dos dois é
      "o app respondeu"; 401 ou 5xx é falha).
    Sem dado na saída: cite status, campos e contagens.
-6. Fase 2: arquivos `-- fase: pos-deploy` só **depois** do passo 5 confirmado —
+7. Fase 2: arquivos `-- fase: pos-deploy` só **depois** do passo 6 confirmado —
    ensaiar e aplicar, como no passo 2.
-7. Limpeza local, se existirem: `git worktree remove --force .claude/worktrees/fila-<id>` e
-   `git branch -D fila/<id>`.
+8. Limpeza local: `git branch -D fila/<id>`, se a branch ainda existir.
 
 ## Saída
 

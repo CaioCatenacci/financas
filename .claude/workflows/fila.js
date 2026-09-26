@@ -129,7 +129,8 @@ if (!parou) {
 
     // 5. PR — só depois da aprovação; o coder nunca faz push
     const temMig = esc.derivado.includes('migracao')
-    const titulo = `${c.id}: ${c.nome}`
+    // Aspas, crase, $ e barra invertida quebrariam a linha de comando do gh; o título vai literal.
+    const titulo = `${c.id}: ${c.nome}`.replace(/["`$\\]/g, '')
     const corpo = [
       `Item **${c.id}** da fila autônoma — ${c.nome}.`,
       '',
@@ -148,11 +149,9 @@ if (!parou) {
     const pr = await agent(
       `Publique a branch ${br} como PR. Na raiz do repositório:\n` +
       `1. git push -u origin ${br}\n` +
-      // Título e corpo vão por arquivo: nome de item com aspas, crase ou $
-      // quebraria a linha de comando.
-      `2. Grave o TÍTULO abaixo, exatamente, em .superpowers/fila/pr-${c.id}-titulo.txt e o CORPO em .superpowers/fila/pr-${c.id}.md. Rode:\n` +
-      `   gh pr create --base master --head ${br} --title "$(cat .superpowers/fila/pr-${c.id}-titulo.txt)" --body-file .superpowers/fila/pr-${c.id}.md --label fila${temMig ? ' --label "tem migração"' : ''}\n` +
-      '3. gh pr checks <numero> --watch --fail-fast. Se ele responder que nenhum check apareceu ainda, espere 20 s e repita, por até 5 minutos: check que ainda não apareceu não é vermelho. ' +
+      `2. Grave o CORPO abaixo, exatamente, em .superpowers/fila/pr-${c.id}.md (o corpo vai por arquivo: pode ter aspas e $). Rode:\n` +
+      `   gh pr create --base master --head ${br} --title "${titulo}" --body-file .superpowers/fila/pr-${c.id}.md --label fila${temMig ? ' --label "tem migração"' : ''}\n` +
+      '3. gh pr checks <numero> --watch --fail-fast. Se ele responder que nenhum check apareceu ainda, rode o mesmo comando de novo, até 10 vezes (não há sleep liberado; cada chamada leva alguns segundos): check que ainda não apareceu não é vermelho. ' +
       'Devolva ci "verde" se todos passaram, ou "vermelho" com o check que falhou em detalhe.\n' +
       'Nunca faça merge.\n\nTÍTULO:\n' + titulo + '\n\nCORPO:\n' + corpo,
       { schema: PR, label: `${c.id} · PR`, phase: 'Itens', effort: 'low' })

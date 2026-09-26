@@ -123,9 +123,9 @@ test("toca: cada caminho vai para a sua categoria", () => {
 });
 
 test("toca: a infra da fila não é neutra nem vocabulário — mudar a regra muda as rodadas seguintes", () => {
-  const r = tocaDeCaminhos(["tools/fila.mjs", "tools/fila-md.mjs", "tools/db.py", "tools/app.mjs", "tools/hooks/pre-push"]);
+  const r = tocaDeCaminhos(["tools/fila.mjs", "tools/fila-md.mjs", "tools/db.py", "tools/app.mjs", "tools/deploy.mjs", "tools/hooks/pre-push"]);
   assert.deepEqual(r.derivado, []);
-  assert.deepEqual(r.nao_classificados, ["tools/app.mjs", "tools/db.py", "tools/fila-md.mjs", "tools/fila.mjs", "tools/hooks/pre-push"]);
+  assert.deepEqual(r.nao_classificados, ["tools/app.mjs", "tools/db.py", "tools/deploy.mjs", "tools/fila-md.mjs", "tools/fila.mjs", "tools/hooks/pre-push"]);
 });
 
 test("toca: neutros não contam — toda entrega mexe neles", () => {
