@@ -105,6 +105,17 @@ Substitua `seu-worker` pelo domínio real do seu Worker.
 
 ---
 
+### Fila autônoma
+
+Backlog em `fila/` e rodada conduzida por agentes do Claude Code. Uma vez por clone:
+
+```bash
+git config core.hooksPath tools/hooks    # o master só muda por PR
+```
+
+Gatilhos de conversa ("roda a fila", "entrega a #N") e regras: seção "A fila autônoma"
+do `CLAUDE.md`.
+
 ## Estrutura do projeto
 
 ```
