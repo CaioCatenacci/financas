@@ -8,7 +8,7 @@ import { centsToBR } from "./money.js";
 import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
 import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
 import { parseAprender } from "./teach.js";
-import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao } from "./categorias.js";
+import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
@@ -54,12 +54,16 @@ export async function tratarUpdate(update, env, deps) {
       else avisos.push(`categoria "${d.categoria}" não existe — usei ${categoriaPadrao(catalogo)?.nome ?? "a padrão"}`);
     }
     const { categoria_id, subcategoria_id } = resolverCategoria(macroNome, subNome, catalogo);
+    // natureza: o que foi escrito vale; sem natureza= escrita, segue a categoria resolvida (B5 —
+    // salário sob "Receita" sem natureza=receita gravava despesa). Mesma regra da edição no app.
+    const catResolvida = catalogo.categorias.find((x) => x.id === categoria_id);
+    const natureza = d.naturezaExplicita ? d.natureza : naturezaAoReclassificar(d.natureza, "manual", catResolvida?.natureza);
     // resolve pessoa por nome
     let pessoa_id = null;
     if (d.pessoa) { const pe = await deps.db.pessoaPorNome(d.pessoa); if (pe) pessoa_id = pe.id; else avisos.push(`pessoa "${d.pessoa}" não existe — deixei sem pessoa`); }
 
     const tx = await deps.db.inserirTransacao({
-      dataISO: d.dataISO, natureza: d.natureza, esfera: "pessoal",
+      dataISO: d.dataISO, natureza, esfera: "pessoal",
       valorCents: d.valorCents, reembolsoCents: 0, categoria_id, subcategoria_id,
       descricao: d.descricao, pessoa_id, fonte: "manual", origem_categoria: "manual",
       extraido_por: null, confianca: null, documento_id: null,
@@ -69,7 +73,9 @@ export async function tratarUpdate(update, env, deps) {
     const cat = nm.subcategoria ? `${nm.categoria} › ${nm.subcategoria}` : nm.categoria;
     const [aa, mm, dd] = d.dataISO.split("-");
     const selo = avisos.length ? `\n⚠ ${avisos.join("; ")}` : "";
-    await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(d.valorCents)} · ${dd}/${mm} · ${cat} · "${d.descricao}"${selo}`, tx.id);
+    // a confirmação ecoa a natureza: "+R$" é receita (antes não dava pra ver que gravou despesa)
+    const sinal = natureza === "receita" ? "+" : "";
+    await deps.confirmar(ev.chatId, `✅ ${sinal}R$ ${centsToBR(d.valorCents)} · ${dd}/${mm} · ${cat} · "${d.descricao}"${selo}`, tx.id);
     return;
   }
   if (ev.tipo !== "imagem" && ev.tipo !== "pdf") return;

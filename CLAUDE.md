@@ -136,6 +136,11 @@ limpeza `0005` (drop) — gate destrutivo, só após o cutover validado.
 
 A UI chama `categoria` a categoria (nome) e `subcategoria` a sub; internamente é tudo por id.
 
+**Natureza segue a categoria ao reclassificar** (`naturezaAoReclassificar`, `worker/categorias.js`;
+aplicada em `atualizarTransacao` e no UPDATE único de `atualizarTransacoesLote`): categoria de
+receita → `receita`; de despesa → `despesa`, **exceto** crédito/estorno vindo de `extrato`/`fatura`
+(receita sob categoria de despesa), que fica como está. Não há controle de natureza na UI.
+
 ### Categoria padrão por flag (fix de 25/09/2026)
 
 O fallback de `resolverCategoria` (worker, `public/app.js` e `tools/categorias.py`) **não é mais

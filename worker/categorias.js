@@ -47,6 +47,18 @@ export function catalogoParaLista(catalogo) {
   return lista;
 }
 
+// Natureza da transação ao reclassificar (regra aprovada em 25/09/2026, depois do salário movido
+// pra "Receita" seguir como despesa): a natureza passa a SEGUIR a categoria — exceto créditos e
+// estornos vindos de extrato/fatura (receita sob categoria de despesa), que são legítimos (o
+// estorno de uma compra fica na categoria da loja) e ficam como estão. Sem natureza de categoria
+// conhecida (id inválido), mantém a atual. Puro: entra tudo por parâmetro.
+export function naturezaAoReclassificar(naturezaAtual, fonte, naturezaCategoria) {
+  if (naturezaCategoria !== "receita" && naturezaCategoria !== "despesa") return naturezaAtual;
+  if (naturezaCategoria === "receita") return "receita";
+  const creditoBancario = naturezaAtual === "receita" && (fonte === "extrato" || fonte === "fatura");
+  return creditoBancario ? "receita" : "despesa";
+}
+
 // nomes (categoria/subcategoria) a partir dos ids — p/ exibir na confirmação do Telegram.
 export function nomesDeCategoria(catalogo, categoria_id, subcategoria_id) {
   const c = (catalogo.categorias || []).find(x => x.id === categoria_id);

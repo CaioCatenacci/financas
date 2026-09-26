@@ -13,6 +13,7 @@ function dbFake() {
         { id: "cEdu", nome: "Educação", natureza: "despesa" },
         { id: "cOut", nome: "Outros", natureza: "despesa" },
         { id: "cNI", nome: "Não Identificado", natureza: "despesa", padrao: true },
+        { id: "cRec", nome: "Receita", natureza: "receita" },
       ],
       subcategorias: [
         { id: "sLimp", categoria_id: "cCasa", nome: "Limpeza" },
@@ -230,6 +231,27 @@ test("handleTelegram: exceção no fluxo responde 200 e avisa o usuário (nunca 
   assert.equal(resp.status, 200);
   assert.equal(respostas.length, 1);
   assert.match(respostas[0], /erro/i);
+});
+
+test("texto sem natureza= sob categoria de receita grava receita e a confirmação mostra o sinal +", async () => {
+  // B5: o Caio lançou o salário por texto sem natureza=receita e ficou despesa no Resumo
+  const enviados = [];
+  const db = dbFake();
+  const deps = { db, confirmar: async (c, t) => enviados.push(t), responderImpl: async () => {} };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "salário 36120,00 22/09/2026 categoria=Receita" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  const ins = db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cRec");
+  assert.equal(ins.natureza, "receita");
+  assert.match(enviados[0], /\+R\$ 36\.120,00/);
+});
+
+test("texto com natureza=despesa explícita sob categoria de receita respeita o que foi escrito", async () => {
+  const db = dbFake();
+  const deps = { db, confirmar: async () => {}, responderImpl: async () => {} };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "estorno 10,00 22/09/2026 categoria=Receita natureza=despesa" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.estado.inseridos[0].natureza, "despesa");
 });
 
 test("texto inválido responde com o formato e não grava", async () => {

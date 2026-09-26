@@ -34,7 +34,7 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 | B2 | **Painel de regras aprendidas** no app: ver/editar/remover `associacoes`. Hoje só corrige via nova correção ou pelos tools Python. | P2 | spec Inc 2 §10 |
 | B3 | **Aprender por outros sinais** além da contraparte (valor recorrente, descrição). | P3 | spec Inc 2 §10 |
 | B4 | **Gemini não vence as leituras** — o Claude carrega tudo. Investigar prompt/modelo e **calibrar o limiar 0.6** com comprovantes reais (nunca foi feito). Impacta custo. | P2 | spec Inc 1 §14; spec Inc 2 §10 |
-| B5 | **Texto manual — natureza:** salva `despesa` se esquecer `natureza=receita` sob categoria de receita; a confirmação não ecoa a natureza. Minors: `"R$ "` vaza pra descrição; valor só-milhar sem centavos não é reconhecido. | P2 | review final Inc 1.5 |
+| B5 | **Texto manual — minors restantes:** `"R$ "` vaza pra descrição; valor só-milhar sem centavos não é reconhecido. *(A natureza já segue a categoria quando `natureza=` não é escrita, e a confirmação mostra `+R$` em receita — feito 26/09/2026.)* | P3 | review final Inc 1.5 |
 | B6 | **Regex de data exige zero-padding** na extração (rejeita `5/1/2026`) — revisar se o modelo devolver data fora do padrão. | P3 | ledger Inc 1 |
 
 ## C. Importação de extrato/fatura
@@ -65,7 +65,7 @@ Legenda de prioridade: **P1** = próximo a fazer · **P2** = vale a pena, sem ur
 |---|---|---|---|
 | E1 | **Teste servido como asset público:** `public/app.test.mjs` vai no deploy. Mover pra fora de `public/` (há worktree com essa mudança pendente) e ajustar o `npm test`. | P2 | ledger Inc 3 |
 | E2 | **XSS via `innerHTML`** em descrição/labels do app. Fonte confiável + token único, mas ficou "triar no review final" e nunca foi. | P3 | ledger Inc 1 |
-| E3 | **Sem cross-check `categoria.natureza` × `transacao.natureza`** ao gravar. | P3 | ledger Inc 1.5 |
+| E3 | ~~Sem cross-check `categoria.natureza` × `transacao.natureza`~~ **Feito (25/09/2026):** ao reclassificar, a natureza segue a categoria, exceto crédito/estorno de extrato/fatura (`naturezaAoReclassificar`). Falta só o texto manual do Telegram (B5). | — | ledger Inc 1.5 |
 | E4 | **Docs desatualizados:** roadmap em `CLAUDE.md` (1.5 e 3 já entregues), estrutura no `README.md` (`docs/index.html`, `test-worker.mjs`), `CLAUDE.md` sem seção do Inc 3. | P2 | análise 25/09/2026 |
 | E5 | **Branch `redesign-dashboard`** existe sem commits — decidir se vira algo ou apagar. | P3 | análise 25/09/2026 |
 | E6 | **Sem logs persistidos no Worker** (`[observability]` desligado no `wrangler.toml`) — um erro só aparece se alguém estiver com `wrangler tail` aberto na hora. | P2 | investigação do B1 |

@@ -68,9 +68,12 @@ export function parseLancamentoTexto(texto) {
   if (!descricao || valorCents === null || dataISO === null)
     return { ok: false, erro: "faltam obrigatórios (descrição, valor e data)" };
 
+  // natureza: default despesa; `naturezaExplicita` diz se o par foi escrito — quando não foi, quem
+  // grava pode seguir a natureza da categoria (B5: salário sem natureza=receita virava despesa).
+  const naturezaExplicita = pares.natureza !== undefined && pares.natureza !== "";
   const natureza = (pares.natureza || "").toLowerCase() === "receita" ? "receita" : "despesa";
   return { ok: true, dados: {
-    valorCents, dataISO, descricao, natureza,
+    valorCents, dataISO, descricao, natureza, naturezaExplicita,
     pessoa: pares.pessoa || null, categoria: pares.categoria || null, subcategoria: pares.subcategoria || null,
   } };
 }

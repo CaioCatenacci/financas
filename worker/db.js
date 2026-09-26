@@ -1,5 +1,6 @@
 import { centsToNumeric } from "./money.js";
 import { derivarChave, normalizarNome } from "./contraparte.js";
+import { naturezaAoReclassificar } from "./categorias.js";
 
 export function criarDb(sql) {
   // Builder da query de insert de transação. Reusado no insert único (captura) e no lote
@@ -74,7 +75,12 @@ export function criarDb(sql) {
     async atualizarTransacao(id, c) {
       // read-modify-write: o driver HTTP do Neon não compõe fragmentos aninhados,
       // então lemos a linha e mesclamos em JS. undefined = manter; '' = limpar (null).
-      const rows = await sql`select * from transacoes where id = ${id}`;
+      // a natureza da categoria NOVA vem no mesmo SELECT (subselect com o id pedido; null se não
+      // houver troca) — evita uma 2ª ida ao banco e alimenta naturezaAoReclassificar.
+      const novaCat = c.categoria_id || null;
+      const rows = await sql`
+        select t.*, (select natureza from categorias where id = ${novaCat}::uuid) as nova_cat_natureza
+        from transacoes t where t.id = ${id}`;
       const t = rows[0];
       if (!t) return;
       const data = c.dataISO ?? t.data;
@@ -82,7 +88,8 @@ export function criarDb(sql) {
       const subcategoria_id = c.subcategoria_id === undefined ? t.subcategoria_id : (c.subcategoria_id || null);
       const pessoa_id = c.pessoa_id === undefined ? t.pessoa_id : (c.pessoa_id || null);
       const descricao = c.descricao === undefined ? t.descricao : (c.descricao || null);
-      const natureza = c.natureza ?? t.natureza;
+      // natureza: explícita > segue a categoria nova (regra em categorias.js) > mantém
+      const natureza = c.natureza ?? (novaCat ? naturezaAoReclassificar(t.natureza, t.fonte, t.nova_cat_natureza) : t.natureza);
       const esfera = c.esfera ?? t.esfera;
       const valor_total = c.valorCents != null ? centsToNumeric(c.valorCents) : t.valor_total;
       const valor_reembolso = c.reembolsoCents != null ? centsToNumeric(c.reembolsoCents) : t.valor_reembolso;
@@ -125,7 +132,15 @@ export function criarDb(sql) {
           subcategoria_id  = case when ${setCat}::boolean     then ${subId}::uuid    else subcategoria_id end,
           pessoa_id        = case when ${setPessoa}::boolean  then ${pessoaId}::uuid else pessoa_id end,
           computa_resumo   = case when ${setComputa}::boolean then ${computa}::boolean else computa_resumo end,
-          origem_categoria = case when ${setCat}::boolean     then 'manual'          else origem_categoria end
+          origem_categoria = case when ${setCat}::boolean     then 'manual'          else origem_categoria end,
+          -- natureza segue a categoria nova (mesma regra de naturezaAoReclassificar, em SQL porque é
+          -- um UPDATE só): receita → receita; despesa → despesa, salvo crédito/estorno de extrato/fatura
+          natureza = case when ${setCat}::boolean then
+            (case when (select natureza from categorias where id = ${catId}::uuid) = 'receita' then 'receita'
+                  when natureza = 'receita' and fonte in ('extrato','fatura') then 'receita'
+                  when (select natureza from categorias where id = ${catId}::uuid) = 'despesa' then 'despesa'
+                  else natureza end)
+            else natureza end
         where id = any(${ids}::uuid[])`;
 
       let regras = 0;

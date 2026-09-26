@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolverCategoria, subsDaCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao } from "./categorias.js";
+import { resolverCategoria, subsDaCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
 
 // catálogo de teste: 2 categorias + 2 subs + fallback Outros
 const catalogo = {
@@ -98,4 +98,26 @@ test("resolverCategoria: macro inexistente ou nula cai na padrão (flag), não e
 
 test("resolverCategoria: 'Outros' pedido explicitamente resolve pra Outros (miscelânea deliberada)", () => {
   assert.deepEqual(resolverCategoria("Outros", null, comPadrao), { categoria_id: "cO", subcategoria_id: null });
+});
+
+// ---- natureza ao reclassificar (bug 25/09/2026: salário movido p/ "Receita" seguiu como despesa) ----
+// Regra aprovada: a natureza passa a seguir a categoria, EXCETO créditos/estornos de extrato/fatura
+// (receita sob categoria de despesa), que são legítimos e ficam como estão.
+test("naturezaAoReclassificar: categoria de receita → receita (o caso do salário)", () => {
+  assert.equal(naturezaAoReclassificar("despesa", "manual", "receita"), "receita");
+});
+
+test("naturezaAoReclassificar: categoria de despesa → despesa p/ lançamento manual/imagem", () => {
+  assert.equal(naturezaAoReclassificar("receita", "manual", "despesa"), "despesa");
+  assert.equal(naturezaAoReclassificar("despesa", "imagem", "despesa"), "despesa");
+});
+
+test("naturezaAoReclassificar: crédito/estorno de extrato ou fatura fica receita sob categoria de despesa", () => {
+  assert.equal(naturezaAoReclassificar("receita", "extrato", "despesa"), "receita");
+  assert.equal(naturezaAoReclassificar("receita", "fatura", "despesa"), "receita");
+});
+
+test("naturezaAoReclassificar: sem natureza de categoria conhecida → mantém a atual", () => {
+  assert.equal(naturezaAoReclassificar("despesa", "manual", null), "despesa");
+  assert.equal(naturezaAoReclassificar("receita", "manual", undefined), "receita");
 });
