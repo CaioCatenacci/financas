@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  testes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      # Só as dependências de produção: as suítes são puras (sem banco, sem rede).
+      - run: npm ci --omit=dev
+
+      # Worker, app e as regras da fila (tools/test-fila.mjs entra pelo glob do script).
+      - name: Testes do Worker, do app e da fila
+        run: npm test
+
+      # A fila mora em fila/ (um .md por item, ORDEM.md, feitos.js). Um .md torto
+      # pararia a rodada inteira; aqui ele para a PR.
+      - name: Fila bem formada?
+        run: node tools/fila.mjs checar
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Sem `pip install -e .`: o pyproject não declara pacotes e o setuptools recusaria
+      # o layout plano com tools/ e tests/. O pytest acha tools/ pelo tests/__init__.py.
+      - run: pip install "psycopg[binary]>=3.0" "openpyxl>=3.1" "pytest>=8"
+
+      - name: Import, mapeamento e tools/db.py
+        run: python -m pytest tests/ -q

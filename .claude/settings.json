@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git status)", "Bash(git status *)", "Bash(git fetch *)", "Bash(git diff *)", "Bash(git log *)",
+      "Bash(git show *)", "Bash(git branch *)", "Bash(git worktree *)", "Bash(git add *)",
+      "Bash(git commit *)", "Bash(git checkout *)", "Bash(git switch *)", "Bash(git rev-parse *)",
+      "Bash(git merge origin/master*)", "Bash(git merge --ff-only origin/master)",
+      "Bash(git push -u origin fila/*)",
+      "Bash(node tools/fila.mjs *)", "Bash(node tools/app.mjs *)",
+      "Bash(npm test)", "Bash(node --test tools/test-fila.mjs)", "Bash(node --test tools/test-app.mjs)",
+      "Bash(python -m pytest tests/ -q)", "Bash(python -m pytest tests/ -q *)",
+      "Bash(python tools/db.py select *)", "Bash(python tools/db.py ensaiar *)",
+      "Bash(npx wrangler deploy)", "Bash(npx wrangler deploy *)", "Bash(npx wrangler deployments list*)",
+      "Bash(gh auth status)", "Bash(gh auth status *)", "Bash(gh run list *)", "Bash(gh run view *)",
+      "Bash(gh pr list *)", "Bash(gh pr view *)", "Bash(gh pr diff *)",
+      "Bash(gh pr create *)", "Bash(gh pr checks *)", "Bash(gh pr merge *)",
+      "Edit(fila/**)", "Write(fila/**)", "Write(.superpowers/**)"
+    ],
+    "deny": [
+      "Bash(git push * master)", "Bash(git push * master *)", "Bash(git push *:master*)",
+      "Bash(git push *refs/heads/master*)", "Bash(git push * HEAD:master*)",
+      "Bash(git push *--force*)", "Bash(git push * -f*)", "Bash(git push *--no-verify*)",
+      "Bash(git * --no-verify*)", "Bash(git config *hooksPath*)",
+      "Bash(node *..*)", "Bash(python *..*)",
+      "Bash(curl * -X *)", "Bash(curl * --request*)", "Bash(curl * -d *)",
+      "Bash(curl * --data*)", "Bash(curl * -F *)", "Bash(curl * --form*)",
+      "Bash(curl * -T *)", "Bash(curl * --upload-file*)"
+    ]
+  }
+}
