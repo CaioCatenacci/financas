@@ -1,0 +1,23 @@
+#!/bin/sh
+# tools/hooks/pre-push - ninguem empurra para o master daqui.
+#
+# O master e o que a entrega deploya (wrangler deploy), e o GitHub deste plano
+# nao protege o master do lado do servidor. As regras de permissao do
+# .claude/settings.json casam texto de comando e se contornam (ex.:
+# `git push origin fila/x:master`); este hook olha a ref DE DESTINO que o git
+# vai atualizar, qualquer que seja o comando que chegou ate aqui.
+#
+# O master muda por PR (gh pr merge, no servidor, nao passa por aqui). Se um dia
+# for preciso empurrar para o master a mao, o Caio usa --no-verify no terminal
+# dele; nas sessoes do Claude o --no-verify e negado no settings.json.
+#
+# Instalar (uma vez por clone): git config core.hooksPath tools/hooks
+while read -r _local _sha remota _rsha; do
+  case "$remota" in
+    refs/heads/master)
+      echo "pre-push: recusado - o master so muda por PR (gh pr merge)." >&2
+      exit 1
+      ;;
+  esac
+done
+exit 0

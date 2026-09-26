@@ -6,6 +6,11 @@ fizemos" do `CONTEXTO.md` e nos "minors deferred" dos ledgers de execução (nã
 A partir daqui, **tudo que se decide adiar entra aqui**, com a origem. Quando um item vira
 incremento, sai daqui e ganha spec/plan como os outros.
 
+**Desde 26/09/2026 o que vai ser feito vira card em `fila/`** (um `.md` por item, com
+DoD conferível; ver `CLAUDE.md`, "A fila autônoma"). Este arquivo segue como
+reservatório de ideias ainda sem card: quando um item ganha `fila/<id>.md`, a linha sai
+daqui.
+
 Regra de priorização (a mesma do projeto): dor real no uso diário primeiro; incremento só
 entra se entrega valor de ponta a ponta; desconfiar de infraestrutura.
 

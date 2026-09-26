@@ -186,6 +186,51 @@ que já tem extrato; os importadores Python seguem no modelo antigo (BACKLOG C6)
 
 ---
 
+## A fila autônoma
+
+A fila mora em `fila/`: um `<id>.md` por item aberto (Problema, Valor, Pronto quando,
+Exemplo, Fora, Decisões, Perguntas em aberto), `ORDEM.md` com as faixas
+Agora/Próximo/Depois e `feitos.js` com o histórico (escrito só pelo `concluir`). Receita
+completa em `docs/superpowers/specs/2026-09-26-fila-autonoma-receita.md`; plano de
+implantação em `docs/superpowers/plans/2026-09-26-fila-autonoma.md`.
+
+- **Card novo descrito na conversa** → o assistente escolhe o id, escreve `fila/<id>.md`
+  a partir do que o Caio disse e do que apurar no código, faz as perguntas daquele card,
+  espera, e só então passa ao próximo. Se veio do `BACKLOG.md`, a linha sai de lá.
+- **"PM, revisa o planejamento"** → `Agent` `pm-financas` com esse pedido, na branch
+  `planejamento`. **"fecha o planejamento"** → o mesmo; depois push da branch e **uma** PR.
+- **"roda a fila"** → `Workflow` com `name: "fila"` e
+  `args: {limite: 3, degrau: 2, data: "<AAAA-MM-DD de hoje>"}` (o script não tem
+  relógio). **"ensaia a fila"** → o mesmo com `ensaio: true` (só pré-voo e parecer do
+  PM, sem coder). Quando terminar: mostrar o relatório e mandar `PushNotification` com
+  o resumo.
+- **Degrau 2 é o padrão:** PR verde com `auto_merge: true`, aprovada de primeira, sem
+  `migracao` e sem código fora do vocabulário é mergeada, deployada (`node tools/deploy.mjs`,
+  sempre de uma worktree limpa do `origin/master`) e conferida no ar pela
+  `entrega-financas` sem ninguém olhar. Item com migração para na
+  PR verde e espera **"entrega a #N"** → `Agent` `entrega-financas` com
+  `O Caio mandou: entrega a #N` (uma PR por vez; `python tools/db.py aplicar` pede
+  permissão de propósito).
+- Vocabulário `toca` (escopo declarado; o diff tem que caber nele): `migracao`
+  (`migrations/`, `schema.sql`), `worker` (`worker/`), `app` (`public/`), `tools`
+  (`tools/*.py`). Regras dos agentes (`.claude/`, `CLAUDE.md`, `tools/fila*.mjs`,
+  `tools/db.py`, `tools/app.mjs`, `tools/deploy.mjs`, `tools/hooks/`) nunca são neutras
+  e nunca vão pelo degrau 2.
+- Devolvido **não é falha**. Falha para a rodada e deixa a worktree de pé em
+  `.claude/worktrees/fila-<id>`; enquanto a branch `fila/<id>` existir sem PR, o item
+  fica bloqueado (de propósito: alguém tem que olhar).
+- **O master só muda por PR.** Hook `tools/hooks/pre-push`; instalar uma vez por clone:
+  `git config core.hooksPath tools/hooks`. Script novo em `tools/` que os papéis
+  precisem rodar entra no `allow` do `.claude/settings.json` pelo nome.
+- Banco sem MCP: `python tools/db.py select` (read-only), `ensaiar` (transação +
+  rollback), `aplicar` (só a entrega). App no ar: `node tools/app.mjs api/<rota>`
+  (token de `.dev.vars`, só GET, rota **sem a barra inicial** — o Git Bash do Windows
+  converteria `/api/...` em caminho). Nunca `curl` com o token.
+- **O repositório é público:** nada de valor real, contraparte, chave Pix ou comprovante
+  em `fila/`, teste, fixture, PR ou relatório.
+
+---
+
 ## Segurança — inegociável
 
 ### Secrets do wrangler
@@ -218,11 +263,12 @@ Configurar via `wrangler secret put NOME` (lê do stdin).
 ## Como rodar as verificações
 
 ```bash
-npm test                                      # Worker + app (node --test auto-discovery)
-python -m pytest tests/                       # import e mapeamento
+npm test                                      # Worker + app + regras da fila (globs em package.json)
+python -m pytest tests/                       # import, mapeamento e tools/db.py
+node tools/fila.mjs checar                    # fila/ bem formada
 ```
 
-O CI (`.github/workflows/ci.yml`) roda os dois.
+O CI (`.github/workflows/ci.yml`) roda os três.
 
 ---
 
