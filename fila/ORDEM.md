@@ -30,7 +30,6 @@ Agora fica com o Caio.
 - D5
 - D6
 - E2
-- E5
 - F1
 - F2
 - F3
