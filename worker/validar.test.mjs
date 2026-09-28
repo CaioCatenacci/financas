@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { validarExtracao } from "./validar.js";
+import { validarExtracao, ehUuid } from "./validar.js";
 
 const MACROS = ["Casa", "Saúde", "Outros"];
 
@@ -63,4 +63,19 @@ test("contraparte ausente vira null no normalizado", () => {
   const r = validarExtracao({ data: "2026-08-28", valor: "10", macro: "Casa" }, MACROS);
   assert.equal(r.normalizado.contraparte_nome, null);
   assert.equal(r.normalizado.contraparte_chave, null);
+});
+
+// F3: as rotas de grupo checam o formato antes de mandar o id pro `::uuid` do Postgres,
+// que responderia com erro (500) em vez de uma mensagem.
+test("ehUuid aceita uuid canônico, maiúsculo ou minúsculo", () => {
+  assert.equal(ehUuid("00000000-0000-4000-8000-0000000000a1"), true);
+  assert.equal(ehUuid("00000000-0000-4000-8000-0000000000A1"), true);
+  assert.equal(ehUuid(crypto.randomUUID()), true);
+});
+
+test("ehUuid recusa o que o Postgres não converteria ou que nem é texto", () => {
+  for (const v of ["", "abc", "G0", "undefined", "00000000-0000-4000-8000-0000000000a", "00000000-0000-4000-8000-0000000000a1x",
+                   " 00000000-0000-4000-8000-0000000000a1", 42, null, undefined, {}, []]) {
+    assert.equal(ehUuid(v), false, `devia recusar ${JSON.stringify(v)}`);
+  }
 });
