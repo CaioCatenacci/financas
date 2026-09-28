@@ -276,16 +276,42 @@ O CI (`.github/workflows/ci.yml`) roda os três.
 
 | # | Incremento | O que faz | Status |
 |---|---|---|---|
-| 1 | **Captura + ver** | imagem → extrai → grava + Dropbox → app lista/resumo; importa histórico | implementação |
-| 1.5 | Lançamento manual | texto (`"15,50 padaria 29/08"`) via Claude, validado | *fast-follow* |
+| 1 | **Captura + ver** | imagem → extrai → grava + Dropbox → app lista/resumo; importa histórico | implementado |
+| 1.5 | Lançamento manual | texto (`"15,50 padaria 29/08"`) via Claude, validado | implementado |
 | 2 | Classificador que aprende | app grava correções; sistema passa a acertar | implementado |
-| 3 | Extrato + fatura | PDF → parsing → transações; conciliação | Incremento 3 |
+| 3 | Extrato + fatura | PDF → parsing → transações; conciliação | implementado (app + tools) |
 | 4 | Planejamento | metas/realizado vs alvo | implementado (mês + grade) |
 | 4.6 | Agrupamento | duplicatas explícitas com representante; import grava o grupo | implementado (A+B) |
 | 5 | Camada PJ | receita empresa → cascata → despesas casa | Incremento 5 |
 | 6 | Plus | investimentos; estrutura fina Dropbox | Incremento 6 |
 
-A v1 (Incremento 1) é **imagem-apenas**. Texto e PDF voltam depois.
+A v1 (Incremento 1) nasceu **imagem-apenas**; o texto entrou no 1.5 (`worker/texto.js`) e o PDF
+(extrato/fatura) no 3.
+
+### Extrato + fatura (Incremento 3)
+
+PDF do extrato e da fatura do Itaú vira transações com `fonte = 'extrato'` / `'fatura'`. O PDF
+nunca sai do navegador: `public/pdf_extrair.js` (pdf.js) extrai o texto e reconstrói as linhas, e
+o Worker só recebe texto. Os parsers são puros e determinísticos (sem modelo): parse → checksum →
+classifica → reconcilia → prévia → o Caio revisa na aba **Importar** → grava.
+
+| Peça | Onde | Papel |
+|---|---|---|
+| parser do extrato | `worker/extrato.js` | linha `DD/MM/AAAA desc valor`; sinal dá a natureza; "SALDO DO DIA" é saldo, confere o checksum |
+| parser da fatura | `worker/fatura.js` | itens do período até "Total dos lançamentos atuais"; soma abaixo do total (IOF) é aviso, não erro |
+| orquestração | `worker/importar.js` | `montarPreviewExtrato`/`montarPreviewFatura` (puros) e `aplicar` (único que recebe `db`) |
+| reconciliação | `worker/reconciliar.js` | `linhaHash` (idempotência) e `reconciliarLinha` (mesmo valor, data ±3 dias → novo/casado/ambíguo) |
+| `linha_hash` | `transacoes` | chave estável da linha (índice único parcial): reimportar o mesmo PDF não duplica |
+| `computa_resumo` | `transacoes` | `false` = não-gasto (aplicação, pagamento da fatura no extrato) |
+
+Rotas: `POST /api/importar/preview` (`{tipo: 'extrato'|'fatura', texto, conta | ano+mes}` →
+itens classificados + status de reconciliação) e `POST /api/importar/aplicar` (grava a decisão
+revisada; na fatura, marca o pagamento correspondente no extrato como fora do resumo). O casado
+entra no grupo do lançamento (seção do Inc 4.6).
+
+**Tools:** `tools/importar_extrato.py` e `tools/importar_fatura.py` (dry-run sem `--commit`;
+parsers em `tools/extrato_itau.py`/`tools/fatura_itau.py`, `tools/reconciliar.py`) são o caminho
+local do mesmo fluxo e seguem no modelo antigo, sem grupo (BACKLOG C6).
 
 ### Colunas novas (Incremento 4)
 
