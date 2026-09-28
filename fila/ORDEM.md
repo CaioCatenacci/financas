@@ -7,14 +7,12 @@ Agora fica com o Caio.
 
 ## Próximo
 - B2
-- B4
-- C2
-- D3
 - E1
 - E4
 - E6
 
 ## Depois
+- C2
 - A1
 - A2
 - A3

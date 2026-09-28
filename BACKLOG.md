@@ -30,6 +30,8 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 |---|---|---|
 | B1 | Telegram sem retorno (fallback de categoria por nome) | `0008` aplicada no Neon e deploy de 26/09 depois do fix — conferido em 26/09/2026 (`categorias.padrao` = 1 linha) |
 | B6 | Regex de data exigia zero-padding | `worker/validar.js` aceita `d/m/aaaa` e zero-preenche; teste "aceita data não-padronizada e zero-preenche" |
+| B4 | Gemini não vencia as leituras (limiar 0,6) | **Descartado** em 28/09/2026: o PM apurou 17 de 18 comprovantes lidos pelo Gemini, nenhuma leitura abaixo de 0,6 (card em `16af467`) |
+| D3 | Alerta de estouro no Telegram | **Descartado** em 28/09/2026: só ~10% das despesas passam pelo Telegram, o aviso seria um retrato do passado (card em `16af467`) |
 | E3 | Cross-check `categoria.natureza` × `transacao.natureza` | natureza segue a categoria ao reclassificar (`naturezaAoReclassificar`), 25/09/2026; texto manual em 26/09 |
 
 ## Ideias ainda sem card
