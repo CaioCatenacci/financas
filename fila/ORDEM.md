@@ -17,6 +17,7 @@ Agora fica com o Caio.
 ## Depois
 - A1
 - A2
+- A3
 - B3
 - B5
 - C1
@@ -24,6 +25,7 @@ Agora fica com o Caio.
 - C4
 - C5
 - C6
+- C7
 - D1
 - D2
 - D4
