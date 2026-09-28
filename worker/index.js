@@ -14,6 +14,7 @@ import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.j
 import { parseExtrato } from "./extrato.js";
 import { parseFatura } from "./fatura.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
+import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 
 async function sha256hex(bytes) {
@@ -215,10 +216,15 @@ export async function handleApi(request, env, url, dbOpt = null) {
 
   // ---- Inc 4.6: grupos (duplicatas explícitas com representante) ----
   // Fluxo de cada rota: lê a forma mínima → grupos.js decide (puro) → gravarGrupo aplica numa
-  // única transação. Erro de regra → 400 legível.
+  // única transação. Erro de regra → 400 legível. Entrada malformada (id que não é uuid, `ids`
+  // que não é lista) também → 400, checada antes de qualquer leitura: senão estoura no `::uuid`
+  // do Postgres ou num TypeError e vira 500 sem mensagem (F3).
   if (url.pathname === "/api/grupos" && request.method === "POST") {
     const b = await body();
-    const ids = [...new Set((b.ids || []).map(String))];
+    const brutos = b.ids ?? [];
+    if (!Array.isArray(brutos)) return erroJson("ids tem que ser uma lista", 400);
+    if (!brutos.every(ehUuid)) return erroJson("ids tem que ser uma lista de uuids", 400);
+    const ids = [...new Set(brutos)];
     const linhas = await db.transacoesPorIds(ids);
     const d = decidirAgrupar(linhas, crypto.randomUUID());
     if (!d.ok) return erroJson(d.erro, 400);
@@ -227,19 +233,24 @@ export async function handleApi(request, env, url, dbOpt = null) {
   }
   const mMembro = url.pathname.match(/^\/api\/grupos\/([^/]+)\/membros\/([^/]+)$/);
   if (mMembro && request.method === "DELETE") {
+    if (!ehUuid(mMembro[1])) return erroJson("id do grupo inválido", 400);
+    if (!ehUuid(mMembro[2])) return erroJson("id do lançamento inválido", 400);
     const d = decidirTirar(await db.membrosDoGrupo(mMembro[1]), mMembro[2]);
     if (!d.ok) return erroJson(d.erro, 400);
     await db.gravarGrupo({ mudancas: d.mudancas });
     return j({ ok: true, dissolveu: d.dissolveu });
   }
   if (url.pathname.startsWith("/api/grupos/") && request.method === "PATCH") {
+    if (!ehUuid(id())) return erroJson("id do grupo inválido", 400);
     const b = await body();
+    if (!ehUuid(b.representante_id)) return erroJson("representante_id inválido", 400);
     const d = decidirRepresentar(await db.membrosDoGrupo(id()), String(b.representante_id));
     if (!d.ok) return erroJson(d.erro, 400);
     await db.gravarGrupo({ mudancas: d.mudancas });
     return j({ ok: true });
   }
   if (url.pathname.startsWith("/api/grupos/") && request.method === "DELETE") {
+    if (!ehUuid(id())) return erroJson("id do grupo inválido", 400);
     const d = decidirDesagrupar(await db.membrosDoGrupo(id()));
     await db.gravarGrupo({ mudancas: d.mudancas });
     return j({ ok: true, desagrupados: d.mudancas.length });
