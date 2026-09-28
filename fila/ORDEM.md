@@ -4,11 +4,13 @@ Semeada em 2026-09-26 a partir do BACKLOG: P2 em Próximo, P3 em Depois. A faixa
 Agora fica com o Caio.
 
 ## Agora
+- E4
+- F2
+- F3
 
 ## Próximo
 - B2
 - E1
-- E4
 - E6
 
 ## Depois
@@ -31,8 +33,6 @@ Agora fica com o Caio.
 - D6
 - E2
 - F1
-- F2
-- F3
 - F4
 - F5
 - F6
