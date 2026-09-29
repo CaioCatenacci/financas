@@ -1,5 +1,13 @@
 import { parseBRtoCents } from "./money.js";
 
+// F3: forma canônica 8-4-4-4-12 em hex. O Postgres aceita outras grafias (chaves, sem hífen),
+// mas nenhum id nosso nasce assim (gen_random_uuid / crypto.randomUUID): ser estrito aqui só
+// recusa lixo antes do `::uuid`, que viraria 500 em vez de 400 com mensagem.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function ehUuid(v) {
+  return typeof v === "string" && UUID_RE.test(v);
+}
+
 /**
  * Normaliza data em formato BR (DD/MM/AAAA) ou ISO (AAAA-MM-DD).
  * Aceita dados não-padronizados (ex: 5/1/2026) e zero-preenche o ISO.

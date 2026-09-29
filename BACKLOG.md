@@ -36,4 +36,8 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 
 ## Ideias ainda sem card
 
-(nenhuma)
+- **P3 · Entrada malformada fora das rotas de grupo ainda vira 500.** `DELETE /api/transacoes/:id`
+  (e o `del:` do Telegram), `PATCH /api/transacoes/:id` e as rotas por id de categorias,
+  subcategorias e pessoas passam o id cru pro `::uuid`; corpo que não é JSON faz `request.json()`
+  lançar em qualquer rota. O helper `ehUuid` (`worker/validar.js`) já existe. Origem: F3
+  (28/09/2026), que fechou só as 4 rotas `/api/grupos`.
