@@ -440,6 +440,17 @@ queries num POST só, sem ramificar no meio; a janela entre a leitura e a grava�
 um usuário só). No mesmo espírito, `decidirAgrupar` recusa entrar num grupo existente sem
 representante ("o grupo não tem representante"), olhando o grupo inteiro, não só a seleção.
 
+**Marcar o pagamento da fatura é idempotente (C3, 29/09/2026):** `db.marcarPagamentoFaturaNaoGasto`
+procura, na janela de 62 dias e pelo total exato (os dois sem mudança), as despesas de extrato que
+contam no resumo **e** as que já estão fora dele (`computa_resumo=false`). Se há uma já fora, o
+pagamento já foi marcado — por uma aplicação anterior da mesma fatura ou pelo import do extrato
+(`naoGasto`) — e nada é tocado (`jaMarcado`, a rota devolve `pagamentoJaMarcado`). **Por quê:** sem
+vínculo fatura→pagamento no schema, a reaplicação via o pagamento sumir do select e tirava do
+resumo outra despesa de mesmo total que caísse na janela. **Custo aceito:** uma linha de mesmo
+total tirada do resumo à mão também bloqueia a marcação automática (conservador: o app avisa pra
+ajustar à mão). Gravar o vínculo pediria coluna nova. O `tools/importar_fatura.py` segue com o
+defeito (BACKLOG).
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
