@@ -366,6 +366,71 @@ test("marcarPagamentoFaturaNaoGasto não marca com >1 candidato (ambíguo, deixa
   assert.deepEqual(r, { marcados: 0, candidatos: 2 });
 });
 
+// fake com resultados em sequência: a 1ª query recebe resultados[0], a 2ª resultados[1]...
+// (o fakeSql acima devolve o mesmo resultado em toda chamada e não distingue select de update).
+// Um resultado pode ser função do texto da query, pra responder como o banco responderia àquele
+// WHERE (ex.: a linha já fora do resumo só volta se o select perguntar por ela).
+function fakeSqlSeq(resultados) {
+  const chamadas = [];
+  const fn = (strings, ...values) => {
+    const text = strings.join("?");
+    chamadas.push({ text, values });
+    const r = resultados[chamadas.length - 1] || [];
+    return Promise.resolve(typeof r === "function" ? r(text) : r);
+  };
+  fn.chamadas = chamadas;
+  return fn;
+}
+// mesma conta do index.js (rota aplicar): dia ISO + n dias, em UTC
+const deslocaDias = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const semUpdate = (sql) => sql.chamadas.every((c) => !/update transacoes/i.test(c.text));
+
+// Exemplo do C3: fatura de agosto, R$ 500,00. O pagamento de agosto já foi marcado (fora do
+// resumo) na 1ª aplicação; o extrato de setembro trouxe outra despesa de R$ 500,00 dentro da
+// janela de 62 dias. Antes, o pagamento marcado saía do select e a despesa de setembro virava o
+// candidato único — e era tirada do resumo. Agora o pagamento já marcado bloqueia a marcação.
+test("marcarPagamentoFaturaNaoGasto: pagamento já marcado na janela → não marca outra linha (Exemplo)", async () => {
+  const ano = 2031; // ano fictício: nada de dado real no repositório
+  const de = `${ano}-08-01`;
+  const pgAgo = { id: "pgAgo", computa_resumo: false, conta_no_resumo: false };  // pagamento de agosto, já marcado
+  const despSet = { id: "despSet", computa_resumo: true, conta_no_resumo: true }; // despesa de setembro, mesmo total
+  // responde como o banco: a linha já fora do resumo só volta se o select perguntar por ela
+  const sql = fakeSqlSeq([(text) => (/computa_resumo = false/i.test(text) ? [pgAgo, despSet] : [despSet])]);
+  const db = criarDb(sql);
+  const r = await db.marcarPagamentoFaturaNaoGasto(50000, de, deslocaDias(de, 62));
+  // o select tem que enxergar também a linha já fora do resumo, senão não há como saber que o
+  // pagamento já foi marcado (o critério de total exato e a janela seguem os mesmos)
+  assert.match(sql.chamadas[0].text, /computa_resumo = false/i);
+  assert.match(sql.chamadas[0].text, /round\(valor_final\*100\)/i);
+  assert.ok(sql.chamadas[0].values.includes(50000));
+  assert.ok(sql.chamadas[0].values.includes(de));
+  assert.ok(sql.chamadas[0].values.includes(`${ano}-10-02`));
+  assert.ok(semUpdate(sql), "nenhum update: a despesa de setembro segue no resumo");
+  assert.equal(r.marcados, 0);
+  assert.equal(r.jaMarcado, true);
+});
+
+test("marcarPagamentoFaturaNaoGasto aplicado duas vezes: só a 1ª marca (idempotente)", async () => {
+  // 1ª aplicação: só o pagamento, que ainda conta → marca. 2ª: o banco devolve o pagamento já
+  // marcado + uma despesa de mesmo total que ainda conta → não mexe em nada.
+  const sql = fakeSqlSeq([
+    [{ id: "pg1", computa_resumo: true, conta_no_resumo: true }],
+    [], // resposta do update
+    // o banco só devolve o pagamento já marcado se o select perguntar por computa_resumo = false
+    (text) => /computa_resumo = false/i.test(text)
+      ? [{ id: "pg1", computa_resumo: false, conta_no_resumo: false }, { id: "outra", computa_resumo: true, conta_no_resumo: true }]
+      : [{ id: "outra", computa_resumo: true, conta_no_resumo: true }],
+  ]);
+  const db = criarDb(sql);
+  const r1 = await db.marcarPagamentoFaturaNaoGasto(16700, "2025-05-01", "2025-07-02");
+  const r2 = await db.marcarPagamentoFaturaNaoGasto(16700, "2025-05-01", "2025-07-02");
+  const updates = sql.chamadas.filter((c) => /update transacoes set computa_resumo = false/i.test(c.text));
+  assert.equal(updates.length, 1);
+  assert.deepEqual(updates[0].values, ["pg1"]);
+  assert.deepEqual(r1, { marcados: 1, candidatos: 1 });
+  assert.equal(r2.marcados, 0);
+});
+
 test("aplicarImportacao grava tudo numa ÚNICA transação (1 subrequest, atômica)", async () => {
   const sql = fakeSql([{ id: "x" }]);
   const db = criarDb(sql);
