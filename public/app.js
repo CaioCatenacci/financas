@@ -103,6 +103,25 @@ export function filtrarTransacoes(rows, filtro = {}) {
   });
 }
 
+// ---------- B2: painel de regras aprendidas (aba Ajustes) ----------
+// A chave pix_cpf é Pix/CPF de alguém: na tela só os 4 últimos caracteres (decisão de
+// 28/09/2026). A chave inteira chega pela API porque é a PK que a edição/remoção endereça,
+// mas nunca é renderizada. A chave nome é o próprio nome normalizado, aparece inteira.
+export function mascararChave(chave, tipo_chave) {
+  const s = String(chave ?? "");
+  return tipo_chave === "pix_cpf" ? "••••" + s.slice(-4) : s;
+}
+
+// busca contra o que está NA TELA (chave já mascarada, categoria, sub): o miolo escondido de
+// uma chave Pix não pode ser achado digitando — senão a busca vazaria o que a máscara esconde.
+export function filtrarAssociacoes(lista, texto = "") {
+  const txt = texto && texto.trim() ? normalizarBusca(texto.trim()) : "";
+  if (!txt) return lista;
+  return lista.filter(a => normalizarBusca(
+    [mascararChave(a.chave, a.tipo_chave), a.categoria ?? "", a.subcategoria ?? ""].join(" | ")
+  ).includes(txt));
+}
+
 // ---------- Inc 4.6: grupos (duplicatas explícitas com representante) ----------
 // Transforma a lista plana do servidor em linhas de tabela: { t, membros, grupo_id, diferem, orfao }.
 // t = a transação solta ou o REPRESENTANTE do grupo; membros = os outros do grupo (nunca viram
@@ -292,6 +311,9 @@ if (typeof document !== "undefined") {
     lancTudo: false,
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
     expandidos: new Set(), // Inc 4.6: grupo_ids abertos na tabela (só de tela, não persiste)
+    // B2: regras aprendidas (aba Ajustes). `assocEditando` é o índice em `associacoes` da linha
+    // em edição — o DOM endereça por índice, nunca pela chave (a pix_cpf não vai pra tela).
+    associacoes: [], assocBusca: "", assocEditando: null,
   };
 
   // API
@@ -843,19 +865,121 @@ if (typeof document !== "undefined") {
         </div>
         <div id="ajcats">${catBlocos || `<p class="vazio">sem categorias</p>`}</div>
       </div>
-      <div class="card">
+      <div class="card" style="margin-bottom:16px">
         <div class="cardhead">
           <div><h2>Pessoas</h2><p class="sub">quem aparece no corte "gasto por pessoa"</p></div>
           <button class="chip" id="ajnovapessoa" type="button">＋ pessoa</button>
         </div>
         <div id="ajpessoas">${pessoaBlocos || `<p class="vazio">sem pessoas</p>`}</div>
+      </div>
+      <div class="card">
+        <div class="cardhead">
+          <div><h2>Regras aprendidas</h2><p class="sub">contraparte → categoria que a captura e o import usam; editar mantém o contador n</p></div>
+        </div>
+        <div class="filtros"><input id="ajassocbusca" type="text" placeholder="Buscar chave/categoria/subcategoria" aria-label="Buscar regra aprendida" value="${esc(estado.assocBusca)}"></div>
+        <div class="tblwrap"><table>
+          <thead><tr><th>Chave</th><th>Tipo</th><th>Categoria</th><th>Subcategoria</th><th>n</th><th>Atualizado em</th><th></th></tr></thead>
+          <tbody id="ajassocbody"><tr><td colspan="7" class="vazio">carregando…</td></tr></tbody>
+        </table></div>
       </div>`;
+    carregarAssociacoes();
+  }
+
+  // B2: relê as regras a cada abertura da aba e depois de cada ação (a captura e o import
+  // também releem a cada uso, então o que se vê aqui é o que vale na próxima).
+  async function carregarAssociacoes() {
+    try {
+      estado.associacoes = await apiGet("/api/associacoes");
+      estado.assocEditando = null;
+      drawAssociacoes();
+    } catch (err) {
+      const tb = $("#ajassocbody");
+      if (tb) tb.innerHTML = `<tr><td colspan="7" class="vazio">falha ao carregar: ${esc(err.message)}</td></tr>`;
+    }
+  }
+
+  // "2026-09-10T12:00:00.000Z" → "10/09/2026"
+  const dataBR = iso => { const [a, m, d] = String(iso ?? "").slice(0, 10).split("-"); return d ? `${d}/${m}/${a}` : ""; };
+
+  function opcoesSub(categoria_id, selecionada) {
+    return `<option value="">—</option>` + subsDaCat(estado.catalogo, categoria_id)
+      .map(s => `<option value="${esc(s.id)}"${s.id === selecionada ? " selected" : ""}>${esc(s.nome)}</option>`).join("");
+  }
+
+  function drawAssociacoes() {
+    const tb = $("#ajassocbody"); if (!tb) return;
+    // índice original preservado: a busca filtra a vista, a ação endereça estado.associacoes[i]
+    const todas = estado.associacoes.map((a, i) => ({ ...a, _i: i }));
+    const vis = filtrarAssociacoes(todas, estado.assocBusca);
+    if (!vis.length) {
+      tb.innerHTML = `<tr><td colspan="7" class="vazio">${todas.length ? "nada casa com a busca" : "nenhuma regra aprendida"}</td></tr>`;
+      return;
+    }
+    const cats = estado.catalogo.categorias;
+    tb.innerHTML = vis.map(a => {
+      const chave = `<td>${esc(mascararChave(a.chave, a.tipo_chave))}</td><td>${esc(a.tipo_chave)}</td>`;
+      const fim = `<td>${esc(String(a.n))}</td><td>${esc(dataBR(a.atualizado_em))}</td>`;
+      if (estado.assocEditando === a._i) {
+        const optCat = cats.map(c => `<option value="${esc(c.id)}"${c.id === a.categoria_id ? " selected" : ""}>${esc(c.nome)}</option>`).join("");
+        return `<tr>${chave}
+          <td><select class="ajassoccat" data-i="${a._i}" aria-label="Categoria">${optCat}</select></td>
+          <td><select class="ajassocsub" data-i="${a._i}" aria-label="Subcategoria">${opcoesSub(a.categoria_id, a.subcategoria_id)}</select></td>
+          ${fim}
+          <td><span class="ajactions">
+            <button class="miniBtn" data-act="salvaassoc" data-i="${a._i}">salvar</button>
+            <button class="miniBtn" data-act="cancelaassoc" data-i="${a._i}">cancelar</button>
+          </span></td></tr>`;
+      }
+      return `<tr>${chave}<td>${esc(a.categoria ?? "—")}</td><td>${esc(a.subcategoria ?? "—")}</td>${fim}
+        <td><span class="ajactions">
+          <button class="miniBtn" data-act="editassoc" data-i="${a._i}">editar</button>
+          <button class="miniBtn" data-act="apagaassoc" data-i="${a._i}">remover</button>
+        </span></td></tr>`;
+    }).join("");
+  }
+
+  // busca: redesenha só o tbody (o input segue com foco)
+  $("#ajustes").addEventListener("input", e => {
+    if (e.target.id !== "ajassocbusca") return;
+    estado.assocBusca = e.target.value;
+    drawAssociacoes();
+  });
+  // trocar a categoria na edição repovoa as subs dela (sub de outra categoria o Worker recusa)
+  $("#ajustes").addEventListener("change", e => {
+    if (!e.target.classList.contains("ajassoccat")) return;
+    const sub = document.querySelector(`#ajassocbody select.ajassocsub[data-i="${e.target.dataset.i}"]`);
+    if (sub) sub.innerHTML = opcoesSub(e.target.value, null);
+  });
+
+  // ações do painel de regras: à parte do resto da aba, recarregam só a lista (não o app inteiro)
+  async function acaoAssociacao(b) {
+    const i = Number(b.dataset.i);
+    const a = estado.associacoes[i]; if (!a) return;
+    const alvo = { chave: a.chave, tipo_chave: a.tipo_chave };
+    if (b.dataset.act === "editassoc") { estado.assocEditando = i; drawAssociacoes(); return; }
+    if (b.dataset.act === "cancelaassoc") { estado.assocEditando = null; drawAssociacoes(); return; }
+    if (b.dataset.act === "salvaassoc") {
+      const categoria_id = document.querySelector(`#ajassocbody select.ajassoccat[data-i="${i}"]`).value;
+      const subcategoria_id = document.querySelector(`#ajassocbody select.ajassocsub[data-i="${i}"]`).value || null;
+      await apiPatch("/api/associacoes", { ...alvo, categoria_id, subcategoria_id });
+    } else if (b.dataset.act === "apagaassoc") {
+      const quem = mascararChave(a.chave, a.tipo_chave);
+      if (!confirm(`Remover a regra "${quem}" → ${a.categoria ?? "—"}? A próxima captura volta para a sugestão do modelo e o import cai na categoria padrão.`)) return;
+      // a chave vai no corpo, não na URL (no caso pix_cpf é Pix/CPF: não deve parar em log)
+      const r = await fetch("/api/associacoes", { method: "DELETE", headers: { "content-type": "application/json" }, body: JSON.stringify(alvo) });
+      if (!r.ok) throw await erroDe(r, `DELETE /api/associacoes ${r.status}`);
+    }
+    await carregarAssociacoes();
   }
 
   $("#ajustes").addEventListener("click", async e => {
     const b = e.target.closest("button"); if (!b) return;
     const cats = estado.catalogo.categorias, subs = estado.catalogo.subcategorias;
     try {
+      if (["editassoc", "cancelaassoc", "salvaassoc", "apagaassoc"].includes(b.dataset.act)) {
+        await acaoAssociacao(b);
+        return;
+      }
       if (b.id === "ajnovacat") {
         const nome = prompt("Nome da nova categoria:");
         if (!nome || !nome.trim()) return;

@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
-  acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas,
+  acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
 } from "./app.js";
+import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto } from "./pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
 import { parseFatura } from "../worker/fatura.js";
@@ -531,4 +532,56 @@ test("montarLinhas: representante carregado sem seus membros (fora do período) 
 test("filtrarLinhas: computa='agrupados' inclui grupo cujos membros estão fora do período (membrosFora)", () => {
   const L = montarLinhas([REP_SEM_MEMBROS, R[1]]);
   assert.deepEqual(filtrarLinhas(L, { computa: "agrupados" }).map((l) => l.t.id), ["d"]);
+});
+
+// ---- B2: painel de regras aprendidas ----
+test("mascararChave: pix_cpf mostra só os 4 últimos (a chave é Pix/CPF); nome aparece inteiro", () => {
+  // 13 caracteres, o menor comprimento de pix_cpf visto no banco: a máscara ainda esconde 9
+  assert.equal(mascararChave("5500000001234", "pix_cpf"), "••••1234");
+  assert.equal(mascararChave("12345678901", "pix_cpf"), "••••8901");
+  assert.equal(mascararChave("PADARIA EXEMPLO", "nome"), "PADARIA EXEMPLO");
+});
+
+test("filtrarAssociacoes: busca sem caixa nem acento na chave exibida, categoria e sub", () => {
+  const lista = [
+    { chave: "PADARIA EXEMPLO", tipo_chave: "nome", categoria: "Alimentação", subcategoria: "Padaria" },
+    { chave: "5500000001234", tipo_chave: "pix_cpf", categoria: "Educação", subcategoria: "Inglês" },
+    { chave: "LOJA TESTE", tipo_chave: "nome", categoria: "Compras", subcategoria: null },
+  ];
+  const chaves = (r) => r.map((a) => a.chave);
+  assert.deepEqual(chaves(filtrarAssociacoes(lista, "padaria")), ["PADARIA EXEMPLO"]);
+  assert.deepEqual(chaves(filtrarAssociacoes(lista, "ALIMENTACAO")), ["PADARIA EXEMPLO"]); // sem acento
+  assert.deepEqual(chaves(filtrarAssociacoes(lista, "ingles")), ["5500000001234"]);      // pela sub
+  assert.deepEqual(chaves(filtrarAssociacoes(lista, "compras")), ["LOJA TESTE"]);
+  assert.deepEqual(chaves(filtrarAssociacoes(lista, "1234")), ["5500000001234"]);         // parte visível
+  // o miolo mascarado da chave Pix não pode ser achado pela busca (não está na tela)
+  assert.deepEqual(chaves(filtrarAssociacoes(lista, "550000")), []);
+  assert.equal(filtrarAssociacoes(lista, "  ").length, 3);
+  assert.equal(filtrarAssociacoes(lista, "").length, 3);
+});
+
+test("B2: associação removida → o import da linha cai na categoria padrão, com origem 'modelo'", () => {
+  // montarPreviewExtrato devolve categoriaNome null; quem resolve para a padrão é montarDecisao
+  const TXT = `10/12/2025 SALDO DO DIA 8.876,46
+10/12/2025 PADARIA EXEMPLO -100,00
+09/12/2025 SALDO DO DIA 8.976,46`;
+  const catalogo = {
+    categorias: [
+      { id: "cAli", nome: "Alimentação" }, { id: "cComp", nome: "Compras" },
+      { id: "cOut", nome: "Outros" }, { id: "cNI", nome: "Não Identificado", padrao: true },
+    ],
+    subcategorias: [],
+  };
+  const preview = montarPreviewExtrato(TXT, "c1", { catalogo, associacoes: {}, existentes: [], hashes: [] });
+  const d = montarDecisao(preview, catalogo, "extrato");
+  assert.equal(d.novos.length, 1);
+  assert.equal(d.novos[0].categoria_id, "cNI");
+  assert.equal(d.novos[0].origem_categoria, "modelo");
+  // e com a regra trocada para Compras, o mesmo import entra em Compras (origem 'regra')
+  const p2 = montarPreviewExtrato(TXT, "c1", {
+    catalogo, associacoes: { "PADARIA EXEMPLO": { categoriaNome: "Compras" } }, existentes: [], hashes: [],
+  });
+  const d2 = montarDecisao(p2, catalogo, "extrato");
+  assert.equal(d2.novos[0].categoria_id, "cComp");
+  assert.equal(d2.novos[0].origem_categoria, "regra");
 });
