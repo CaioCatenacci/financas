@@ -5,11 +5,13 @@ Agora fica com o Caio.
 
 ## Agora
 - F2
-
-## Próximo
 - B2
+- C3
+- B5
 - E1
 - E6
+
+## Próximo
 
 ## Depois
 - C2
@@ -17,9 +19,7 @@ Agora fica com o Caio.
 - A2
 - A3
 - B3
-- B5
 - C1
-- C3
 - C4
 - C5
 - C6
