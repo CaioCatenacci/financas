@@ -826,3 +826,110 @@ test("DELETE /api/grupos/:g com :g que não é uuid → 400 sem ler nem gravar",
   assert.ok((await r.json()).erro);
   semBanco(db);
 });
+
+// ---------- F2: aplicar com prévia velha → 409, nada gravado ----------
+// O fake devolve o estado ATUAL das linhas (transacoesPorIds) e dos grupos (membrosDosGrupos);
+// a prévia que o app mandou descreve o estado que ele viu. Divergiu → 409 antes de qualquer
+// gravação (nem o lote, nem a marcação do pagamento da fatura).
+const L1 = "00000000-0000-4000-8000-0000000000b1";
+const L2 = "00000000-0000-4000-8000-0000000000b2";
+const G9 = "00000000-0000-4000-8000-0000000000f9";
+const GN = "00000000-0000-4000-8000-0000000000fa";
+function dbAplicarFake(linhas) {
+  const f = {
+    chamadas: [],
+    transacoesPorIds: async (ids) => { f.chamadas.push("transacoesPorIds"); return linhas.filter((l) => ids.includes(l.id)); },
+    membrosDosGrupos: async (gs) => { f.chamadas.push("membrosDosGrupos"); return linhas.filter((l) => l.grupo_id && gs.includes(l.grupo_id)); },
+    aplicarImportacao: async (d) => { f.chamadas.push("aplicarImportacao"); return { gravados: 0, agrupados: d.casados.length, naoGasto: 0 }; },
+    marcarPagamentoFaturaNaoGasto: async () => { f.chamadas.push("marcarPagamentoFaturaNaoGasto"); return { marcados: 1, candidatos: 1 }; },
+  };
+  return f;
+}
+const lanc = (grupo_id, representante = false, id = L1) =>
+  ({ id, fonte: "manual", criado_em: "2026-09-01", grupo_id, representante, valor_final: "10.00" });
+const casado = (grupo_id, grupoExistente) =>
+  ({ matchId: L1, grupoExistente, linha: { descricao: "x", categoria_id: "cO", grupo_id, representante: false } });
+async function aplicarCom(db, casados) {
+  const req = reqApi("/api/importar/aplicar", "POST", {
+    decisao: { novos: [{ descricao: "n", categoria_id: "cO" }], naoGasto: [], casados },
+    fatura: { totalCents: 16700, ano: 2025, mes: 5 },
+  });
+  return handleApi(req, envApi, new URL(req.url), db);
+}
+async function confere409(r, db) {
+  assert.equal(r.status, 409);
+  assert.deepEqual(await r.json(), { erro: "a prévia ficou velha, gere de novo" });
+  assert.ok(!db.chamadas.includes("aplicarImportacao"), "não gravou o lote");
+  assert.ok(!db.chamadas.includes("marcarPagamentoFaturaNaoGasto"), "não marcou o pagamento da fatura");
+}
+
+test("POST /api/importar/aplicar: grupo da prévia não existe mais → 409, nada gravado", async () => {
+  // Exemplo do item: G0 foi desagrupado depois da prévia e L ficou solto
+  const db = dbAplicarFake([lanc(null)]);
+  await confere409(await aplicarCom(db, [casado(G0, true)]), db);
+});
+
+test("POST /api/importar/aplicar: grupo existe mas sem representante → 409, nada gravado", async () => {
+  const db = dbAplicarFake([lanc(G0, false), lanc(G0, false, L2)]);
+  await confere409(await aplicarCom(db, [casado(G0, true)]), db);
+});
+
+test("POST /api/importar/aplicar: lançamento casado em outro grupo / solto / agrupado → 409", async () => {
+  for (const [linhas, c] of [
+    [[lanc(G9, true)], casado(G0, true)],   // prévia viu G0, agora está em G9
+    [[lanc(null)], casado(G0, true)],       // prévia viu G0, agora está solto
+    [[lanc(G9, true)], casado(GN, false)],  // prévia viu solto, agora está em G9
+  ]) {
+    const db = dbAplicarFake(linhas);
+    await confere409(await aplicarCom(db, [c]), db);
+  }
+});
+
+test("POST /api/importar/aplicar: lançamento casado apagado → 409, nada gravado", async () => {
+  const db = dbAplicarFake([]);
+  await confere409(await aplicarCom(db, [casado(GN, false)]), db);
+});
+
+test("POST /api/importar/aplicar: prévia em dia (L solto, grupo novo) grava; leitura vem antes da gravação", async () => {
+  // segunda metade do Exemplo: prévia nova casa X com L solto → grava normalmente
+  const db = dbAplicarFake([lanc(null)]);
+  const r = await aplicarCom(db, [casado(GN, false)]);
+  assert.equal(r.status, 200);
+  assert.ok(db.chamadas.indexOf("transacoesPorIds") < db.chamadas.indexOf("aplicarImportacao"));
+  assert.ok(db.chamadas.includes("marcarPagamentoFaturaNaoGasto"));
+});
+
+test("POST /api/importar/aplicar: grupo existe com representante → grava", async () => {
+  const db = dbAplicarFake([lanc(G0, false), lanc(G0, true, L2)]);
+  const r = await aplicarCom(db, [casado(G0, true)]);
+  assert.equal(r.status, 200);
+  assert.ok(db.chamadas.indexOf("membrosDosGrupos") < db.chamadas.indexOf("aplicarImportacao"));
+});
+
+test("POST /api/importar/aplicar sem casados não lê nada antes de gravar", async () => {
+  const db = dbAplicarFake([]);
+  const r = await aplicarCom(db, []);
+  assert.equal(r.status, 200);
+  assert.deepEqual(db.chamadas, ["aplicarImportacao", "marcarPagamentoFaturaNaoGasto"]);
+});
+
+// ---------- F2: POST /api/grupos num grupo sem representante → 400 ----------
+test("POST /api/grupos num grupo existente sem representante → 400, nada gravado", async () => {
+  const db = dbGruposFake([{ ...manualG, grupo_id: G0, representante: false }, extratoG]);
+  const r = await handleApi(reqApi("/api/grupos", "POST", { ids: [M1, E1] }), envApi, new URL("http://localhost/api/grupos"), db);
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).erro, "o grupo não tem representante");
+  assert.equal(db.gravado, null);
+});
+
+test("POST /api/grupos: representante do grupo fora da seleção → aceito (checa o grupo inteiro)", async () => {
+  const db = dbGruposFake([
+    { ...manualG, id: L2, grupo_id: G0, representante: true },  // representante, não selecionado
+    { ...manualG, grupo_id: G0, representante: false },
+    extratoG,
+  ]);
+  const r = await handleApi(reqApi("/api/grupos", "POST", { ids: [M1, E1] }), envApi, new URL("http://localhost/api/grupos"), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { grupo_id: G0, representante_id: L2 });
+  assert.deepEqual(db.gravado.mudancas, [{ id: E1, grupo_id: G0, representante: false }]);
+});

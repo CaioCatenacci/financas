@@ -92,6 +92,26 @@ test("decidirAgrupar: menos de 2 linhas → erro", () => {
   assert.equal(decidirAgrupar([], "G1").ok, false);
 });
 
+// F2: entrar num grupo que não tem representante deixaria mais uma linha num grupo em que
+// ninguém conta no Resumo. A checagem olha TODOS os membros do grupo (terceiro parâmetro), não
+// só os selecionados — senão um representante que ficou fora da seleção daria recusa falsa.
+test("decidirAgrupar: grupo existente sem representante → recusa 'o grupo não tem representante'", () => {
+  const membroSemRep = { ...manual, grupo_id: "G0", representante: false };
+  const membros = [membroSemRep, { ...foto, grupo_id: "G0", representante: false }];
+  const d = decidirAgrupar([membroSemRep, extrato], "Gx", membros);
+  assert.deepEqual(d, { ok: false, erro: "o grupo não tem representante" });
+});
+
+test("decidirAgrupar: representante do grupo fora da seleção segue aceito (olha todos os membros)", () => {
+  const membroComum = { ...foto, grupo_id: "G0", representante: false };
+  const rep = { ...manual, grupo_id: "G0", representante: true };
+  const d = decidirAgrupar([membroComum, extrato], "Gx", [rep, membroComum]);
+  assert.equal(d.ok, true);
+  assert.equal(d.grupo_id, "G0");
+  assert.equal(d.representante_id, "m1");
+  assert.deepEqual(d.mudancas, [{ id: "e1", grupo_id: "G0", representante: false }]);
+});
+
 test("decidirRepresentar: troca atômica — tira do atual ANTES de pôr no novo (índice único)", () => {
   const membros = [
     { ...manual, grupo_id: "G0", representante: true },

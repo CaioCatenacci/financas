@@ -10,7 +10,7 @@ import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js"
 import { parseAprender } from "./teach.js";
 import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
-import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.js";
+import { montarPreviewExtrato, montarPreviewFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
 import { parseFatura } from "./fatura.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
@@ -226,7 +226,10 @@ export async function handleApi(request, env, url, dbOpt = null) {
     if (!brutos.every(ehUuid)) return erroJson("ids tem que ser uma lista de uuids", 400);
     const ids = [...new Set(brutos)];
     const linhas = await db.transacoesPorIds(ids);
-    const d = decidirAgrupar(linhas, crypto.randomUUID());
+    // grupo existente na seleção → lê o grupo inteiro: o representante pode ter ficado de fora
+    const gs = [...new Set(linhas.map((l) => l.grupo_id).filter(Boolean))];
+    const membros = gs.length === 1 ? await db.membrosDoGrupo(gs[0]) : undefined;
+    const d = decidirAgrupar(linhas, crypto.randomUUID(), membros);
     if (!d.ok) return erroJson(d.erro, 400);
     await db.gravarGrupo({ mudancas: d.mudancas });
     return j({ grupo_id: d.grupo_id, representante_id: d.representante_id });
@@ -450,6 +453,16 @@ export async function handleApi(request, env, url, dbOpt = null) {
   if (url.pathname === "/api/importar/aplicar" && request.method === "POST") {
    try {
     const b = await body();
+    // F2: confere a prévia contra o banco ANTES de gravar (fora da sql.transaction do aplicar).
+    // A janela entre esta leitura e a gravação é aceita: app de um usuário só.
+    const casados = (b.decisao && b.decisao.casados) || [];
+    if (casados.length) {
+      const linhas = await db.transacoesPorIds([...new Set(casados.map((c) => c.matchId))]);
+      const gs = [...new Set(casados.filter((c) => c.grupoExistente).map((c) => c.linha && c.linha.grupo_id).filter(Boolean))];
+      const membros = await db.membrosDosGrupos(gs);
+      const conf = conferirPreviaCasados(casados, { linhas, membros });
+      if (!conf.ok) return erroJson(conf.erro, 409);
+    }
     const r = await aplicar(db, b.decisao);
     // fatura: depois de gravar os itens, marca o pagamento correspondente no extrato como fora do
     // resumo (janela de 62 dias a partir do 1º dia do mês da fatura, igual tools/importar_fatura.py).

@@ -366,6 +366,14 @@ export function criarDb(sql) {
         from transacoes where grupo_id = ${grupo_id} order by criado_em`;
     },
 
+    // F2: membros de vários grupos numa query só (a conferência da prévia do import).
+    async membrosDosGrupos(grupoIds) {
+      if (!grupoIds || !grupoIds.length) return [];
+      return await sql`
+        select id, fonte, criado_em, grupo_id, representante, valor_final
+        from transacoes where grupo_id = any(${grupoIds}::uuid[])`;
+    },
+
     // membros do grupo da transação (ela inclusa); [] quando ela não tem grupo.
     async grupoDaTransacao(id) {
       return await sql`

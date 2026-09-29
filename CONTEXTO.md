@@ -427,6 +427,19 @@ banco duas vezes. Os hashes carimbados no modelo antigo (Fase A e antes) ficam c
 migração de carimbo pra grupo; eles só saem de circulação quando os importadores Python forem
 alinhados ou aposentados (BACKLOG C6).
 
+**Prévia velha recusa o lote (F2, 29/09/2026):** como a decisão nasce no navegador, ela descreve o
+estado que a prévia viu. Se entre a prévia e o aplicar o grupo foi desfeito, ficou sem
+representante, ou o lançamento casado mudou de grupo/foi apagado, gravar deixaria a linha do
+extrato num grupo em que ninguém conta. O `/api/importar/aplicar` lê os `matchId` e os grupos
+citados **antes** da transação e `conferirPreviaCasados` (`worker/importar.js`, pura) decide: algum
+casado divergiu → **409 "a prévia ficou velha, gere de novo"** e nada é gravado (nem a marcação do
+pagamento da fatura). **Por que o lote inteiro e não só o casado velho:** a prévia é uma revisão
+que o Caio aprovou como um todo; gravar metade dela seria uma decisão que ninguém tomou. **Por
+que leitura prévia e não checagem dentro da transação:** a `sql.transaction` do Neon manda as
+queries num POST só, sem ramificar no meio; a janela entre a leitura e a gravação é aceita (app de
+um usuário só). No mesmo espírito, `decidirAgrupar` recusa entrar num grupo existente sem
+representante ("o grupo não tem representante"), olhando o grupo inteiro, não só a seleção.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

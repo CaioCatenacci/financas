@@ -168,6 +168,30 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
   return { checksum, itens, resumo, totalCents };
 }
 
+// F2: a prévia descreve o estado que o app viu; entre ela e o aplicar o Caio pode ter
+// desagrupado, reagrupado ou apagado o lançamento casado. Gravar assim mesmo deixaria a linha
+// do extrato num grupo sem representante (fora do Resumo). Esta regra compara cada casado com o
+// que foi lido do banco AGORA — `linhas` (os matchId, via transacoesPorIds) e `membros` (todos os
+// membros dos grupos citados) — e recusa o lote inteiro se algum divergiu. Pura: quem lê é a rota.
+const PREVIA_VELHA = { ok: false, erro: "a prévia ficou velha, gere de novo" };
+export function conferirPreviaCasados(casados, { linhas = [], membros = [] } = {}) {
+  for (const c of casados || []) {
+    const l = linhas.find((x) => String(x.id) === String(c.matchId));
+    if (!l) return PREVIA_VELHA;                                   // lançamento apagado
+    const atual = l.grupo_id ?? null;
+    if (c.grupoExistente) {
+      const g = c.linha && c.linha.grupo_id;
+      if (atual !== g) return PREVIA_VELHA;                        // saiu do grupo / foi pra outro
+      const doGrupo = membros.filter((m) => m.grupo_id === g);
+      if (!doGrupo.length) return PREVIA_VELHA;                    // grupo não existe mais
+      if (!doGrupo.some((m) => m.representante)) return PREVIA_VELHA; // grupo sem quem conta
+    } else if (atual !== null) {
+      return PREVIA_VELHA;                                         // estava solto, agora agrupado
+    }
+  }
+  return { ok: true };
+}
+
 /**
  * Aplica a decisão já revisada (pelo usuário, no app) no banco, delegando pro
  * `db.aplicarImportacao`, que grava novos+não-gasto (insert) e, pros casados, insere a linha do
