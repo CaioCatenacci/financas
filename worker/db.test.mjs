@@ -686,3 +686,49 @@ test("atualizarTransacoesLote: com categoria nova, natureza segue a categoria (e
   assert.match(upd, /select natureza from categorias where id = /i);
   assert.match(upd, /fonte in \('extrato', ?'fatura'\)/i);
 });
+
+// ---- B2: painel de regras aprendidas ----
+test("listarAssociacoes junta categorias/subcategorias por id e ordena por atualizado_em desc", async () => {
+  // macro/sub saíram da tabela: o nome só vem pelo join; a ordem é a que o painel mostra
+  const sql = fakeSql([{ chave: "PADARIA EXEMPLO", tipo_chave: "nome" }]);
+  const db = criarDb(sql);
+  const r = await db.listarAssociacoes();
+  assert.equal(r.length, 1);
+  const q = sql.chamadas[0].text;
+  assert.match(q, /join categorias c\s+on c\.id = a\.categoria_id/i);
+  assert.match(q, /join subcategorias s\s+on s\.id = a\.subcategoria_id/i);
+  assert.match(q, /order by a\.atualizado_em desc/i);
+  for (const col of ["a.chave", "a.tipo_chave", "a.categoria_id", "a.subcategoria_id", "a.n", "a.atualizado_em"]) {
+    assert.ok(q.includes(col), `select traz ${col}`);
+  }
+});
+
+test("editarAssociacao troca categoria/sub por (chave, tipo_chave) e NÃO mexe no contador n", async () => {
+  // decisão de 27/09: editar mantém n (upsertAssociacao incrementa, por isso não é usado aqui)
+  const sql = fakeSql([{ chave: "PADARIA EXEMPLO" }]);
+  const db = criarDb(sql);
+  const r = await db.editarAssociacao({ chave: "PADARIA EXEMPLO", tipo_chave: "nome", categoria_id: "cCompras", subcategoria_id: null });
+  assert.equal(r.alterados, 1);
+  const { text, values } = sql.chamadas[0];
+  assert.match(text, /^\s*update associacoes/i);
+  assert.match(text, /categoria_id = \?/);
+  assert.match(text, /subcategoria_id = \?/);
+  assert.doesNotMatch(text, /\bn\s*=/i);
+  assert.match(text, /where chave = \? and tipo_chave = \?/i);
+  assert.deepEqual(values, ["cCompras", null, "PADARIA EXEMPLO", "nome"]);
+});
+
+test("editarAssociacao sem linha casada devolve alterados 0", async () => {
+  const db = criarDb(fakeSql([]));
+  const r = await db.editarAssociacao({ chave: "X", tipo_chave: "nome", categoria_id: "c1", subcategoria_id: null });
+  assert.equal(r.alterados, 0);
+});
+
+test("apagarAssociacao apaga por (chave, tipo_chave)", async () => {
+  const sql = fakeSql([{ chave: "PADARIA EXEMPLO" }]);
+  const db = criarDb(sql);
+  const r = await db.apagarAssociacao("PADARIA EXEMPLO", "nome");
+  assert.equal(r.apagados, 1);
+  assert.match(sql.chamadas[0].text, /delete from associacoes\s+where chave = \? and tipo_chave = \?/i);
+  assert.deepEqual(sql.chamadas[0].values, ["PADARIA EXEMPLO", "nome"]);
+});

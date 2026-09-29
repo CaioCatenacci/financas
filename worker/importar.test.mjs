@@ -233,3 +233,23 @@ test("conferirPreviaCasados: um casado velho num lote bom recusa o lote inteiro"
 test("conferirPreviaCasados: sem casados → aceita", () => {
   assert.deepEqual(conferirPreviaCasados([], { linhas: [], membros: [] }), { ok: true });
 });
+
+// ---- B2: a regra editada/removida no painel vale no próximo import ----
+// Linha inventada (Exemplo do card): 'PADARIA EXEMPLO' vira a chave nome 'PADARIA EXEMPLO'.
+const TXT_PADARIA = `10/12/2025 SALDO DO DIA 8.876,46
+10/12/2025 PADARIA EXEMPLO -100,00
+09/12/2025 SALDO DO DIA 8.976,46`;
+
+test("B2: associação trocada para Compras → a linha do extrato entra em Compras", () => {
+  const p = montarPreviewExtrato(TXT_PADARIA, "c1", {
+    catalogo, associacoes: { "PADARIA EXEMPLO": { categoriaNome: "Compras" } }, existentes: [], hashes: [],
+  });
+  const item = p.itens.find((i) => i.descricao === "PADARIA EXEMPLO");
+  assert.equal(item.categoriaNome, "Compras");
+});
+
+test("B2: associação removida → a linha do extrato sai sem categoria (o app resolve para a padrão)", () => {
+  const p = montarPreviewExtrato(TXT_PADARIA, "c1", { catalogo, associacoes: {}, existentes: [], hashes: [] });
+  const item = p.itens.find((i) => i.descricao === "PADARIA EXEMPLO");
+  assert.equal(item.categoriaNome, null);
+});

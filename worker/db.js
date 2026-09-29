@@ -178,6 +178,36 @@ export function criarDb(sql) {
               n = associacoes.n + 1, atualizado_em = now()`;
     },
 
+    // ---- B2: painel de regras aprendidas (aba Ajustes) ----
+    // macro/sub saíram da tabela: os nomes vêm do join por id. A chave vai inteira (é a PK,
+    // o painel precisa dela p/ editar/remover); quem mascara a pix_cpf é a tela.
+    async listarAssociacoes() {
+      return await sql`
+        select a.chave, a.tipo_chave, a.categoria_id, c.nome as categoria,
+               a.subcategoria_id, s.nome as subcategoria, a.n, a.atualizado_em
+        from associacoes a
+        left join categorias c    on c.id = a.categoria_id
+        left join subcategorias s on s.id = a.subcategoria_id
+        order by a.atualizado_em desc, a.chave`;
+    },
+    // Editar no painel NÃO passa por upsertAssociacao: aquele incrementa n (é "mais uma
+    // confirmação"); corrigir a regra à mão mantém o contador (decisão de 27/09/2026).
+    async editarAssociacao({ chave, tipo_chave, categoria_id, subcategoria_id }) {
+      const rows = await sql`
+        update associacoes
+        set categoria_id = ${categoria_id}, subcategoria_id = ${subcategoria_id ?? null}, atualizado_em = now()
+        where chave = ${chave} and tipo_chave = ${tipo_chave}
+        returning chave`;
+      return { alterados: rows.length };
+    },
+    async apagarAssociacao(chave, tipo_chave) {
+      const rows = await sql`
+        delete from associacoes
+        where chave = ${chave} and tipo_chave = ${tipo_chave}
+        returning chave`;
+      return { apagados: rows.length };
+    },
+
     // ---- CRUD de categorias/subcategorias/pessoas (tela de gestão) ----
     async criarCategoria(nome, natureza = "despesa") {
       const rows = await sql`insert into categorias (nome, natureza) values (${nome}, ${natureza})

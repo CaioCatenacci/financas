@@ -17,6 +17,9 @@ import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior }
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 
+// vocabulário fechado de associacoes.tipo_chave (o check do schema diz o mesmo)
+const TIPOS_CHAVE = ["pix_cpf", "nome"];
+
 async function sha256hex(bytes) {
   const h = await crypto.subtle.digest("SHA-256", bytes);
   return [...new Uint8Array(h)].map((b) => b.toString(16).padStart(2, "0")).join("");
@@ -257,6 +260,30 @@ export async function handleApi(request, env, url, dbOpt = null) {
     const d = decidirDesagrupar(await db.membrosDoGrupo(id()));
     await db.gravarGrupo({ mudancas: d.mudancas });
     return j({ ok: true, desagrupados: d.mudancas.length });
+  }
+
+  // ---- B2: painel de regras aprendidas (aba Ajustes) ----
+  // A PK é (chave, tipo_chave) e a chave pode ter qualquer caractere (e é Pix/CPF no caso
+  // pix_cpf): vai no corpo, não na URL. Editar não incrementa n (não é upsertAssociacao).
+  if (url.pathname === "/api/associacoes") {
+    if (request.method === "GET") return j(await db.listarAssociacoes());
+    if (request.method === "PATCH" || request.method === "DELETE") {
+      const b = await body().catch(() => ({}));
+      if (typeof b.chave !== "string" || !b.chave) return erroJson("chave obrigatória", 400);
+      if (!TIPOS_CHAVE.includes(b.tipo_chave)) return erroJson("tipo_chave inválido (pix_cpf|nome)", 400);
+      if (request.method === "DELETE") {
+        const r = await db.apagarAssociacao(b.chave, b.tipo_chave);
+        return r.apagados ? j({ ok: true }) : erroJson("associação não encontrada", 404);
+      }
+      const catalogo = await db.catalogo();
+      if (!catalogo.categorias.some((c) => c.id === b.categoria_id)) return erroJson("categoria_id inválido", 400);
+      const subcategoria_id = b.subcategoria_id || null;
+      if (subcategoria_id && !catalogo.subcategorias.some((s) => s.id === subcategoria_id && s.categoria_id === b.categoria_id)) {
+        return erroJson("subcategoria não pertence à categoria", 400);
+      }
+      const r = await db.editarAssociacao({ chave: b.chave, tipo_chave: b.tipo_chave, categoria_id: b.categoria_id, subcategoria_id });
+      return r.alterados ? j({ ok: true }) : erroJson("associação não encontrada", 404);
+    }
   }
 
   // ---- gestão de categorias ----
