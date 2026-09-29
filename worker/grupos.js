@@ -23,7 +23,10 @@ export function escolherRepresentante(linhas) {
   return pool.reduce(maisAntiga);
 }
 
-export function decidirAgrupar(linhas, novoGrupoId) {
+// `membrosDoGrupo` (opcional): TODOS os membros do grupo existente, lidos do banco. Sem ele, usa
+// só os membros que vieram na seleção — o que daria "sem representante" em falso quando o
+// representante ficou fora da seleção; por isso a rota sempre passa o grupo inteiro (F2).
+export function decidirAgrupar(linhas, novoGrupoId, membrosDoGrupo) {
   if (!Array.isArray(linhas) || linhas.length < 2) {
     return { ok: false, erro: "selecione pelo menos 2 lançamentos pra agrupar" };
   }
@@ -35,9 +38,12 @@ export function decidirAgrupar(linhas, novoGrupoId) {
     // entra no grupo existente; o representante fica quem era
     if (!soltas.length) return { ok: false, erro: "essas linhas já estão no mesmo grupo" };
     const grupo_id = grupos[0];
-    const rep = linhas.find((l) => l.grupo_id === grupo_id && l.representante);
+    const membros = membrosDoGrupo ?? linhas.filter((l) => l.grupo_id === grupo_id);
+    const rep = membros.find((l) => l.grupo_id === grupo_id && l.representante);
+    // F2: entrar num grupo em que ninguém conta só aumentaria o que some do Resumo
+    if (!rep) return { ok: false, erro: "o grupo não tem representante" };
     return {
-      ok: true, grupo_id, representante_id: rep ? rep.id : null,
+      ok: true, grupo_id, representante_id: rep.id,
       mudancas: soltas.map((l) => ({ id: l.id, grupo_id, representante: false })),
     };
   }

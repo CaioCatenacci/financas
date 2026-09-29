@@ -584,6 +584,19 @@ test("transacoesPorIds/membrosDoGrupo/grupoDaTransacao devolvem a forma mínima 
   assert.equal(sql.chamadas.length, 3);
 });
 
+test("membrosDosGrupos lê todos os membros de vários grupos numa query só; lista vazia não vai ao banco", async () => {
+  // F2: a conferência da prévia olha o grupo inteiro de cada casado (quem é representante),
+  // num único subrequest, antes da transação do aplicar.
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  assert.deepEqual(await db.membrosDosGrupos([]), []);
+  assert.equal(sql.chamadas.length, 0);
+  await db.membrosDosGrupos(["G0", "G1"]);
+  assert.equal(sql.chamadas.length, 1);
+  assert.match(sql.chamadas[0].text, /select id, fonte, criado_em, grupo_id, representante, valor_final/i);
+  assert.match(sql.chamadas[0].text, /grupo_id = any\(/i);
+});
+
 test("gravarGrupo grava todas as mudanças (na ordem) e o delete opcional numa ÚNICA transação", async () => {
   const sql = fakeSql([]);
   const db = criarDb(sql);

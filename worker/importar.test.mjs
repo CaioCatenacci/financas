@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { montarPreviewExtrato, montarPreviewFatura, aplicar } from "./importar.js";
+import { montarPreviewExtrato, montarPreviewFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { linhaHash } from "./reconciliar.js";
 
 const catalogo = { categorias: [{ id: "cO", nome: "Outros" }, { id: "cT", nome: "Transferências" }], subcategorias: [] };
@@ -173,4 +173,63 @@ test("aplicar: delega o lote inteiro p/ db.aplicarImportacao (uma transação, n
   const r = await aplicar(db, decisao);
   assert.deepEqual(recebido, decisao);                 // passou a decisão inteira
   assert.deepEqual(r, { gravados: 2, agrupados: 1, naoGasto: 1 });
+});
+
+// ---- F2: prévia velha ----
+// Entre a prévia e o aplicar o Caio pode desagrupar, reagrupar ou apagar o lançamento casado. Se
+// o aplicar gravasse assim mesmo, a linha do extrato entraria num grupo sem representante (e
+// deixaria de contar no Resumo). A regra é pura: recebe os casados e o que foi lido do banco agora.
+const RECUSA = { ok: false, erro: "a prévia ficou velha, gere de novo" };
+const casadoEm = (grupo_id, grupoExistente, matchId = "L1") =>
+  ({ matchId, grupoExistente, linha: { descricao: "x", grupo_id, representante: false } });
+const L = (grupo_id, representante = false) =>
+  ({ id: "L1", fonte: "manual", criado_em: "2026-09-01", grupo_id, representante, valor_final: "10.00" });
+
+test("conferirPreviaCasados: grupo da prévia sumiu (sem membros no banco) → recusa", () => {
+  // L apagado junto: o único jeito do caso 'grupo não existe' não cair também no 'L mudou de grupo'
+  assert.deepEqual(conferirPreviaCasados([casadoEm("G0", true)], { linhas: [], membros: [] }), RECUSA);
+  // e com L ainda lá, mas solto (grupo desfeito): também recusa
+  assert.deepEqual(conferirPreviaCasados([casadoEm("G0", true)], { linhas: [L(null)], membros: [] }), RECUSA);
+});
+
+test("conferirPreviaCasados: grupo existe mas ninguém é representante → recusa", () => {
+  const membros = [L("G0", false), { ...L("G0", false), id: "L2" }];
+  assert.deepEqual(conferirPreviaCasados([casadoEm("G0", true)], { linhas: [L("G0", false)], membros }), RECUSA);
+});
+
+test("conferirPreviaCasados: lançamento casado mudou de grupo (ou saiu dele, ou entrou num) → recusa", () => {
+  // prévia viu G0, agora L está em G9
+  assert.deepEqual(conferirPreviaCasados([casadoEm("G0", true)],
+    { linhas: [L("G9", true)], membros: [L("G9", true)] }), RECUSA);
+  // prévia viu G0, agora L está solto
+  assert.deepEqual(conferirPreviaCasados([casadoEm("G0", true)],
+    { linhas: [L(null)], membros: [] }), RECUSA);
+  // prévia viu L solto (grupo novo), agora L está em G9
+  assert.deepEqual(conferirPreviaCasados([casadoEm("Gnovo", false)],
+    { linhas: [L("G9", true)], membros: [L("G9", true)] }), RECUSA);
+});
+
+test("conferirPreviaCasados: lançamento casado foi apagado → recusa", () => {
+  assert.deepEqual(conferirPreviaCasados([casadoEm("Gnovo", false)], { linhas: [], membros: [] }), RECUSA);
+});
+
+test("conferirPreviaCasados: grupo existe com representante → aceita", () => {
+  const membros = [L("G0", true), { ...L("G0", false), id: "L2" }];
+  assert.deepEqual(conferirPreviaCasados([casadoEm("G0", true)], { linhas: [L("G0", true)], membros }), { ok: true });
+  // o representante pode ser outro membro que não o casado
+  assert.deepEqual(conferirPreviaCasados([casadoEm("G0", true)],
+    { linhas: [L("G0", false)], membros: [L("G0", false), { ...L("G0", true), id: "L2" }] }), { ok: true });
+});
+
+test("conferirPreviaCasados: L segue solto com grupoExistente=false → aceita", () => {
+  assert.deepEqual(conferirPreviaCasados([casadoEm("Gnovo", false)], { linhas: [L(null)], membros: [] }), { ok: true });
+});
+
+test("conferirPreviaCasados: um casado velho num lote bom recusa o lote inteiro", () => {
+  const casados = [casadoEm("Gnovo", false), casadoEm("Gnovo2", false, "L-apagado")];
+  assert.deepEqual(conferirPreviaCasados(casados, { linhas: [L(null)], membros: [] }), RECUSA);
+});
+
+test("conferirPreviaCasados: sem casados → aceita", () => {
+  assert.deepEqual(conferirPreviaCasados([], { linhas: [], membros: [] }), { ok: true });
 });
