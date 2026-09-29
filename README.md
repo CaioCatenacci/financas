@@ -119,32 +119,64 @@ do `CLAUDE.md`.
 ## Estrutura do projeto
 
 ```
-├── CLAUDE.md                        # Instruções pro assistente
+├── CLAUDE.md                        # Instruções pro assistente (regras, vocabulário, roadmap)
 ├── CONTEXTO.md                      # História das decisões
+├── BACKLOG.md                       # Ideias e pendências ainda fora da fila
 ├── README.md                        # Este arquivo
-├── package.json                     # Dependências Node
+├── package.json                     # Dependências Node e globs do npm test
+├── pyproject.toml                   # Dependências Python (pytest, psycopg)
 ├── wrangler.toml                    # Config do Cloudflare Worker
+├── schema.sql                       # Schema completo do Neon (estado atual)
 │
 ├── migrations/
-│   └── 0001_init.sql               # Schema do Neon
+│   ├── 0001_init.sql               # Schema inicial
+│   └── …                           # 0002 a 0009, aditivas, em ordem (até 0009_grupos.sql)
 │
-├── worker/
-│   ├── index.js                    # Worker principal (webhook + app + API)
-│   ├── extrair.js                  # Interface de extração (Gemini + fallback)
+├── worker/                          # Cloudflare Worker (um só: webhook + app + API)
+│   ├── index.js                    # Rotas: /telegram, /app, /api/*
+│   ├── db.js                       # Acesso ao Neon (queries e transações)
+│   ├── extrair.js                  # Extração do comprovante (Gemini + fallback Claude)
+│   ├── texto.js                    # Lançamento manual por texto (Inc 1.5)
+│   ├── money.js                    # Conversão pra centavos
+│   ├── categorias.js               # resolverCategoria, natureza ao reclassificar
+│   ├── extrato.js                  # Parser do extrato Itaú (Inc 3)
+│   ├── fatura.js                   # Parser da fatura Itaú (Inc 3)
+│   ├── importar.js                 # Prévia e aplicação do import (Inc 3)
+│   ├── reconciliar.js              # linha_hash e conciliação ±3 dias (Inc 3)
+│   ├── grupos.js                   # Regras de agrupamento (Inc 4.6)
+│   ├── metas.js                    # Resolução de metas (Inc 4)
 │   ├── dropbox.js                  # Upload pro Dropbox
-│   ├── money.js                    # Utilitários de conversão (centavos)
-│   └── test-worker.mjs             # Testes (node --test)
+│   ├── *.test.mjs                  # Testes de cada módulo (node --test)
+│   └── …                           # auth, telegram, classificar, contraparte, teach, validar
+│
+├── public/                          # App web (servido em /app)
+│   ├── index.html                  # Abas: Resumo, Lançamentos, Importar, Ajustes, Planejamento
+│   ├── app.js                      # Lógica do app (regras puras testadas)
+│   ├── app.test.mjs                # Testes do app (node --test)
+│   ├── pdf_extrair.js              # Texto do PDF no navegador (pdf.js)
+│   └── shell.css                   # Estilos
 │
 ├── tools/
-│   └── import_planilha.py           # Import do histórico Excel
+│   ├── import_planilha.py          # Import do histórico Excel
+│   ├── importar_extrato.py         # Import local de extrato (Inc 3)
+│   ├── importar_fatura.py          # Import local de fatura (Inc 3)
+│   ├── categorias.py               # resolver_categoria / carregar_catalogo
+│   ├── db.py                       # Banco sem MCP: select / ensaiar / aplicar
+│   ├── fila.mjs                    # Fila autônoma: checar / concluir
+│   ├── deploy.mjs                  # Deploy do Worker
+│   ├── hooks/pre-push              # O master só muda por PR
+│   └── …                           # parsers Itaú, reconciliar, classificar, ensino, app.mjs
 │
 ├── tests/
-│   └── test_import.py              # Testes do import (pytest)
+│   ├── test_import.py              # Testes do import da planilha (pytest)
+│   └── test_*.py                   # Demais tools Python (pytest)
+│
+├── fila/                            # Fila autônoma: <id>.md, ORDEM.md, feitos.js
 │
 ├── docs/
-│   ├── index.html                  # App web (Lançamentos + Resumo)
-│   └── superpowers/specs/          # Especificação
+│   └── superpowers/                # Specs e plans (specs/, plans/)
 │
+├── .github/workflows/ci.yml         # CI: npm test + pytest + fila checar
 └── .gitignore                       # dados/, *.xlsx, *.csv, .env, __pycache__
 ```
 
