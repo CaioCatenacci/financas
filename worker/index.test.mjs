@@ -933,3 +933,126 @@ test("POST /api/grupos: representante do grupo fora da seleção → aceito (che
   assert.deepEqual(await r.json(), { grupo_id: G0, representante_id: L2 });
   assert.deepEqual(db.gravado.mudancas, [{ id: E1, grupo_id: G0, representante: false }]);
 });
+
+// ---- B2: painel de regras aprendidas (GET/PATCH/DELETE /api/associacoes) ----
+// Fake com as associações em memória: a mesma instância atende a rota do painel e a captura
+// do Telegram, pra provar que editar/remover vale já na próxima captura (a captura relê
+// buscarAssociacao a cada foto). Chaves inventadas — o repositório é público.
+function dbAssocFake() {
+  const base = dbFake();
+  const catalogo = {
+    categorias: [
+      { id: "cAli", nome: "Alimentação", natureza: "despesa" },
+      { id: "cComp", nome: "Compras", natureza: "despesa" },
+      { id: "cCasa", nome: "Casa", natureza: "despesa" },
+      { id: "cNI", nome: "Não Identificado", natureza: "despesa", padrao: true },
+    ],
+    subcategorias: [
+      { id: "sPad", categoria_id: "cAli", nome: "Padaria" },
+      { id: "sLimp", categoria_id: "cCasa", nome: "Limpeza" },
+    ],
+  };
+  const assoc = new Map([
+    ["nome|PADARIA EXEMPLO", { chave: "PADARIA EXEMPLO", tipo_chave: "nome", categoria_id: "cAli", subcategoria_id: "sPad", n: 3, atualizado_em: "2026-09-10T12:00:00.000Z" }],
+    ["pix_cpf|00000000000191", { chave: "00000000000191", tipo_chave: "pix_cpf", categoria_id: "cCasa", subcategoria_id: null, n: 1, atualizado_em: "2026-09-03T12:00:00.000Z" }],
+  ]);
+  const nomeCat = (id) => catalogo.categorias.find((c) => c.id === id)?.nome ?? null;
+  const nomeSub = (id) => catalogo.subcategorias.find((s) => s.id === id)?.nome ?? null;
+  return {
+    ...base,
+    assoc,
+    catalogo: async () => catalogo,
+    buscarAssociacao: async (chave, tipo) => assoc.get(`${tipo}|${chave}`) ?? null,
+    listarAssociacoes: async () => [...assoc.values()]
+      .map((a) => ({ ...a, categoria: nomeCat(a.categoria_id), subcategoria: nomeSub(a.subcategoria_id) }))
+      .sort((x, y) => (x.atualizado_em < y.atualizado_em ? 1 : -1)),
+    editarAssociacao: async ({ chave, tipo_chave, categoria_id, subcategoria_id }) => {
+      const a = assoc.get(`${tipo_chave}|${chave}`); if (!a) return { alterados: 0 };
+      Object.assign(a, { categoria_id, subcategoria_id: subcategoria_id ?? null }); return { alterados: 1 };
+    },
+    apagarAssociacao: async (chave, tipo_chave) => ({ apagados: assoc.delete(`${tipo_chave}|${chave}`) ? 1 : 0 }),
+  };
+}
+// captura de um comprovante da contraparte inventada; o modelo "chuta" Casa › Limpeza
+async function capturarPadaria(db) {
+  const deps = {
+    db,
+    baixar: async () => ({ bytes: new Uint8Array([1]), mime: "image/jpeg" }),
+    hashBytes: async () => "hB2",
+    extrairImpl: async () => ({ ok: true, extraido_por: "gemini", confianca: 0.9,
+      normalizado: { dataISO: "2026-09-20", valorCents: 1250, natureza: "despesa",
+        macro: "Casa", sub: "Limpeza", descricao: "Pão",
+        contraparte_nome: "Padaria Exemplo", contraparte_chave: null } }),
+    subir: async () => "/x.jpg",
+    confirmar: async () => {},
+    responderImpl: async () => {},
+  };
+  const update = { message: { chat: { id: 7 }, message_id: 1, photo: [{ file_id: "b", width: 800 }] } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  return db.estado.inseridos.at(-1);
+}
+
+test("GET /api/associacoes devolve chave, tipo, categoria e sub (id e nome), n e atualizado_em, mais recente primeiro", async () => {
+  const db = dbAssocFake();
+  const r = await handleApi(reqApi("/api/associacoes", "GET"), envApi, new URL("http://localhost/api/associacoes"), db);
+  assert.equal(r.status, 200);
+  const data = await r.json();
+  assert.equal(data.length, 2);
+  assert.deepEqual(data[0], {
+    chave: "PADARIA EXEMPLO", tipo_chave: "nome", categoria_id: "cAli", categoria: "Alimentação",
+    subcategoria_id: "sPad", subcategoria: "Padaria", n: 3, atualizado_em: "2026-09-10T12:00:00.000Z",
+  });
+  assert.equal(data[1].tipo_chave, "pix_cpf");
+  assert.equal(data[1].subcategoria_id, null);
+  assert.equal(data[1].subcategoria, null);
+});
+
+test("PATCH /api/associacoes troca a categoria, mantém n, e a próxima captura usa a nova com origem 'regra'", async () => {
+  const db = dbAssocFake();
+  const r = await handleApi(reqApi("/api/associacoes", "PATCH",
+    { chave: "PADARIA EXEMPLO", tipo_chave: "nome", categoria_id: "cComp", subcategoria_id: null }),
+    envApi, new URL("http://localhost/api/associacoes"), db);
+  assert.equal(r.status, 200);
+  assert.equal(db.assoc.get("nome|PADARIA EXEMPLO").n, 3);
+  const ins = await capturarPadaria(db);
+  assert.equal(ins.categoria_id, "cComp");
+  assert.equal(ins.subcategoria_id, null);
+  assert.equal(ins.origem_categoria, "regra");
+});
+
+test("PATCH /api/associacoes recusa tipo fora do vocabulário, categoria inexistente e sub de outra categoria", async () => {
+  const db = dbAssocFake();
+  const patch = (b) => handleApi(reqApi("/api/associacoes", "PATCH", b), envApi, new URL("http://localhost/api/associacoes"), db);
+  assert.equal((await patch({ chave: "PADARIA EXEMPLO", tipo_chave: "cpf", categoria_id: "cComp" })).status, 400);
+  assert.equal((await patch({ chave: "PADARIA EXEMPLO", tipo_chave: "nome", categoria_id: "nao-existe" })).status, 400);
+  assert.equal((await patch({ chave: "PADARIA EXEMPLO", tipo_chave: "nome", categoria_id: "cComp", subcategoria_id: "sPad" })).status, 400);
+  assert.equal((await patch({ chave: "", tipo_chave: "nome", categoria_id: "cComp" })).status, 400);
+  assert.equal(db.assoc.get("nome|PADARIA EXEMPLO").categoria_id, "cAli"); // nada mudou
+});
+
+test("PATCH /api/associacoes de uma associação que não existe → 404", async () => {
+  const db = dbAssocFake();
+  const r = await handleApi(reqApi("/api/associacoes", "PATCH", { chave: "NINGUEM", tipo_chave: "nome", categoria_id: "cComp" }),
+    envApi, new URL("http://localhost/api/associacoes"), db);
+  assert.equal(r.status, 404);
+});
+
+test("DELETE /api/associacoes remove por (chave, tipo_chave) e a próxima captura volta à sugestão do modelo", async () => {
+  const db = dbAssocFake();
+  const r = await handleApi(reqApi("/api/associacoes", "DELETE", { chave: "PADARIA EXEMPLO", tipo_chave: "nome" }),
+    envApi, new URL("http://localhost/api/associacoes"), db);
+  assert.equal(r.status, 200);
+  assert.equal(db.assoc.has("nome|PADARIA EXEMPLO"), false);
+  assert.equal(db.assoc.size, 1); // a outra regra ficou
+  const ins = await capturarPadaria(db);
+  assert.equal(ins.categoria_id, "cCasa");       // o chute do modelo
+  assert.equal(ins.subcategoria_id, "sLimp");
+  assert.equal(ins.origem_categoria, "modelo");
+});
+
+test("DELETE /api/associacoes de uma associação que não existe → 404; tipo inválido → 400", async () => {
+  const db = dbAssocFake();
+  const del = (b) => handleApi(reqApi("/api/associacoes", "DELETE", b), envApi, new URL("http://localhost/api/associacoes"), db);
+  assert.equal((await del({ chave: "NINGUEM", tipo_chave: "nome" })).status, 404);
+  assert.equal((await del({ chave: "PADARIA EXEMPLO", tipo_chave: "outro" })).status, 400);
+});
