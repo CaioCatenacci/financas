@@ -95,3 +95,33 @@ test("naturezaExplicita: true só quando o par natureza= foi escrito", () => {
   assert.equal(parseLancamentoTexto("padaria 5,00 05/03/2026 natureza=despesa").dados.naturezaExplicita, true);
   assert.equal(parseLancamentoTexto("padaria 5,00 05/03/2026").dados.naturezaExplicita, false);
 });
+
+// B5: quem digita "R$ 15,50" com espaço não pode ver o "R$" parar na descrição.
+test("R$ separado do valor não vaza para a descrição (B5)", () => {
+  const ano = new Date().getUTCFullYear();
+  const r = parseLancamentoTexto("R$ 15,50 padaria 29/08");
+  assert.equal(r.ok, true);
+  assert.equal(r.dados.valorCents, 1550);
+  assert.equal(r.dados.descricao, "padaria");
+  assert.equal(r.dados.dataISO, `${ano}-08-29`);
+  // minúsculo é o mesmo defeito: parseBRtoCents já ignora o caso
+  const m = parseLancamentoTexto("r$ 15,50 padaria 29/08");
+  assert.equal(m.dados.descricao, "padaria");
+  assert.equal(m.dados.valorCents, 1550);
+});
+
+// B5: ponto seguido de exatamente 3 dígitos é milhar (decisão de 27/09).
+test("valor só com milhar, sem centavos, é reconhecido (B5)", () => {
+  const r = parseLancamentoTexto("1.500 aluguel 29/08");
+  assert.equal(r.ok, true);
+  assert.equal(r.dados.valorCents, 150000);
+  assert.equal(r.dados.descricao, "aluguel");
+  assert.equal(parseLancamentoTexto("1.234.567 casa 29/08").dados.valorCents, 123456700);
+});
+
+// B5: no texto livre o ponto nunca é decimal (decisão de 28/09). parseBRtoCents("1.50") dá 15000;
+// aceitar esse token gravaria R$ 150,00 sem aviso — melhor recusar e o bot pedir de novo.
+test("ponto como decimal é recusado, não vira milhar (B5)", () => {
+  assert.equal(parseLancamentoTexto("1.50 padaria 29/08").ok, false);
+  assert.equal(parseLancamentoTexto("1.5000 padaria 29/08").ok, false);
+});

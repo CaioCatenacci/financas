@@ -20,6 +20,12 @@ e entrega mais rápida.
 Se depois virar 40% texto, é painless adicionar — a rota `/telegram` já tem lugar
 pra nova lógica. Mas agora o caminho feliz é foto.
 
+**Valor no texto livre (B5, 27–29/09/2026):** o separador decimal é sempre a vírgula; o ponto
+nunca é decimal. Ponto seguido de exatamente 3 dígitos é milhar (`1.500` = R$ 1.500,00); `1.50`
+é recusado, em vez de virar R$ 150,00 calado. Um `R$` solto antes do valor faz parte dele e não
+entra na descrição. A regra mora em `parseLancamentoTexto` (`worker/texto.js`), não em
+`money.js`, que é compartilhado com a extração e o import.
+
 ---
 
 ## 2. Um Worker só (divergindo da LM Ateliê propositalmente)
