@@ -38,10 +38,16 @@ feature no ar, e "deployou" não é verificação.
    2. `python tools/db.py aplicar migrations/00NN_<nome>.sql` (pede permissão: o Caio
       está presente). `ok:false` → pare e diga o que já entrou.
 3. Antes do merge, tire a worktree do item, se existir:
-   `git worktree remove --force .claude/worktrees/fila-<id>`. O `--delete-branch` do
-   passo seguinte apaga a branch local, e o git recusa apagar uma branch que uma
-   worktree ainda tem em uso — o merge entraria e o comando sairia com erro.
-4. Merge: `gh pr merge N --merge --delete-branch` (merge commit, como o repo faz).
+   `git worktree remove .claude/worktrees/fila-<id>`, **sem `--force`** e **sozinho numa
+   chamada** (nunca encadeado com `&&` ao merge). O `--delete-branch` do passo seguinte
+   apaga a branch local, e o git recusa apagar uma branch que uma worktree ainda tem em
+   uso — o merge entraria e o comando sairia com erro. Depois do push a worktree está
+   limpa; se o git recusar por arquivo não commitado, rode
+   `git -C .claude/worktrees/fila-<id> status --short` e pare dizendo quais arquivos são.
+   (Em 29/09 o `--force` encadeado ao merge teve a permissão negada no modo automático e
+   parou a rodada; sem ele, a mesma entrega passou.)
+4. Merge: `gh pr merge N --merge --delete-branch` (merge commit, como o repo faz), numa
+   chamada própria.
 5. Deploy: `node tools/deploy.mjs`. Ele faz o fetch, cria uma worktree limpa de
    `origin/master`, roda o `wrangler deploy` a partir dela e a remove — nunca do
    checkout principal (que pode ter trabalho do Caio) nem da worktree do item. Imprime
