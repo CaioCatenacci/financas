@@ -478,17 +478,28 @@ export function criarDb(sql) {
     // que já está DENTRO de um grupo tem computa_resumo=true mas conta_no_resumo=false (quem conta
     // é o representante). Marcar computa_resumo nela não evita dupla contagem nenhuma; o candidato
     // certo é sempre a linha que hoje soma no card.
+    // C3 (idempotência): o select traz também as despesas de extrato de mesmo total, na mesma
+    // janela, que já estão FORA do resumo (computa_resumo=false). Se existe uma, o pagamento já
+    // foi marcado — por uma aplicação anterior desta fatura ou pelo import do extrato (naoGasto) —
+    // e não se mexe em nada: sem isso, a reaplicação via o pagamento sumir do select e tirava do
+    // resumo outra despesa de mesmo total que caísse na janela. Sem vínculo fatura→pagamento no
+    // schema, esse é o único sinal; uma linha de mesmo total tirada do resumo à mão também bloqueia
+    // (conservador: não marca, e o app avisa pra ajustar à mão).
     async marcarPagamentoFaturaNaoGasto(totalCents, de, ate) {
       const rows = await sql`
-        select id from transacoes
-        where fonte = 'extrato' and natureza = 'despesa' and conta_no_resumo = true
+        select id, computa_resumo, conta_no_resumo from transacoes
+        where fonte = 'extrato' and natureza = 'despesa'
+          and (conta_no_resumo = true or computa_resumo = false)
           and (round(valor_final*100))::bigint = ${totalCents}
           and data between ${de} and ${ate}`;
-      if (rows.length === 1) {
-        await sql`update transacoes set computa_resumo = false where id = ${rows[0].id}`;
+      const jaMarcados = rows.filter((r) => r.computa_resumo === false);
+      const candidatos = rows.filter((r) => r.computa_resumo !== false);
+      if (jaMarcados.length) return { marcados: 0, candidatos: candidatos.length, jaMarcado: true };
+      if (candidatos.length === 1) {
+        await sql`update transacoes set computa_resumo = false where id = ${candidatos[0].id}`;
         return { marcados: 1, candidatos: 1 };
       }
-      return { marcados: 0, candidatos: rows.length };
+      return { marcados: 0, candidatos: candidatos.length };
     },
 
     // associações aprendidas por nome, no formato que classificar() espera: dict chaveado por

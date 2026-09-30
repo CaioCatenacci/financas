@@ -499,6 +499,7 @@ export async function handleApi(request, env, url, dbOpt = null) {
       const pg = await db.marcarPagamentoFaturaNaoGasto(b.fatura.totalCents, de, deslocaDias(de, 62));
       r.pagamentoMarcado = pg.marcados;
       r.pagamentoCandidatos = pg.candidatos;
+      if (pg.jaMarcado) r.pagamentoJaMarcado = true; // C3: reaplicação; o app de hoje ignora
     }
     return j(r);
    } catch (err) {

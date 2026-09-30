@@ -41,3 +41,8 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   subcategorias e pessoas passam o id cru pro `::uuid`; corpo que não é JSON faz `request.json()`
   lançar em qualquer rota. O helper `ehUuid` (`worker/validar.js`) já existe. Origem: F3
   (28/09/2026), que fechou só as 4 rotas `/api/grupos`.
+- **P3 · `tools/importar_fatura.py` remarca o pagamento na reaplicação.** Repete a lógica antiga
+  (filtra `computa_resumo=true`, não confere se o pagamento já está marcado): reaplicar a fatura
+  pelo Python pode tirar do resumo outra despesa de extrato de mesmo total na janela. O Worker já
+  foi corrigido (`marcarPagamentoFaturaNaoGasto`). Vai junto com C6 (importadores Python no modelo
+  antigo). Origem: C3 (29/09/2026).

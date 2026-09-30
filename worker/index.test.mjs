@@ -1056,3 +1056,58 @@ test("DELETE /api/associacoes de uma associação que não existe → 404; tipo 
   assert.equal((await del({ chave: "NINGUEM", tipo_chave: "nome" })).status, 404);
   assert.equal((await del({ chave: "PADARIA EXEMPLO", tipo_chave: "outro" })).status, 400);
 });
+
+// C3: reaplicar a mesma fatura tem que deixar o banco como uma aplicação só. O db é o de verdade
+// (criarDb) sobre um sql fake que guarda as linhas de extrato de mesmo total e responde ao select
+// da marcação como o banco responderia àquele WHERE — assim o teste pega o defeito real: o
+// pagamento marcado sumia do select e a outra despesa de mesmo total virava o candidato único.
+import { criarDb } from "./db.js";
+
+function sqlBancoFake(linhas) {
+  const chamadas = [];
+  const fn = (strings, ...values) => {
+    const text = strings.join("?");
+    chamadas.push({ text, values });
+    if (/update transacoes set computa_resumo = false/i.test(text)) {
+      for (const l of linhas) if (l.id === values[0]) { l.computa_resumo = false; l.conta_no_resumo = false; }
+      return Promise.resolve([]);
+    }
+    if (/select id/i.test(text) && /fonte = 'extrato'/i.test(text)) {
+      const pedeMarcadas = /computa_resumo = false/i.test(text);
+      return Promise.resolve(linhas.filter((l) => l.conta_no_resumo || (pedeMarcadas && !l.computa_resumo)).map((l) => ({ ...l })));
+    }
+    return Promise.resolve([{ id: "novo" }]); // insert ... returning id
+  };
+  fn.chamadas = chamadas;
+  fn.transaction = (queries) => Promise.resolve(queries.map(() => [{ id: "novo" }]));
+  return fn;
+}
+
+test("POST /api/importar/aplicar (fatura) duas vezes: só a 1ª marca o pagamento (C3, Exemplo)", async () => {
+  // fatura de agosto, R$ 500,00 (ano fictício). No banco, só linhas de extrato de mesmo total.
+  const fatura = { totalCents: 50000, ano: 2031, mes: 8 };
+  const linhas = [{ id: "pgAgo", data: "2031-08-10", computa_resumo: true, conta_no_resumo: true }];
+  const sql = sqlBancoFake(linhas);
+  const db = criarDb(sql);
+  const aplicarFatura = async (novos) => {
+    const req = reqApi("/api/importar/aplicar", "POST", { decisao: { novos, naoGasto: [], casados: [] }, fatura });
+    return (await handleApi(req, envApi, new URL(req.url), db)).json();
+  };
+  const updates = () => sql.chamadas.filter((c) => /update transacoes/i.test(c.text)).length;
+
+  const r1 = await aplicarFatura([{ descricao: "item", categoria_id: "cO", valorCents: 50000 }]);
+  assert.equal(r1.pagamentoMarcado, 1);
+  assert.equal(updates(), 1, "a 1ª aplicação marca o pagamento");
+
+  // o extrato de setembro entra depois com outra despesa de R$ 500,00, dentro da janela de 62 dias
+  linhas.push({ id: "despSet", data: "2031-09-15", computa_resumo: true, conta_no_resumo: true });
+  const antes = JSON.stringify(linhas);
+
+  // reaplicação: os itens voltam como jaTem pelo hash, então o lote não traz novos
+  const r2 = await aplicarFatura([]);
+  assert.equal(updates(), 1, "a 2ª aplicação não produz update nenhum");
+  assert.equal(r2.pagamentoMarcado, 0);
+  assert.equal(r2.pagamentoJaMarcado, true);
+  assert.equal(JSON.stringify(linhas), antes, "banco igual ao de uma aplicação só");
+  assert.equal(linhas.find((l) => l.id === "despSet").conta_no_resumo, true, "a despesa de setembro segue no resumo");
+});
