@@ -53,17 +53,22 @@ export function parseLancamentoTexto(texto) {
     if (dataISO === null && reData.test(tok)) { const d = parseData(tok); if (d) { dataISO = d; continue; } }
     semData.push(tok);
   }
-  // valor: prefere token com centavos (vírgula); senão inteiro puro
+  // valor: prefere token com centavos (vírgula); senão inteiro sem centavos — puro ("1500") ou só
+  // com milhar ("1.500"). No texto livre o ponto nunca é decimal (B5, 28/09): só conta como milhar
+  // seguido de exatamente 3 dígitos; "1.50" não casa e fica fora, em vez de parseBRtoCents tirar
+  // o ponto e ler R$ 150,00.
   let valorCents = null, idxValor = -1;
   for (let i = 0; i < semData.length; i++) {
     if (/,\d{2}$/.test(semData[i])) { const c = parseBRtoCents(semData[i]); if (c !== null) { valorCents = c; idxValor = i; break; } }
   }
   if (valorCents === null) {
     for (let i = 0; i < semData.length; i++) {
-      if (/^\d+$/.test(semData[i])) { valorCents = parseBRtoCents(semData[i]); idxValor = i; break; }
+      if (/^(?:R\$)?(?:\d+|\d{1,3}(?:\.\d{3})+)$/i.test(semData[i])) { valorCents = parseBRtoCents(semData[i]); idxValor = i; break; }
     }
   }
-  const descricao = semData.filter((_, i) => i !== idxValor).join(" ").trim();
+  // "R$ 15,50" com espaço: o "R$" solto logo antes do valor é parte dele, não da descrição (B5).
+  const idxMoeda = idxValor > 0 && /^R\$$/i.test(semData[idxValor - 1]) ? idxValor - 1 : -1;
+  const descricao = semData.filter((_, i) => i !== idxValor && i !== idxMoeda).join(" ").trim();
 
   if (!descricao || valorCents === null || dataISO === null)
     return { ok: false, erro: "faltam obrigatórios (descrição, valor e data)" };
