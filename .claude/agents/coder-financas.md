@@ -36,7 +36,7 @@ estão só as regras do papel.
 2. TDD: para cada frase do aceite, um teste que falha antes e passa depois. Teste em
    português, dizendo o porquê. Regra pura vai em módulo puro (`worker/*.js` sem
    banco/rede, testado em `worker/*.test.mjs`; `public/app.js` idem em
-   `public/app.test.mjs`; Python em `tools/*.py` + `tests/test_*.py`).
+   `tests/app.test.mjs` (nunca em `public/`: o que mora lá vai no deploy); Python em `tools/*.py` + `tests/test_*.py`).
 3. Respeite `Fora` à risca. Se o aceite só fecha mexendo em algo fora do `toca`
    declarado, ou exige uma escolha que o aceite não resolve, **pare**:
    `status: precisa_decisao`, com a escolha descrita. Não escolha pelo Caio.
