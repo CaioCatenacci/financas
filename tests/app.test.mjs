@@ -4,9 +4,9 @@ import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
-} from "./app.js";
+} from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
-import { reconstruirTexto } from "./pdf_extrair.js";
+import { reconstruirTexto } from "../public/pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
 import { parseFatura } from "../worker/fatura.js";
 
