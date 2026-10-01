@@ -6,3 +6,8 @@ compatibility_flags = ["nodejs_compat"]
 [assets]
 directory = "./public"
 binding = "ASSETS"
+
+# Workers Logs nativo: guarda o console.error do Worker para ler no painel depois,
+# sem precisar de `wrangler tail` aberto na hora (E6).
+[observability]
+enabled = true
