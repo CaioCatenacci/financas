@@ -4,7 +4,7 @@ import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
-  escolherCandidato, linhaEditavel, idsSelecionaveis,
+  escolherCandidato, linhaEditavel, idsSelecionaveis, esc,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto } from "../public/pdf_extrair.js";
@@ -701,4 +701,27 @@ test("B2: associação removida → o import da linha cai na categoria padrão, 
   const d2 = montarDecisao(p2, catalogo, "extrato");
   assert.equal(d2.novos[0].categoria_id, "cComp");
   assert.equal(d2.novos[0].origem_categoria, "regra");
+});
+
+// esc() é a única barreira entre texto vindo do banco/modelo e o innerHTML da tela:
+// se ela deixar passar < ou >, uma descrição maliciosa vira script rodando no app.
+test("esc neutraliza tag de script", () => {
+  assert.equal(esc("<script>alert(1)</script>"), "&lt;script&gt;alert(1)&lt;/script&gt;");
+});
+
+test("esc neutraliza img com onerror", () => {
+  assert.equal(esc("<img src=x onerror=alert(1)>"), "&lt;img src=x onerror=alert(1)&gt;");
+});
+
+test("esc escapa & e aspas (atributos entre aspas não podem ser fechados)", () => {
+  assert.equal(esc(`a & "b" 'c'`), "a &amp; &quot;b&quot; &#39;c&#39;");
+});
+
+test("esc devolve string vazia para null/undefined (campo opcional não vira 'null' na tela)", () => {
+  assert.equal(esc(null), "");
+  assert.equal(esc(undefined), "");
+});
+
+test("esc no exemplo do card: descrição de padaria com img injetada", () => {
+  assert.equal(esc("Padaria <img src=x onerror=alert(1)>"), "Padaria &lt;img src=x onerror=alert(1)&gt;");
 });

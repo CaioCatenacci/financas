@@ -311,6 +311,10 @@ export function resumoTexto(preview) {
     `ambíguos ${r.ambiguos ?? 0} · já tinha ${r.jaTem ?? 0}`;
 }
 
+// Escape de HTML para tudo que entra em innerHTML (descrição, nomes vindos do banco/modelo).
+// Mora fora do bloco do navegador para ser testada: uma regressão aqui quebra o npm test.
+export const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
 // ---------- app (só no browser) ----------
 if (typeof document !== "undefined") {
   const { extrairTextoPDF } = await import("/pdf_extrair.js");
@@ -323,7 +327,6 @@ if (typeof document !== "undefined") {
 
   const $ = (s, r = document) => r.querySelector(s);
   const BRL = n => "R$ " + Math.round(n).toLocaleString("pt-BR");
-  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const CAT = ["--c1", "--c2", "--c3", "--c4", "--c5", "--c6", "--c7"];
   const tip = $("#tip");
   const showTip = (e, html) => { tip.innerHTML = html; tip.style.opacity = 1; tip.style.left = (e.clientX + 12) + "px"; tip.style.top = (e.clientY + 12) + "px"; };
