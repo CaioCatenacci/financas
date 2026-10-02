@@ -1,17 +1,24 @@
 // ---------- funções puras (testadas em node) ----------
-// resumo.porPessoa vem do backend como linhas {pessoa, natureza, total} (uma por pessoa×natureza)
-// dobra em uma linha por pessoa. Mesmo formato de saída que agruparPorPessoa devolve (receita/despesa/saldo).
-// Ordena por despesa desc porque é um corte de gasto (quem gastou mais primeiro).
-export function agruparPorPessoa(rows) {
+// D6: resumo.porPessoaCategoria vem do backend como {pessoa, categoria, total_cents} (uma linha
+// por pessoa × categoria, só despesa que conta). Dobra no formato do sunburst: uma entrada por
+// pessoa (anel interno) com as categorias dela (anel externo). Soma em centavos inteiros —
+// Number() porque o ::bigint pode chegar string e "+" concatenaria. Ordem: maior gasto primeiro.
+export function anelPessoaCategoria(rows) {
   const mapa = new Map();
-  for (const r of rows) {
-    if (!mapa.has(r.pessoa)) mapa.set(r.pessoa, { pessoa: r.pessoa, receita: 0, despesa: 0, saldo: 0 });
+  for (const r of rows || []) {
+    if (!mapa.has(r.pessoa)) mapa.set(r.pessoa, { pessoa: r.pessoa, total_cents: 0, cats: new Map() });
     const o = mapa.get(r.pessoa);
-    const v = parseFloat(r.total);
-    if (r.natureza === "receita") o.receita += v; else o.despesa += v;
-    o.saldo = o.receita - o.despesa;
+    const v = Number(r.total_cents) || 0;
+    o.total_cents += v;
+    o.cats.set(r.categoria, (o.cats.get(r.categoria) || 0) + v);
   }
-  return [...mapa.values()].sort((a, b) => b.despesa - a.despesa);
+  return [...mapa.values()]
+    .map(o => ({
+      pessoa: o.pessoa, total_cents: o.total_cents,
+      categorias: [...o.cats.entries()].map(([categoria, total_cents]) => ({ categoria, total_cents }))
+        .sort((a, b) => b.total_cents - a.total_cents),
+    }))
+    .sort((a, b) => b.total_cents - a.total_cents);
 }
 
 export const centavosBR = numericStr => {
@@ -345,6 +352,8 @@ if (typeof document !== "undefined") {
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
     lancTudo: false,
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
+    sunburstPessoaFoco: null, // D6: pessoa focada no sunburst pessoa → categoria; separado do de cima
+                              // de propósito: focar um sunburst não mexe no outro
     expandidos: new Set(), // Inc 4.6: grupo_ids abertos na tabela (só de tela, não persiste)
     // B2: regras aprendidas (aba Ajustes). `assocEditando` é o índice em `associacoes` da linha
     // em edição — o DOM endereça por índice, nunca pela chave (a pix_cpf não vai pra tela).
@@ -653,43 +662,77 @@ if (typeof document !== "undefined") {
     });
   }
 
-  // ----- Inc 4.5 Tarefa 9: gasto por pessoa — rosca (mesma mecânica de arco do drawDonut),
-  // com o total das despesas no centro; legenda reusa .catlist/.catrow (mesmo estilo do
-  // donut de categorias) com valor e percentual por pessoa. Substitui a barra de drawPessoa.
-  function drawPessoaDonut() {
-    const rows = agruparPorPessoa(estado.resumo.porPessoa || []);
-    const el = $("#pessoa");
-    if (!rows.length) { el.innerHTML = `<p class="vazio">sem despesas no período</p>`; return; }
-    const cores = construirCores(rows.map(r => r.pessoa));
-    const total = rows.reduce((a, r) => a + r.despesa, 0);
-    const R = 64, r = 40, cx = 76, cy = 76;
-    let a0 = -Math.PI / 2, arcs = "";
-    rows.forEach((row, i) => {
-      const a1 = a0 + 2 * Math.PI * row.despesa / (total || 1);
-      const x0 = cx + R * Math.cos(a0), y0 = cy + R * Math.sin(a0), x1 = cx + R * Math.cos(a1), y1 = cy + R * Math.sin(a1);
-      const xi1 = cx + r * Math.cos(a1), yi1 = cy + r * Math.sin(a1), xi0 = cx + r * Math.cos(a0), yi0 = cy + r * Math.sin(a0);
-      const laf = (a1 - a0) > Math.PI ? 1 : 0;
-      arcs += `<path d="M${x0.toFixed(1)},${y0.toFixed(1)} A${R},${R} 0 ${laf} 1 ${x1.toFixed(1)},${y1.toFixed(1)} L${xi1.toFixed(1)},${yi1.toFixed(1)} A${r},${r} 0 ${laf} 0 ${xi0.toFixed(1)},${yi0.toFixed(1)} Z" stroke-width="2" data-i="${i}" style="fill:var(${cores[row.pessoa]});stroke:var(--surface)"/>`;
-      a0 = a1;
-    });
-    el.innerHTML = `<div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-      <svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gasto por pessoa">${arcs}
-        <text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
-        <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${BRL(total).replace("R$ ", "")}</text></svg>
-      <div class="catlist" id="pessoalist" style="flex:1;min-width:150px"></div>
-    </div>`;
-    el.querySelectorAll("path").forEach(p => {
-      p.addEventListener("mousemove", e => {
-        const row = rows[+p.dataset.i];
-        const pct = total ? (100 * row.despesa / total).toFixed(0) : "0";
-        showTip(e, `<b>${esc(row.pessoa)}</b><br>Despesa ${BRL(row.despesa)} · ${pct}%<br>Receita ${BRL(row.receita)}<br>Saldo ${BRL(row.saldo)}`);
+  // ----- D6: sunburst pessoa (anel interno) → categoria (anel externo) -----
+  // Substitui a rosca de pessoa. Mesma geometria e mecânica de foco de drawSunburst (fatia ou
+  // legenda foca; 2º clique ou centro desfoca), com estado próprio (estado.sunburstPessoaFoco).
+  // Cor: pessoa ganha paleta própria no anel interno; o anel externo usa a cor da categoria
+  // (corDe), a mesma do sunburst de categoria — a categoria tem a mesma cor nos dois gráficos.
+  function drawSunburstPessoa() {
+    const pessoas = anelPessoaCategoria(estado.resumo.porPessoaCategoria || []);
+    const el = $("#sbpessoa"), lst = $("#pessoalist");
+    if (!pessoas.length) { el.innerHTML = `<p class="vazio">sem despesas</p>`; lst.innerHTML = ""; estado.sunburstPessoaFoco = null; return; }
+    const cores = construirCores(pessoas.map(p => p.pessoa));
+
+    if (estado.sunburstPessoaFoco && !pessoas.some(p => p.pessoa === estado.sunburstPessoaFoco)) estado.sunburstPessoaFoco = null;
+    const foco = estado.sunburstPessoaFoco;
+    const view = foco ? pessoas.filter(p => p.pessoa === foco) : pessoas;
+    const total = view.reduce((a, p) => a + p.total_cents, 0) || 1;
+
+    const cx = 76, cy = 76;
+    const rP0 = 24, rP1 = 44; // anel interno: pessoa
+    const rC0 = 46, rC1 = 64; // anel externo: categoria
+
+    let a0 = -Math.PI / 2;
+    const itens = view.map(p => { const a1 = a0 + 2 * Math.PI * p.total_cents / total; const seg = { ...p, a0, a1 }; a0 = a1; return seg; });
+    const segs = itens.map(p => {
+      const span = p.a1 - p.a0, base = p.total_cents || 1;
+      let ini = p.a0;
+      return p.categorias.map((c, j) => {
+        const fim = j === p.categorias.length - 1 ? p.a1 : ini + span * (c.total_cents / base); // última fecha exato
+        const seg = { ...c, a0: ini, a1: fim }; ini = fim; return seg;
       });
-      p.addEventListener("mouseleave", hideTip);
     });
-    $("#pessoalist").innerHTML = rows.map(row => {
-      const pct = total ? (100 * row.despesa / total).toFixed(0) : "0";
-      return `<div class="catrow"><i class="dot" style="background:var(${cores[row.pessoa]})"></i><span class="nm">${esc(row.pessoa)}</span><span class="vl">${BRL(row.despesa)} · ${pct}%</span></div>`;
-    }).join("");
+
+    let pArcs = "", cArcs = "";
+    itens.forEach((p, i) => {
+      pArcs += `<path d="${arcoOuCheio(p.a0, p.a1, rP0, rP1, cx, cy)}" data-i="${i}" class="sbp-pes" style="fill:var(${cores[p.pessoa]});stroke:var(--surface);cursor:pointer" stroke-width="2"/>`;
+      segs[i].forEach((c, j) => {
+        cArcs += `<path d="${arcoOuCheio(c.a0, c.a1, rC0, rC1, cx, cy)}" data-pi="${i}" data-ci="${j}" class="sbp-cat" style="fill:var(${corDe(c.categoria)});stroke:var(--surface)" stroke-width="1.5" opacity="0.8"/>`;
+      });
+    });
+
+    const valor = BRL(total / 100).replace("R$ ", "");
+    const centro = foco
+      ? `<text x="76" y="70" text-anchor="middle" font-size="9" style="font-family:var(--mono);fill:var(--mut)">${esc(foco)}</text>
+         <text x="76" y="88" text-anchor="middle" font-size="14" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${valor}</text>`
+      : `<text x="76" y="72" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">total</text>
+         <text x="76" y="88" text-anchor="middle" font-size="15" font-weight="600" style="font-family:var(--mono);fill:var(--ink)">${valor}</text>`;
+
+    el.innerHTML = `<svg viewBox="0 0 152 152" width="152" height="152" role="img" aria-label="Gasto por pessoa e categoria">
+      ${cArcs}${pArcs}
+      <circle cx="76" cy="76" r="${rP0}" class="sbp-center" style="fill:transparent;cursor:${foco ? "pointer" : "default"}"/>
+      ${centro}</svg>`;
+
+    const alternar = nm => { estado.sunburstPessoaFoco = (estado.sunburstPessoaFoco === nm) ? null : nm; drawSunburstPessoa(); };
+    el.querySelectorAll(".sbp-pes").forEach(path => {
+      path.addEventListener("mousemove", e => { const p = itens[+path.dataset.i]; showTip(e, `<b>${esc(p.pessoa)}</b><br>${BRL(p.total_cents / 100)} · ${(100 * p.total_cents / total).toFixed(0)}%`); });
+      path.addEventListener("mouseleave", hideTip);
+      path.addEventListener("click", () => alternar(itens[+path.dataset.i].pessoa));
+    });
+    el.querySelectorAll(".sbp-cat").forEach(path => {
+      path.addEventListener("mousemove", e => {
+        const p = itens[+path.dataset.pi], c = segs[+path.dataset.pi][+path.dataset.ci];
+        showTip(e, `<b>${esc(p.pessoa)} › ${esc(c.categoria || "—")}</b><br>${BRL(c.total_cents / 100)} · ${(100 * c.total_cents / total).toFixed(0)}%`);
+      });
+      path.addEventListener("mouseleave", hideTip);
+    });
+    el.querySelector(".sbp-center").addEventListener("click", () => {
+      if (estado.sunburstPessoaFoco) { estado.sunburstPessoaFoco = null; drawSunburstPessoa(); }
+    });
+
+    // legenda lista todas as pessoas (não só a focada); clicar foca/desfoca, como no de categoria.
+    lst.innerHTML = pessoas.map(p => `<div class="catrow" data-nm="${esc(p.pessoa)}" style="cursor:pointer"><i class="dot" style="background:var(${cores[p.pessoa]})"></i><span class="nm" style="font-weight:${p.pessoa === foco ? 700 : 400}">${esc(p.pessoa)}</span><span class="vl">${BRL(p.total_cents / 100)}</span></div>`).join("");
+    lst.querySelectorAll(".catrow").forEach(row => row.addEventListener("click", () => alternar(row.dataset.nm)));
   }
 
   // ----- Inc 4.5 Tarefa 9: orçamento × realizado por categoria (bullet chart) -----
@@ -1422,7 +1465,7 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet(); drawRows();
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
@@ -1434,7 +1477,7 @@ if (typeof document !== "undefined") {
       const qs = `?mes=${estado.mes}`;
       const [resumo, metasMes] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs)]);
       estado.resumo = resumo; estado.metasMes = metasMes;
-      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet();
+      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet();
     } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
   }
 
@@ -1609,6 +1652,6 @@ if (typeof document !== "undefined") {
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }
-  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawPessoaDonut(); drawBullet(); } }, 150); });
+  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); } }, 150); });
   carregar();
 }
