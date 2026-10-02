@@ -308,6 +308,26 @@ export function rotuloCandidato(c) {
   return `${d}/${m}/${a} · ${c.descricao || "—"} · R$ ${centavosBR(String(c.valorCents / 100))}`;
 }
 
+// C1: tipos da aba Importar. O C6 é um extrato (fonte 'extrato' no banco — vocabulário fechado),
+// mas com parser próprio no Worker e a conta fixa 'c6' (entra na linha_hash).
+export const TIPOS_IMPORT = [
+  { valor: "extrato", rotulo: "Extrato Itaú (conta corrente)" },
+  { valor: "c6", rotulo: "Extrato C6 Bank" },
+  { valor: "fatura", rotulo: "Fatura (cartão)" },
+];
+
+// fonte gravada na transação: só 'extrato' ou 'fatura' (o C6 é extrato).
+export function fonteDoTipo(tipo) {
+  return tipo === "fatura" ? "fatura" : "extrato";
+}
+
+// corpo do POST /api/importar/preview para cada tipo.
+export function corpoPreview(tipo, texto, { conta = null, ano = null, mes = null } = {}) {
+  if (tipo === "c6") return { tipo: "c6", texto, conta: "c6" };
+  if (tipo === "fatura") return { tipo, texto, ano, mes };
+  return { tipo, texto, conta: conta || "conta" };
+}
+
 // "Aplicar" bloqueia só quando o checksum manda bloquear (extrato com diferença — o saldo não
 // fecha, algo foi mal lido). A fatura é AVISO (bloqueiaAplicar=false): IOF/encargos entram no
 // total sem serem lançamentos, então a diferença é esperada e não impede aplicar.
@@ -1312,29 +1332,51 @@ if (typeof document !== "undefined") {
         ? " · pagamento da fatura no extrato marcado fora do resumo"
         : ` · pagamento no extrato não marcado automaticamente (${r.pagamentoCandidatos} candidato(s)) — ajuste em Lançamentos se preciso`;
     }
+    if (r.repassesMarcados) extra += ` · ${r.repassesMarcados} repasse(s) entre contas próprias tirado(s) do resumo no Itaú`;
+    for (const a of r.repassesAvisos || []) {
+      extra += ` · repasse de R$ ${centavosBR(String(a.valorCents / 100))} em ${fmtData(a.data)} sem par único no Itaú (${a.candidatos} candidato(s)) — ajuste em Lançamentos se preciso`;
+    }
     return `<p class="impresultado">✅ gravados ${r.gravados} (${r.naoGasto} fora do resumo) · agrupados ${r.agrupados ?? 0}${extra}. Atualize Resumo/Lançamentos para ver.</p>`;
+  }
+
+  // C1: pede a senha do PDF num campo (type=password) dentro da aba; resolve com o texto digitado
+  // ou null se desistir. Nada é guardado: o campo some ao responder.
+  function pedirSenhaNoCampo(motivo) {
+    return new Promise(resolve => {
+      const box = $("#impsenhabox");
+      if (!box) { resolve(null); return; }
+      box.innerHTML = `<label>${esc(motivo)} — senha do PDF: <input id="impsenha" type="password" autocomplete="off"></label>
+        <button id="impsenhaok" class="chip" type="button">Abrir</button>
+        <button id="impsenhacancela" class="chip" type="button">Cancelar</button>`;
+      const fim = v => { box.innerHTML = ""; resolve(v); };
+      $("#impsenhaok").addEventListener("click", () => fim($("#impsenha").value || null));
+      $("#impsenhacancela").addEventListener("click", () => fim(null));
+      $("#impsenha").focus();
+    });
   }
 
   function drawImportar() {
     const st = estado.importar;
     const preview = st.preview;
     const isFatura = st.tipo === "fatura";
+    const isC6 = st.tipo === "c6";
 
     const controles = `
       <div class="card" style="margin-bottom:16px">
         <div class="cardhead"><div><h2>Importar extrato ou fatura (PDF)</h2><p class="sub">o PDF é lido no navegador; só o texto vai pro servidor</p></div></div>
         <div class="impctl">
           <select id="imptipo" aria-label="Tipo de importação">
-            <option value="extrato" ${!isFatura ? "selected" : ""}>Extrato (conta corrente)</option>
-            <option value="fatura" ${isFatura ? "selected" : ""}>Fatura (cartão)</option>
+            ${TIPOS_IMPORT.map(t => `<option value="${t.valor}" ${st.tipo === t.valor ? "selected" : ""}>${esc(t.rotulo)}</option>`).join("")}
           </select>
-          ${!isFatura
+          ${isC6 ? ""
+            : !isFatura
             ? `<input id="impconta" type="text" placeholder="conta (ex.: itau)" value="itau">`
             : `<input id="impano" type="text" inputmode="numeric" placeholder="ano" style="width:80px">
                <input id="impmes" type="text" inputmode="numeric" placeholder="mês" style="width:60px">`}
           <input id="imparquivo" type="file" accept="application/pdf">
           <button id="imppreview" class="chip" type="button">${st.carregando ? "Lendo…" : "Pré-visualizar"}</button>
         </div>
+        <div id="impsenhabox" class="impctl"></div>
       </div>`;
 
     if (!preview) {
@@ -1363,6 +1405,7 @@ if (typeof document !== "undefined") {
       <div class="card" style="margin-bottom:16px">
         <div class="cardhead"><div><h2>Preview</h2><p class="sub">${esc(resumoTexto(preview))}</p></div></div>
         ${checksumHtml}
+        ${(preview.avisos || []).map(a => `<p class="impchk impchk-warn">⚠ ${esc(a)}</p>`).join("")}
         ${resultado}
         <div style="margin-top:14px">
           <button id="impaplicar" class="chip" type="button" ${ok ? "" : "disabled"}>Aplicar</button>
@@ -1388,7 +1431,7 @@ if (typeof document !== "undefined") {
       let conta = null, ano = null, mes = null;
       if (st.tipo === "extrato") {
         conta = $("#impconta").value || "conta";
-      } else {
+      } else if (st.tipo === "fatura") {
         ano = parseInt($("#impano").value, 10); mes = parseInt($("#impmes").value, 10);
         if (!ano || !mes || mes < 1 || mes > 12) { alert("Preencha ano (ex.: 2025) e mês (1–12) da fatura."); return; }
         st.ano = ano; st.mes = mes;
@@ -1397,10 +1440,15 @@ if (typeof document !== "undefined") {
       try {
         const buf = await arquivo.arrayBuffer();
         const modo = st.tipo === "fatura" ? "layout" : "simples";
-        const texto = await extrairTextoPDF(buf, modo);
-        const corpo = { tipo: st.tipo, texto };
-        if (st.tipo === "extrato") corpo.conta = conta;
-        else { corpo.ano = ano; corpo.mes = mes; }
+        // C1: o PDF do C6 tem senha — tenta a do secret; se faltar ou não abrir, pede num campo.
+        // A senha fica só nesta chamada (nada de estado, localStorage ou cookie).
+        let opcoesSenha = {};
+        if (st.tipo === "c6") {
+          const senha = await apiGet("/api/importar/c6-senha").then(r => r.senha).catch(() => null);
+          opcoesSenha = { senha, pedirSenha: pedirSenhaNoCampo };
+        }
+        const texto = await extrairTextoPDF(buf, modo, opcoesSenha);
+        const corpo = corpoPreview(st.tipo, texto, { conta, ano, mes });
         st.preview = await apiPost("/api/importar/preview", corpo);
       } catch (err) {
         alert("Falha ao ler/pré-visualizar: " + err.message);
@@ -1412,8 +1460,9 @@ if (typeof document !== "undefined") {
     if (e.target.id === "impaplicar") {
       if (!podeAplicar(st.preview)) return;
       try {
-        const decisao = montarDecisao(st.preview, estado.catalogo, st.tipo);
-        const payload = { decisao };
+        const decisao = montarDecisao(st.preview, estado.catalogo, fonteDoTipo(st.tipo));
+        // tipo: no extrato (Itaú ou C6) o servidor pareia os repasses entre contas próprias (C1)
+        const payload = { decisao, tipo: st.tipo };
         // fatura: manda o total impresso + ano/mês pro servidor achar o pagamento no extrato e
         // marcá-lo fora do resumo (evita contar o gasto do cartão duas vezes).
         if (st.tipo === "fatura") payload.fatura = { totalCents: st.preview.totalCents, ano: st.ano, mes: st.mes };

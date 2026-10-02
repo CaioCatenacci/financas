@@ -81,13 +81,13 @@ export function reconstruirTexto(itens, modo = "simples") {
  * @param {"simples"|"layout"} modo
  * @returns {Promise<string>}
  */
-export async function extrairTextoPDF(arrayBuffer, modo) {
+export async function extrairTextoPDF(arrayBuffer, modo, opcoesSenha = {}) {
   const pdfjsLib = window.pdfjsLib;
   if (!pdfjsLib) {
     throw new Error("pdfjsLib não carregado (CDN)");
   }
 
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await abrirPdf(pdfjsLib, arrayBuffer, opcoesSenha);
   const textoPorPagina = [];
 
   for (let i = 1; i <= pdf.numPages; i++) {
@@ -102,4 +102,46 @@ export async function extrairTextoPDF(arrayBuffer, modo) {
   }
 
   return textoPorPagina.join("\n");
+}
+
+// C1: o PDF do C6 vem com senha. pdf.js lança PasswordException (name) quando a senha falta
+// (code 1, NEED_PASSWORD) ou não abre (code 2, INCORRECT_PASSWORD).
+function ehErroDeSenha(err) {
+  return !!err && (err.name === "PasswordException" || err.code === 1 || err.code === 2);
+}
+
+/**
+ * Abre o PDF no pdf.js tentando, em ordem: a `senha` recebida (a do secret C6_PDF_SENHA, se
+ * houver) e, se ela faltar ou não abrir, o que `pedirSenha()` devolver (o app pede num campo).
+ * `pedirSenha` devolve a senha digitada ou null (desistiu). Pura quanto a estado: a senha só vive
+ * nesta chamada — nada vai para localStorage, cookie ou mensagem de erro.
+ * Cada tentativa recebe uma CÓPIA dos bytes: o pdf.js transfere o buffer pro worker dele e o
+ * original fica inutilizável para uma segunda tentativa.
+ * @param {{getDocument: Function}} pdfjsLib
+ * @param {ArrayBuffer|Uint8Array} bytes
+ * @param {{senha?: string|null, pedirSenha?: (motivo: string) => Promise<string|null>}} opcoes
+ */
+export async function abrirPdf(pdfjsLib, bytes, { senha = null, pedirSenha = null } = {}) {
+  const original = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  const tentar = (password) => {
+    const opts = { data: original.slice() };
+    if (password) opts.password = password;
+    return pdfjsLib.getDocument(opts).promise;
+  };
+
+  let tentativa = senha || null;
+  let motivo = null;
+  for (let i = 0; i < 5; i++) {
+    try {
+      return await tentar(tentativa);
+    } catch (err) {
+      if (!ehErroDeSenha(err)) throw err;
+      motivo = tentativa ? "a senha não abriu o PDF" : "o PDF pede senha";
+      const digitada = pedirSenha ? await pedirSenha(motivo) : null;
+      if (!digitada) break;
+      tentativa = digitada;
+    }
+  }
+  // mensagem fixa: nunca ecoa a senha tentada
+  throw new Error(`Não abriu o PDF: ${motivo ?? "senha"}.`);
 }
