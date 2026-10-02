@@ -5,7 +5,8 @@
 // porque é o único ponto do fluxo que precisa gravar de fato.
 import { parseExtrato, conferirChecksum } from "./extrato.js";
 import { parseFatura } from "./fatura.js";
-import { classificar } from "./classificar.js";
+import { parseExtratoC6, ehRepasseProprio } from "./extrato_c6.js";
+import { classificar, normalizarDescritor } from "./classificar.js";
 import { linhaHash, reconciliarLinha } from "./reconciliar.js";
 
 function resumoVazio() {
@@ -29,6 +30,37 @@ function resumoVazio() {
 export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {}, existentes = [], hashes = [] } = {}) {
   void catalogo; // não usado aqui — ver docstring
   const { linhas, saldos } = parseExtrato(texto);
+  return previewDeLinhas(linhas, saldos, conta, { associacoes, existentes, hashes, classificarLinha: (l) => classificar(l.descricao, associacoes) });
+}
+
+const AVISO_SEM_CONTAS = "CONTAS_PROPRIAS não configurado: nenhuma saída Pix foi tratada como repasse entre contas próprias (todas contam no resumo).";
+
+/**
+ * Preview do extrato do C6 Bank: o mesmo fluxo do Itaú (checksum pelos "Saldo do dia", linha_hash
+ * com a conta 'c6', classifica e reconcilia), com o parser do C6 e uma regra a mais — a Saída Pix
+ * para uma conta própria (lista do secret CONTAS_PROPRIAS, já normalizada por lerContasProprias)
+ * é repasse e sai do resumo. Lista vazia → nada é repasse, e o preview avisa em `avisos`.
+ * O resto (Entrada = receita que conta; Pagamento = despesa que conta) é o classificar de sempre.
+ */
+export function montarPreviewExtratoC6(texto, { catalogo, associacoes = {}, existentes = [], hashes = [], contasProprias = [] } = {}) {
+  void catalogo;
+  const { linhas, saldos, semAno } = parseExtratoC6(texto);
+  const avisos = [];
+  if (!contasProprias.length) avisos.push(AVISO_SEM_CONTAS);
+  if (semAno) avisos.push(`${semAno} linha(s) sem o mês/ano no cabeçalho ficaram de fora.`);
+  const classificarLinha = (l) => {
+    if (ehRepasseProprio(l, contasProprias)) {
+      return { contraparteNome: normalizarDescritor(l.descricao), categoriaNome: null, subNome: null, computaResumo: false, categoriaOrg: "Transferências" };
+    }
+    return classificar(l.descricao, associacoes);
+  };
+  const p = previewDeLinhas(linhas, saldos, "c6", { associacoes, existentes, hashes, classificarLinha });
+  return { ...p, avisos };
+}
+
+// Núcleo comum dos extratos (Itaú e C6): checksum → por linha, linha_hash, classifica (pela
+// função recebida) e, quando conta no resumo, reconcilia contra `existentes`.
+function previewDeLinhas(linhas, saldos, conta, { existentes = [], hashes = [], classificarLinha }) {
   // extrato: o checksum é exato (saldos batem com os lançamentos) → se não bater, BLOQUEIA aplicar.
   const chk = conferirChecksum(linhas, saldos);
   const checksum = { ...chk, bloqueiaAplicar: !chk.ok };
@@ -54,7 +86,7 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
       continue;
     }
 
-    const info = classificar(l.descricao, associacoes);
+    const info = classificarLinha(l);
 
     let status;
     let matchId = null;

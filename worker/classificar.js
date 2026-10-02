@@ -6,12 +6,16 @@ import { normalizarNome } from "./contraparte.js";
 // Padrões de NÃO-GASTO (conservador; editável). Ordem importa.
 const _NAO_GASTO = [
   { rx: /\bAPLICACAO\b|PERSONDIF|COR COMP CDB|\bCDB\b|PERS BLACK/i, cat: "Investimentos" },
-  { rx: /PIX TRANSF (CAIO|PAOLA)\b/i, cat: "Transferências" }, // contas próprias
+  // conta própria da Paola. O "PIX TRANSF <Caio>…" saiu daqui (C1): no Itaú é a chegada da Wise
+  // (receita, conta por padrão); só sai do resumo quando pareia com um repasse do C6 —
+  // db.marcarRepassesEntreContas. Os importadores Python seguem com o padrão antigo (BACKLOG C6).
+  { rx: /PIX TRANSF PAOLA\b/i, cat: "Transferências" },
   { rx: /PAGAMENTO.*(CARTAO|FATURA)|DEB.*CARTAO/i, cat: "Fatura de cartão" },
 ];
 
 const _DATA_SUFIXO = /\s*\d{2}\/\d{2}\s*$/;            // '…30/12' no fim
-const _PREFIXOS = /^(PIX QRS|PIX TRANSF|PAG BOLETO|DA|TED|DOC)\b\s*/i; // DA = débito automático (Itaú)
+// DA = débito automático (Itaú); "Pix recebido de"/"Pix enviado para" = descrição do C6 (C1)
+const _PREFIXOS = /^(PIX QRS|PIX TRANSF|PIX RECEBIDO DE|PIX ENVIADO PARA|PAG BOLETO|DA|TED|DOC)\b\s*/i;
 
 /**
  * Remove sufixo de data, prefixos conhecidos, números longos, pontuação.
