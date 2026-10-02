@@ -92,6 +92,8 @@
   <section id="resumo">
     <div class="grid kpis" id="kpis" style="margin-bottom:16px"></div>
 
+    <!-- D6: linha 1 "Gasto no mês" + mês vs anterior; linha 2 só o waterfall; linha 3 os dois
+         sunbursts lado a lado (categoria → sub e pessoa → categoria, sem seletor); por fim o bullet. -->
     <div class="grid two" style="margin-bottom:16px">
       <div class="card">
         <div class="cardhead"><div><h2>Gasto no mês</h2><p class="sub">acumulado × orçamento</p></div></div>
@@ -100,20 +102,6 @@
           <span><i class="dot" style="background:var(--despesa)"></i>Gasto acumulado</span>
           <span><i class="dot" style="background:var(--dim)"></i>Orçamento</span>
         </div>
-      </div>
-      <div class="card">
-        <div class="cardhead"><div><h2>Gastos por categoria</h2><p class="sub">período selecionado · clique numa categoria para focar</p></div></div>
-        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
-          <div id="donut"></div>
-          <div class="catlist" id="catlist" style="flex:1;min-width:150px"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="grid two">
-      <div class="card">
-        <div class="cardhead"><div><h2>De onde vem, pra onde vai</h2><p class="sub">receita → grupos de despesa → saldo</p></div></div>
-        <div id="waterfall"></div>
       </div>
       <div class="card">
         <div class="cardhead"><div><h2>Gasto por categoria: mês vs anterior</h2><p class="sub">mês selecionado vs anterior</p></div></div>
@@ -125,9 +113,26 @@
       </div>
     </div>
 
-    <div class="card" style="margin-top:16px">
-      <div class="cardhead"><div><h2>Gasto por pessoa</h2><p class="sub">despesas do período por pessoa</p></div></div>
-      <div class="ppwrap" id="pessoa"></div>
+    <div class="card" style="margin-bottom:16px">
+      <div class="cardhead"><div><h2>De onde vem, pra onde vai</h2><p class="sub">receita → grupos de despesa → saldo</p></div></div>
+      <div id="waterfall"></div>
+    </div>
+
+    <div class="grid two">
+      <div class="card">
+        <div class="cardhead"><div><h2>Gastos por categoria</h2><p class="sub">período selecionado · clique numa categoria para focar</p></div></div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+          <div id="donut"></div>
+          <div class="catlist" id="catlist" style="flex:1;min-width:150px"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="cardhead"><div><h2>Gasto por pessoa e categoria</h2><p class="sub">despesas do mês · clique numa pessoa para focar</p></div></div>
+        <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+          <div id="sbpessoa"></div>
+          <div class="catlist" id="pessoalist" style="flex:1;min-width:150px"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Inc 4.5 Tarefa 9: bullet chart orçamento × realizado — largura total (fora do

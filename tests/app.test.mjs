@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
-  agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
+  anelPessoaCategoria, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
   escolherCandidato, linhaEditavel, idsSelecionaveis, esc,
 } from "../public/app.js";
@@ -44,18 +44,37 @@ test("construirWaterfall monta receita → despesas → saldo com lo/hi cumulati
   ]);
 });
 
-test("agruparPorPessoa dobra receita/despesa da mesma pessoa numa linha, ordenado por despesa desc", () => {
+test("anelPessoaCategoria dobra porPessoaCategoria em pessoa → categorias, e o anel interno fecha com a despesa do mês", () => {
+  // Exemplo do D6 (números inventados): Lucca 250,00 + 50,00; despesa sem pessoa_id 700,00.
+  // O anel interno precisa somar o mesmo que kpis.despesa — senão o gráfico mente sobre o mês.
   const rows = [
-    { pessoa: "Caio", natureza: "despesa", total: "100.00" },
-    { pessoa: "Caio", natureza: "receita", total: "300.00" },
-    { pessoa: "Ana", natureza: "despesa", total: "500.00" },
-    { pessoa: "—", natureza: "despesa", total: "20.00" }, // sem pessoa vinculada: rótulo vem pronto do backend
+    { pessoa: "sem pessoa", categoria: "Alimentação", total_cents: 70000 },
+    { pessoa: "Lucca", categoria: "Educação", total_cents: 25000 },
+    { pessoa: "Lucca", categoria: "Lazer", total_cents: 5000 },
   ];
-  assert.deepEqual(agruparPorPessoa(rows), [
-    { pessoa: "Ana", receita: 0, despesa: 500, saldo: -500 },
-    { pessoa: "Caio", receita: 300, despesa: 100, saldo: 200 },
-    { pessoa: "—", receita: 0, despesa: 20, saldo: -20 },
+  const kpis = { despesa: "1000.00" }; // como a API devolve: reais, string
+  const anel = anelPessoaCategoria(rows);
+  const somaInterno = anel.reduce((a, p) => a + p.total_cents, 0);
+  assert.equal(somaInterno, 100000);
+  assert.equal(somaInterno, Math.round(parseFloat(kpis.despesa) * 100));
+  // a fatia "sem pessoa" é visível (Decisão 2026-09-28), mesmo sendo a maior
+  assert.ok(anel.some(p => p.pessoa === "sem pessoa"));
+  assert.deepEqual(anel, [
+    { pessoa: "sem pessoa", total_cents: 70000, categorias: [{ categoria: "Alimentação", total_cents: 70000 }] },
+    { pessoa: "Lucca", total_cents: 30000, categorias: [
+      { categoria: "Educação", total_cents: 25000 }, { categoria: "Lazer", total_cents: 5000 },
+    ] },
   ]);
+});
+
+test("anelPessoaCategoria soma em centavos inteiros mesmo quando o driver devolve string", () => {
+  // ::bigint chega como string do Neon; somar string concatenaria ("100" + "50" = "10050").
+  const anel = anelPessoaCategoria([
+    { pessoa: "Ana", categoria: "Casa", total_cents: "100" },
+    { pessoa: "Ana", categoria: "Casa", total_cents: "50" },
+  ]);
+  assert.deepEqual(anel, [{ pessoa: "Ana", total_cents: 150, categorias: [{ categoria: "Casa", total_cents: 150 }] }]);
+  assert.deepEqual(anelPessoaCategoria([]), []);
 });
 
 test("subsDaCat filtra subcategorias do catálogo por categoria_id, devolvendo só {id,nome}", () => {

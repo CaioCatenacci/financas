@@ -281,6 +281,7 @@ function dbApiFake() {
       { pessoa: "Alice", natureza: "despesa", total: 300 },
       { pessoa: "Bob", natureza: "receita", total: 1000 },
     ],
+    resumoPorPessoaCategoria: async () => [{ pessoa: "Alice", categoria: "Casa", total_cents: 30000 }],
     atualizarTransacoesLote: async (ids, mudancas) => { dbApiFake._lote = { ids, mudancas }; return { atualizados: ids.length, regras: 0 }; },
   };
 }
@@ -643,6 +644,7 @@ function dbResumoFake() {
     resumoKPIs: async () => ({ receita: 1000, despesa: 500, reembolso: 0 }),
     resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
     resumoPorPessoa: async () => [{ pessoa: "Alice", natureza: "despesa", total: 300 }],
+    resumoPorPessoaCategoria: async (de, ate) => { estado.ppc = { de, ate }; return [{ pessoa: "Alice", categoria: "Casa", total_cents: 30000 }]; },
     resumoDiario: async (de, ateExcl) => { estado.de = de; estado.ateExcl = ateExcl; return [{ dia: "2026-09-01", total: 500 }]; },
     resumoMesVsAnterior: async (mesRef) => { estado.mesRef = mesRef; return [{ macro: "Casa", atual: 500, ant: 300 }]; },
   };
@@ -656,6 +658,16 @@ test("/api/resumo?mes= devolve diario e mesVsAnterior do mês", async () => {
   assert.ok(Array.isArray(data.diario), "tem diario");
   assert.ok(Array.isArray(data.mesVsAnterior), "tem mesVsAnterior");
   assert.equal(db.estado.mesRef, "2026-09"); // resumoMesVsAnterior recebeu o mês
+});
+
+test("/api/resumo?mes= devolve porPessoaCategoria do db, no intervalo do mês", async () => {
+  // o sunburst pessoa → categoria (D6) lê este corte; o intervalo é o mesmo dos kpis
+  const db = dbResumoFake();
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const req = new Request("http://localhost/api/resumo?mes=2026-09", { headers: { "Cookie": "token=token123" } });
+  const data = await (await handleApi(req, env, new URL(req.url), db)).json();
+  assert.deepEqual(data.porPessoaCategoria, [{ pessoa: "Alice", categoria: "Casa", total_cents: 30000 }]);
+  assert.deepEqual(db.estado.ppc, { de: "2026-09-01", ate: "2026-09-30" });
 });
 
 // ---------- Inc 4.6: grupos ----------

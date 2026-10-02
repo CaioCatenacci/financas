@@ -325,6 +325,25 @@ export function criarDb(sql) {
         order by 3 desc`;
     },
 
+    // D6: sunburst pessoa → categoria. Só despesa que conta (mesmo filtro de resumoKPIs) e
+    // left join nos dois lados: assim o conjunto de linhas é o mesmo da despesa dos KPIs e o
+    // anel interno fecha com ela. Despesa sem pessoa_id vira a fatia "sem pessoa" (visível de
+    // propósito, Decisão 2026-09-28). Centavos arredondados em SQL; ::bigint chega string do
+    // driver e vira number na borda.
+    async resumoPorPessoaCategoria(de, ate) {
+      const rows = await sql`
+        select coalesce(p.nome, 'sem pessoa') as pessoa, c.nome as categoria,
+               (round(sum(t.valor_final)*100))::bigint as total_cents
+        from transacoes t
+        left join pessoas p    on p.id = t.pessoa_id
+        left join categorias c on c.id = t.categoria_id
+        where t.natureza = 'despesa' and t.conta_no_resumo
+          and t.data >= ${de} and t.data <= ${ate}
+        group by 1, 2
+        order by 3 desc`;
+      return rows.map(r => ({ ...r, total_cents: Number(r.total_cents) }));
+    },
+
     // ---- Inc 4: planejamento (metas) ----
     async metasBaselines() {
       const rows = await sql`

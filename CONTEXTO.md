@@ -331,6 +331,17 @@ o total no centro, que a barra não tinha. O bullet é novo: fecha o loop entre 
 (onde o alvo é definido) e Resumo (onde o realizado é visto) — cada categoria com alvo vira
 uma linha "realizado vs. orçamento" de leitura rápida, sem precisar trocar de aba.
 
+**D6 (02/10/2026): a rosca de pessoa saiu; entrou o sunburst pessoa → categoria
+(`drawSunburstPessoa`).** A rosca dizia quanto cada pessoa gastou, mas não em quê. O corte novo
+`porPessoaCategoria` do `/api/resumo` (`db.resumoPorPessoaCategoria`: só despesa,
+`conta_no_resumo`, `left join` em pessoas e categorias, centavos em SQL) alimenta o anel interno
+(pessoa) e o externo (categoria); a dobra é pura (`anelPessoaCategoria`, `public/app.js`). A
+despesa sem `pessoa_id` vira a fatia "sem pessoa", visível de propósito mesmo sendo a maior; com
+o mesmo filtro dos KPIs, o anel interno fecha com `kpis.despesa`. O foco tem estado próprio
+(`estado.sunburstPessoaFoco`): focar um sunburst não mexe no outro. O Resumo ficou: KPIs; "Gasto
+no mês" + "mês vs anterior"; o waterfall sozinho; os dois sunbursts lado a lado (sem seletor);
+"Orçamento × realizado". O `porPessoa` segue na rota, sem consumidor no front.
+
 **Faseamento 1 → 2:** Fase 1 trocou o seletor de Lançamentos/Planejamento para `estado.mes`
 sem tocar no Resumo — que seguia com os presets antigos (`.period`/`periodoRange`) — pra não
 misturar duas mudanças (troca de filtro + reforma de gráficos) num commit só. Fase 2 fechou
