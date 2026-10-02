@@ -481,6 +481,39 @@ total tirada do resumo à mão também bloqueia a marcação automática (conser
 ajustar à mão). Gravar o vínculo pediria coluna nova. O `tools/importar_fatura.py` segue com o
 defeito (BACKLOG).
 
+## 17. Extrato do C6 Bank e a receita da Wise (C1, 02/10/2026)
+
+A conta PJ fica no C6 e recebe da Wise só o que paga as contas da empresa; o resto da conversão
+vai direto ao Itaú. **A receita é a chegada da Wise em reais, em qualquer conta** (Itaú ou C6), e o
+repasse entre contas próprias sai do resumo **nas duas pontas**. A Wise não é importada (C7).
+
+- **Parser:** `worker/extrato_c6.js` (puro) lê o PDF que o C6 exporta: cabeçalho de mês dá o ano,
+  linha `DD/MM [DD/MM] <Tipo> <Descrição> <valor>`, dígitos das datas separados por espaço ("1 0 /
+  1 0") juntados antes. **A natureza vem do tipo** (Entrada PIX = receita; Saída PIX e Pagamento =
+  despesa), não do sinal. "Saldo do dia" alimenta o mesmo checksum do Itaú (bloqueia aplicar).
+  O resto é o fluxo do Itaú (`montarPreviewExtratoC6`, conta `c6` na `linha_hash`, `fonte='extrato'`
+  — não há fonte nova). Tipo `c6` na aba Importar e no `/api/importar/preview`.
+- **Senha do PDF:** secret `C6_PDF_SENHA`, entregue ao app por `GET /api/importar/c6-senha` (atrás
+  do token, `no-store`; sem secret → `null`). O pdf.js abre no navegador (`abrirPdf`,
+  `public/pdf_extrair.js`); se faltar ou não abrir, o app pede num campo, sem guardar.
+- **Regra fixa no Itaú:** o nome do Caio saiu de `_NAO_GASTO` em `worker/classificar.js` — no Itaú
+  o `PIX TRANSF <Caio>…` é a chegada da Wise (nome cortado) e **conta como receita por padrão**. A
+  Paola fica no padrão fixo. Os importadores Python seguem com o padrão antigo (BACKLOG C6).
+- **Contas próprias:** nomes no secret `CONTAS_PROPRIAS` (separados por vírgula, `;` ou linha),
+  nunca no código (repositório público). Só o lado do C6 usa a lista: "Pix enviado para <nome da
+  lista>" é repasse e entra com `computa_resumo=false`. Sem o secret, nada é repasse e o preview
+  avisa (`avisos`).
+- **Duas pontas:** `db.marcarRepassesEntreContas(de, ate)` roda depois de aplicar qualquer extrato
+  (Itaú ou C6), na janela importada ±3 dias — serve às duas ordens. **Por que pelo formato da
+  descrição e não por coluna de conta:** "Pix enviado para …" só existe no C6 e "PIX TRANSF …" só
+  no Itaú; reconhecer assim dispensa migração, e uma entrada da Wise no próprio C6 ("Pix recebido
+  de …") nunca é candidata. **Por que não compara nome no Itaú:** lá a chegada da Wise e o repasse
+  têm a mesma descrição cortada; só valor exato e ±3 dias separam. Mesma disciplina de
+  `marcarPagamentoFaturaNaoGasto`: 1 candidato marca, 0 ou >1 avisa (`repassesAvisos`), entrada já
+  fora do resumo conta como já marcada. **Custo aceito:** uma chegada da Wise no Itaú de mesmo valor
+  de um repasse, dentro de ±3 dias, fica ambígua (ou é marcada, se for a única); e uma saída futura
+  do Itaú `PIX TRANSF <Caio>` passaria a contar como despesa (hoje não há nenhuma).
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
