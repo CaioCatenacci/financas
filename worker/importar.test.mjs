@@ -38,7 +38,7 @@ test("preview extrato: checksum inválido sinaliza mas ainda devolve preview", (
 
 test("preview extrato: linha não-gasto não computa resumo e não reconcilia", () => {
   const txtNaoGasto = `10/12/2025 SALDO DO DIA 8.876,46
-10/12/2025 PIX TRANSF CAIO 10/12 -500,00
+10/12/2025 PIX TRANSF PAOLA 10/12 -500,00
 09/12/2025 SALDO DO DIA 9.376,46`;
   const p = montarPreviewExtrato(txtNaoGasto, "c1", {
     catalogo, associacoes: {},

@@ -523,6 +523,54 @@ export function criarDb(sql) {
       return { marcados: 0, candidatos: candidatos.length };
     },
 
+    // C1 — as duas pontas do repasse entre contas próprias. A saída Pix do C6 para conta própria
+    // já entra fora do resumo (computa_resumo=false, decidido no preview pela lista do secret
+    // CONTAS_PROPRIAS); a chegada dela no Itaú também tem que sair, senão o repasse vira receita.
+    // Roda depois de aplicar QUALQUER extrato (C6 ou Itaú), sobre a janela importada, então serve
+    // às duas ordens: o C6 depois do Itaú acha a entrada já gravada; o Itaú depois do C6 acha o
+    // repasse já gravado.
+    // O banco é reconhecido pelo formato da descrição, sem coluna nova: "Pix enviado para …" é o
+    // C6; "PIX TRANSF …" é o Itaú. Do lado do Itaú não se compara nome nenhum (lá ele vem cortado,
+    // e a chegada da Wise e o repasse têm a mesma cara) — só valor exato e ±3 dias. Por isso uma
+    // entrada da Wise no próprio C6 ("Pix recebido de …") nunca é candidata.
+    // Mesma disciplina de marcarPagamentoFaturaNaoGasto: 1 candidato marca; 0 ou >1 não mexe e
+    // volta como aviso; uma entrada do Itaú de mesmo valor na janela que já está fora do resumo
+    // conta como já marcada (reimportar não tira outra linha do resumo).
+    async marcarRepassesEntreContas(de, ate) {
+      const desloca = (iso, n) => { const d = new Date(iso + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+      const repasses = await sql`
+        select id, to_char(data,'YYYY-MM-DD') as data, (round(valor_final*100))::bigint as valor_cents
+        from transacoes
+        where fonte = 'extrato' and natureza = 'despesa' and computa_resumo = false
+          and descricao ilike 'Pix enviado para %'
+          and data between ${de} and ${ate}
+        order by data, id`;
+      let marcados = 0, jaMarcados = 0;
+      const avisos = [];
+      const usados = new Set(); // um repasse marca uma entrada; a mesma entrada não serve a dois
+      for (const r of repasses) {
+        const valorCents = Number(r.valor_cents);
+        const rows = await sql`
+          select id, computa_resumo from transacoes
+          where fonte = 'extrato' and natureza = 'receita'
+            and descricao ilike 'PIX TRANSF %'
+            and (conta_no_resumo = true or computa_resumo = false)
+            and (round(valor_final*100))::bigint = ${valorCents}
+            and data between ${desloca(r.data, -3)} and ${desloca(r.data, 3)}`;
+        const ja = rows.filter((x) => x.computa_resumo === false && !usados.has(String(x.id)));
+        const cand = rows.filter((x) => x.computa_resumo !== false);
+        if (ja.length) { usados.add(String(ja[0].id)); jaMarcados++; continue; }
+        if (cand.length === 1) {
+          await sql`update transacoes set computa_resumo = false where id = ${cand[0].id}`;
+          usados.add(String(cand[0].id));
+          marcados++;
+          continue;
+        }
+        avisos.push({ data: r.data, valorCents, candidatos: cand.length });
+      }
+      return { marcados, jaMarcados, avisos };
+    },
+
     // associações aprendidas por nome, no formato que classificar() espera: dict chaveado por
     // normalizarNome(chave) -> { categoriaNome, subNome } (camelCase — espelha
     // tools/importar_extrato.py::carregar_associacoes, mas com chaves de valor em camelCase).

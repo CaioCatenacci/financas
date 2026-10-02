@@ -5,9 +5,10 @@ import {
   anelPessoaCategoria, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
   escolherCandidato, rotuloCandidato, linhaEditavel, idsSelecionaveis, esc,
+  TIPOS_IMPORT, fonteDoTipo, corpoPreview,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
-import { reconstruirTexto } from "../public/pdf_extrair.js";
+import { reconstruirTexto, abrirPdf } from "../public/pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
 import { parseFatura } from "../worker/fatura.js";
 
@@ -814,4 +815,89 @@ test("esc devolve string vazia para null/undefined (campo opcional não vira 'nu
 
 test("esc no exemplo do card: descrição de padaria com img injetada", () => {
   assert.equal(esc("Padaria <img src=x onerror=alert(1)>"), "Padaria &lt;img src=x onerror=alert(1)&gt;");
+});
+
+// ---- C1: extrato do C6 Bank na aba Importar ----
+test("C1: a aba Importar oferece 'Extrato C6 Bank', que manda tipo e conta 'c6' ao preview", () => {
+  const c6 = TIPOS_IMPORT.find((t) => t.valor === "c6");
+  assert.equal(c6.rotulo, "Extrato C6 Bank");
+  assert.deepEqual(corpoPreview("c6", "txt", { conta: "itau" }), { tipo: "c6", texto: "txt", conta: "c6" });
+  // os outros tipos seguem como antes
+  assert.deepEqual(corpoPreview("extrato", "txt", { conta: "itau" }), { tipo: "extrato", texto: "txt", conta: "itau" });
+  assert.deepEqual(corpoPreview("fatura", "txt", { ano: 2031, mes: 9 }), { tipo: "fatura", texto: "txt", ano: 2031, mes: 9 });
+});
+
+test("C1: a linha do C6 grava fonte 'extrato' (vocabulário fechado: não existe fonte 'c6')", () => {
+  assert.equal(fonteDoTipo("c6"), "extrato");
+  assert.equal(fonteDoTipo("extrato"), "extrato");
+  assert.equal(fonteDoTipo("fatura"), "fatura");
+  const preview = { itens: [{ status: "novo", data: "2031-09-10", natureza: "receita", valorCents: 100, descricao: "x", computaResumo: true, linhaHash: "h" }] };
+  const d = montarDecisao(preview, { categorias: [{ id: "p", nome: "Não Identificado", padrao: true }], subcategorias: [] }, fonteDoTipo("c6"));
+  assert.equal(d.novos[0].fonte, "extrato");
+});
+
+// pdf.js falso: só abre com a senha certa; lança PasswordException como o de verdade.
+const SENHA_PDF = "senha-ficticia";
+function pdfjsFalso() {
+  const chamadas = [];
+  return {
+    chamadas,
+    getDocument(opts) {
+      chamadas.push(opts);
+      if (opts.password === SENHA_PDF) return { promise: Promise.resolve({ numPages: 1 }) };
+      const err = new Error(opts.password ? "Incorrect Password" : "No password given");
+      err.name = "PasswordException";
+      err.code = opts.password ? 2 : 1;
+      return { promise: Promise.reject(err) };
+    },
+  };
+}
+// localStorage/cookie "armados": qualquer tentativa de guardar a senha estoura o teste.
+function semPersistencia(fn) {
+  const antes = { ls: globalThis.localStorage };
+  globalThis.localStorage = { setItem: () => { throw new Error("guardou em localStorage"); } };
+  return fn().finally(() => { globalThis.localStorage = antes.ls; });
+}
+
+test("C1: abrirPdf abre com a senha do secret, passando {data, password} ao getDocument", async () => {
+  const lib = pdfjsFalso();
+  const pdf = await semPersistencia(() => abrirPdf(lib, new Uint8Array([1, 2, 3]), { senha: SENHA_PDF }));
+  assert.equal(pdf.numPages, 1);
+  assert.equal(lib.chamadas.length, 1);
+  assert.equal(lib.chamadas[0].password, SENHA_PDF);
+  assert.deepEqual([...lib.chamadas[0].data], [1, 2, 3]);
+});
+
+test("C1: senha do secret errada → pede no campo e abre com a digitada (cada tentativa com cópia dos bytes)", async () => {
+  const lib = pdfjsFalso();
+  const motivos = [];
+  const pdf = await semPersistencia(() => abrirPdf(lib, new Uint8Array([9]), {
+    senha: "errada", pedirSenha: async (m) => { motivos.push(m); return SENHA_PDF; },
+  }));
+  assert.equal(pdf.numPages, 1);
+  assert.equal(motivos.length, 1);
+  assert.match(motivos[0], /não abriu/);
+  assert.notEqual(lib.chamadas[0].data, lib.chamadas[1].data, "o pdf.js transfere o buffer; a 2ª tentativa precisa de outro");
+});
+
+test("C1: sem senha do secret → pede no campo; desistir dá erro que não contém a senha tentada", async () => {
+  const lib = pdfjsFalso();
+  let pedidos = 0;
+  const pdfSemSecret = await abrirPdf(lib, new Uint8Array([1]), { senha: null, pedirSenha: async () => { pedidos++; return SENHA_PDF; } });
+  assert.equal(pdfSemSecret.numPages, 1);
+  assert.equal(pedidos, 1);
+  assert.equal(lib.chamadas[0].password, undefined, "sem secret, a 1ª tentativa vai sem senha");
+
+  const lib2 = pdfjsFalso();
+  await assert.rejects(
+    () => semPersistencia(() => abrirPdf(lib2, new Uint8Array([1]), { senha: "errada-do-secret", pedirSenha: async () => null })),
+    (err) => !err.message.includes("errada-do-secret") && /Não abriu o PDF/.test(err.message),
+  );
+});
+
+test("C1: erro do pdf.js que não é de senha sobe como está (não vira pedido de senha)", async () => {
+  const lib = { getDocument: () => ({ promise: Promise.reject(new Error("PDF corrompido")) }) };
+  let pediu = false;
+  await assert.rejects(() => abrirPdf(lib, new Uint8Array([1]), { pedirSenha: async () => { pediu = true; return "x"; } }), /corrompido/);
+  assert.equal(pediu, false);
 });

@@ -10,8 +10,9 @@ import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js"
 import { parseAprender } from "./teach.js";
 import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
-import { montarPreviewExtrato, montarPreviewFatura, aplicar, conferirPreviaCasados } from "./importar.js";
+import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
+import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { parseFatura } from "./fatura.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { ehUuid } from "./validar.js";
@@ -429,6 +430,13 @@ export async function handleApi(request, env, url, dbOpt = null) {
   }
 
   // ---- importar extrato/fatura (Incremento 3) ----
+  // C1: a senha do PDF do C6 (secret C6_PDF_SENHA) vai pro app, que abre o PDF no navegador. Está
+  // atrás do token como toda /api/*. Sem o secret → senha null (o app pede num campo); nunca erro,
+  // e a senha não vai pra log nem pra mensagem de erro.
+  if (url.pathname === "/api/importar/c6-senha" && request.method === "GET") {
+    const senha = typeof env.C6_PDF_SENHA === "string" && env.C6_PDF_SENHA ? env.C6_PDF_SENHA : null;
+    return new Response(JSON.stringify({ senha }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  }
   if (url.pathname === "/api/importar/preview" && request.method === "POST") {
    try {
     const b = await body();
@@ -451,6 +459,22 @@ export async function handleApi(request, env, url, dbOpt = null) {
       const existentes = await db.transacoesNaJanela(deJanela, ateJanela);
       const hashes = await db.hashesNaJanela(deJanela, ateJanela);
       return j(montarPreviewExtrato(b.texto, b.conta, { catalogo, associacoes, existentes, hashes }));
+    }
+
+    if (b.tipo === "c6") {
+      // mesmo fluxo do Itaú, com o parser do C6 e a conta fixa 'c6' (entra na linha_hash)
+      const { linhas } = parseExtratoC6(b.texto);
+      const hoje = new Date().toISOString().slice(0, 10);
+      let de = hoje, ate = hoje;
+      if (linhas.length) {
+        de = linhas.reduce((min, l) => (l.data < min ? l.data : min), linhas[0].data);
+        ate = linhas.reduce((max, l) => (l.data > max ? l.data : max), linhas[0].data);
+      }
+      const deJanela = deslocaDias(de, -3), ateJanela = deslocaDias(ate, 3);
+      const existentes = await db.transacoesNaJanela(deJanela, ateJanela);
+      const hashes = await db.hashesNaJanela(deJanela, ateJanela);
+      const contasProprias = lerContasProprias(env.CONTAS_PROPRIAS);
+      return j(montarPreviewExtratoC6(b.texto, { catalogo, associacoes, existentes, hashes, contasProprias }));
     }
 
     if (b.tipo === "fatura") {
@@ -501,6 +525,18 @@ export async function handleApi(request, env, url, dbOpt = null) {
       r.pagamentoMarcado = pg.marcados;
       r.pagamentoCandidatos = pg.candidatos;
       if (pg.jaMarcado) r.pagamentoJaMarcado = true; // C3: reaplicação; o app de hoje ignora
+    }
+    // C1: depois de qualquer extrato (Itaú ou C6), pareia os repasses do C6 para conta própria
+    // com a chegada no Itaú, na janela do que foi importado (±3 dias) — serve às duas ordens.
+    if (b.tipo === "extrato" || b.tipo === "c6") {
+      const d = b.decisao || {};
+      const datas = [...(d.novos || []), ...(d.naoGasto || []), ...(d.casados || []).map((c) => c.linha || {})]
+        .map((t) => t.dataISO).filter(Boolean).sort();
+      if (datas.length) {
+        const rp = await db.marcarRepassesEntreContas(deslocaDias(datas[0], -3), deslocaDias(datas[datas.length - 1], 3));
+        r.repassesMarcados = rp.marcados;
+        r.repassesAvisos = rp.avisos;
+      }
     }
     return j(r);
    } catch (err) {

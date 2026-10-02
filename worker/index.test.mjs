@@ -1123,3 +1123,84 @@ test("POST /api/importar/aplicar (fatura) duas vezes: só a 1ª marca o pagament
   assert.equal(JSON.stringify(linhas), antes, "banco igual ao de uma aplicação só");
   assert.equal(linhas.find((l) => l.id === "despSet").conta_no_resumo, true, "a despesa de setembro segue no resumo");
 });
+
+// ---- C1: extrato do C6 Bank ----
+// Senha e nomes inventados: o repositório é público.
+const SENHA_FAKE = "senha-ficticia-123";
+
+test("GET /api/importar/c6-senha sem token → 401 e não entrega a senha", async () => {
+  const req = new Request("http://localhost/api/importar/c6-senha");
+  const r = await handleApi(req, { ...envApi, C6_PDF_SENHA: SENHA_FAKE }, new URL(req.url), dbImportarFake());
+  assert.equal(r.status, 401);
+  assert.ok(!(await r.text()).includes(SENHA_FAKE));
+});
+
+test("GET /api/importar/c6-senha com token devolve o secret C6_PDF_SENHA (sem cache)", async () => {
+  const req = reqApi("/api/importar/c6-senha", "GET");
+  const r = await handleApi(req, { ...envApi, C6_PDF_SENHA: SENHA_FAKE }, new URL(req.url), dbImportarFake());
+  assert.equal(r.status, 200);
+  assert.equal(r.headers.get("cache-control"), "no-store");
+  assert.deepEqual(await r.json(), { senha: SENHA_FAKE });
+});
+
+test("GET /api/importar/c6-senha sem o secret devolve senha null, sem erro (o app pede num campo)", async () => {
+  const req = reqApi("/api/importar/c6-senha", "GET");
+  const r = await handleApi(req, envApi, new URL(req.url), dbImportarFake());
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { senha: null });
+});
+
+test("POST /api/importar/preview com erro não ecoa a senha do C6 na mensagem", async () => {
+  const db = { ...dbImportarFake(), catalogo: async () => { throw new Error("banco fora"); } };
+  const req = reqApi("/api/importar/preview", "POST", { tipo: "c6", texto: "x" });
+  const r = await handleApi(req, { ...envApi, C6_PDF_SENHA: SENHA_FAKE }, new URL(req.url), db);
+  assert.equal(r.status, 500);
+  assert.ok(!(await r.text()).includes(SENHA_FAKE));
+});
+
+const TXT_C6 = `Setembro 2031
+0 9 / 0 9 0 9 / 0 9 Saldo do dia R$ 0,00
+1 0 / 0 9 1 0 / 0 9 Entrada PIX Pix recebido de CAMBIO FICTICIO LTDA R$ 1.000,00
+1 1 / 0 9 1 1 / 0 9 Saída PIX Pix enviado para FULANO DE TAL -R$ 400,00
+1 1 / 0 9 1 1 / 0 9 Saldo do dia R$ 600,00`;
+
+test("POST /api/importar/preview tipo c6: usa CONTAS_PROPRIAS do env, janela ±3 dias, sem aviso", async () => {
+  const janelas = [];
+  const db = { ...dbImportarFake(), transacoesNaJanela: async (de, ate) => { janelas.push([de, ate]); return []; } };
+  const req = reqApi("/api/importar/preview", "POST", { tipo: "c6", texto: TXT_C6, conta: "c6" });
+  const data = await (await handleApi(req, { ...envApi, CONTAS_PROPRIAS: "Fulano de Tal" }, new URL(req.url), db)).json();
+  assert.equal(data.checksum.bloqueiaAplicar, false);
+  assert.deepEqual(janelas, [["2031-09-07", "2031-09-14"]]);
+  const sai = data.itens.find((i) => i.tipo === "Saída PIX");
+  assert.equal(sai.computaResumo, false);
+  assert.equal(data.itens.find((i) => i.tipo === "Entrada PIX").computaResumo, true);
+  assert.deepEqual(data.avisos, []);
+});
+
+test("POST /api/importar/preview tipo c6 sem o secret CONTAS_PROPRIAS: nada é repasse e a resposta avisa", async () => {
+  const req = reqApi("/api/importar/preview", "POST", { tipo: "c6", texto: TXT_C6 });
+  const data = await (await handleApi(req, envApi, new URL(req.url), dbImportarFake())).json();
+  assert.ok(data.itens.every((i) => i.computaResumo === true));
+  assert.equal(data.avisos.length, 1);
+});
+
+test("POST /api/importar/aplicar tipo c6 ou extrato pareia os repasses na janela importada ±3 dias", async () => {
+  for (const tipo of ["c6", "extrato"]) {
+    const chamadas = [];
+    const db = { ...dbImportarFake(), marcarRepassesEntreContas: async (de, ate) => { chamadas.push([de, ate]); return { marcados: 1, jaMarcados: 0, avisos: [] }; } };
+    const decisao = { novos: [{ dataISO: "2031-09-12" }], naoGasto: [{ dataISO: "2031-09-10" }], casados: [] };
+    const req = reqApi("/api/importar/aplicar", "POST", { decisao, tipo });
+    const data = await (await handleApi(req, envApi, new URL(req.url), db)).json();
+    assert.deepEqual(chamadas, [["2031-09-07", "2031-09-15"]], tipo);
+    assert.equal(data.repassesMarcados, 1);
+    assert.deepEqual(data.repassesAvisos, []);
+  }
+});
+
+test("POST /api/importar/aplicar de fatura não pareia repasse (só extrato tem repasse)", async () => {
+  let chamou = false;
+  const db = { ...dbImportarFake(), marcarRepassesEntreContas: async () => { chamou = true; return { marcados: 0, jaMarcados: 0, avisos: [] }; } };
+  const req = reqApi("/api/importar/aplicar", "POST", { decisao: { novos: [{ dataISO: "2031-09-12" }], naoGasto: [], casados: [] }, tipo: "fatura" });
+  await handleApi(req, envApi, new URL(req.url), db);
+  assert.equal(chamou, false);
+});

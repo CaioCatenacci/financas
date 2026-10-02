@@ -819,3 +819,147 @@ test("apagarAssociacao apaga por (chave, tipo_chave)", async () => {
   assert.match(sql.chamadas[0].text, /delete from associacoes\s+where chave = \? and tipo_chave = \?/i);
   assert.deepEqual(sql.chamadas[0].values, ["PADARIA EXEMPLO", "nome"]);
 });
+
+// ---- C1: as duas pontas do repasse entre contas próprias (C6 → Itaú) ----
+// Banco em memória que responde às duas consultas de marcarRepassesEntreContas como o Postgres
+// responderia àquele WHERE. O texto da query também é conferido: é ele que garante, no banco de
+// verdade, que o Itaú é reconhecido pelo formato ("PIX TRANSF …") e o C6 por "Pix enviado para …".
+// Números e nomes inventados (ano fictício).
+function bancoRepasses(linhas) {
+  const chamadas = [];
+  const ilike = (desc, prefixo) => desc.toLowerCase().startsWith(prefixo.toLowerCase());
+  const fn = (strings, ...values) => {
+    const text = strings.join("?");
+    chamadas.push({ text, values });
+    if (/^\s*update transacoes set computa_resumo = false/i.test(text)) {
+      for (const l of linhas) if (l.id === values[0]) l.computa_resumo = false;
+      return Promise.resolve([]);
+    }
+    if (/ilike 'Pix enviado para %'/.test(text)) {
+      const [de, ate] = values;
+      return Promise.resolve(linhas
+        .filter((l) => l.fonte === "extrato" && l.natureza === "despesa" && l.computa_resumo === false
+          && ilike(l.descricao, "Pix enviado para ") && l.data >= de && l.data <= ate)
+        .map((l) => ({ id: l.id, data: l.data, valor_cents: String(l.valorCents) })));
+    }
+    if (/ilike 'PIX TRANSF %'/.test(text)) {
+      const [v, de, ate] = values;
+      return Promise.resolve(linhas
+        .filter((l) => l.fonte === "extrato" && l.natureza === "receita" && ilike(l.descricao, "PIX TRANSF ")
+          && l.valorCents === v && l.data >= de && l.data <= ate)
+        .map((l) => ({ id: l.id, computa_resumo: l.computa_resumo })));
+    }
+    return Promise.resolve([]);
+  };
+  fn.chamadas = chamadas;
+  return fn;
+}
+const itau = (id, data, valorCents, extra = {}) => ({ id, fonte: "extrato", natureza: "receita", descricao: "PIX TRANSF FULANO 11/09", data, valorCents, computa_resumo: true, ...extra });
+const repasseC6 = (id, data, valorCents) => ({ id, fonte: "extrato", natureza: "despesa", descricao: "Pix enviado para FULANO DE TAL", data, valorCents, computa_resumo: false });
+const updatesDe = (sql) => sql.chamadas.filter((c) => /update transacoes/i.test(c.text));
+
+test("marcarRepassesEntreContas: a query reconhece o banco pelo formato e não compara nome no Itaú", async () => {
+  const sql = bancoRepasses([repasseC6("r1", "2031-09-11", 40000), itau("i1", "2031-09-12", 40000)]);
+  await criarDb(sql).marcarRepassesEntreContas("2031-09-01", "2031-09-30");
+  const [qRepasse, qItau] = sql.chamadas;
+  assert.match(qRepasse.text, /descricao ilike 'Pix enviado para %'/);
+  assert.match(qRepasse.text, /computa_resumo = false/);
+  assert.match(qItau.text, /descricao ilike 'PIX TRANSF %'/);
+  assert.match(qItau.text, /natureza = 'receita'/);
+  assert.match(qItau.text, /conta_no_resumo = true or computa_resumo = false/);
+  // no Itaú só entram valor e janela ±3 dias — nenhum nome vai como parâmetro
+  assert.deepEqual(qItau.values, [40000, "2031-09-08", "2031-09-14"]);
+});
+
+test("marcarRepassesEntreContas: C6 importado depois do Itaú — a entrada já gravada sai do resumo", async () => {
+  // o Itaú entrou antes (a entrada conta); o C6 chega com o repasse e a marcação roda
+  const linhas = [itau("i1", "2031-09-12", 40000), itau("wise", "2031-09-10", 900000)];
+  linhas.push(repasseC6("r1", "2031-09-11", 40000));
+  const sql = bancoRepasses(linhas);
+  const r = await criarDb(sql).marcarRepassesEntreContas("2031-09-08", "2031-09-14");
+  assert.deepEqual(r, { marcados: 1, jaMarcados: 0, avisos: [] });
+  assert.equal(linhas.find((l) => l.id === "i1").computa_resumo, false);
+  // a chegada da Wise (outro valor) segue contando como receita
+  assert.equal(linhas.find((l) => l.id === "wise").computa_resumo, true);
+});
+
+test("marcarRepassesEntreContas: Itaú importado depois do C6 — o repasse já gravado acha a entrada nova", async () => {
+  const linhas = [repasseC6("r1", "2031-09-11", 40000)];
+  linhas.push(itau("i1", "2031-09-14", 40000)); // 3 dias depois: ainda na janela
+  const sql = bancoRepasses(linhas);
+  const r = await criarDb(sql).marcarRepassesEntreContas("2031-09-11", "2031-09-17");
+  assert.equal(r.marcados, 1);
+  assert.equal(linhas.find((l) => l.id === "i1").computa_resumo, false);
+});
+
+test("marcarRepassesEntreContas: 0 candidatos não marca e avisa", async () => {
+  const linhas = [repasseC6("r1", "2031-09-11", 40000), itau("longe", "2031-09-20", 40000)];
+  const sql = bancoRepasses(linhas);
+  const r = await criarDb(sql).marcarRepassesEntreContas("2031-09-01", "2031-09-30");
+  assert.equal(updatesDe(sql).length, 0);
+  assert.deepEqual(r, { marcados: 0, jaMarcados: 0, avisos: [{ data: "2031-09-11", valorCents: 40000, candidatos: 0 }] });
+});
+
+test("marcarRepassesEntreContas: >1 candidato não marca e avisa (ambíguo, fica para o Caio)", async () => {
+  const linhas = [repasseC6("r1", "2031-09-11", 40000), itau("a", "2031-09-10", 40000), itau("b", "2031-09-12", 40000)];
+  const sql = bancoRepasses(linhas);
+  const r = await criarDb(sql).marcarRepassesEntreContas("2031-09-01", "2031-09-30");
+  assert.equal(updatesDe(sql).length, 0);
+  assert.equal(r.marcados, 0);
+  assert.deepEqual(r.avisos, [{ data: "2031-09-11", valorCents: 40000, candidatos: 2 }]);
+});
+
+test("marcarRepassesEntreContas: a entrada da Wise no próprio C6 nunca é candidata", async () => {
+  const wiseC6 = { id: "wc6", fonte: "extrato", natureza: "receita", descricao: "Pix recebido de CAMBIO FICTICIO LTDA", data: "2031-09-11", valorCents: 40000, computa_resumo: true };
+  const linhas = [repasseC6("r1", "2031-09-11", 40000), wiseC6];
+  const sql = bancoRepasses(linhas);
+  const r = await criarDb(sql).marcarRepassesEntreContas("2031-09-01", "2031-09-30");
+  assert.equal(r.marcados, 0);
+  assert.equal(wiseC6.computa_resumo, true);
+});
+
+test("marcarRepassesEntreContas: entrada do Itaú já fora do resumo conta como já marcada; reimportar não marca outra", async () => {
+  // 1ª rodada marca i1; depois o extrato seguinte traz outra entrada de mesmo valor na janela
+  const linhas = [repasseC6("r1", "2031-09-11", 40000), itau("i1", "2031-09-12", 40000)];
+  const sql = bancoRepasses(linhas);
+  const db = criarDb(sql);
+  assert.equal((await db.marcarRepassesEntreContas("2031-09-01", "2031-09-30")).marcados, 1);
+  linhas.push(itau("i2", "2031-09-13", 40000));
+  const r2 = await db.marcarRepassesEntreContas("2031-09-01", "2031-09-30");
+  assert.deepEqual(r2, { marcados: 0, jaMarcados: 1, avisos: [] });
+  assert.equal(linhas.find((l) => l.id === "i2").computa_resumo, true, "a outra entrada segue no resumo");
+  assert.equal(updatesDe(sql).length, 1);
+});
+
+// Exemplo do card C1 (números inventados): a Wise converte R$ 10.000 — R$ 9.000 chegam no Itaú e
+// R$ 1.000 no C6; o C6 paga R$ 600 de Simples e repassa R$ 400 para a PF no Itaú. Importados os
+// dois extratos e pareado o repasse: receita R$ 10.000, despesa R$ 600, sobra R$ 9.400.
+import { montarPreviewExtrato, montarPreviewExtratoC6 } from "./importar.js";
+import { lerContasProprias } from "./extrato_c6.js";
+
+test("Exemplo C1: Itaú + C6 importados e o repasse pareado → receita 10.000, despesa 600, sobra 9.400", async () => {
+  const txtItau = `10/09/2031 PIX TRANSF CAIO CA10/09 9.000,00
+12/09/2031 PIX TRANSF CAIO CA12/09 400,00`;
+  const txtC6 = `Setembro 2031
+1 0 / 0 9 1 0 / 0 9 Entrada PIX Pix recebido de CAMBIO FICTICIO LTDA R$ 1.000,00
+1 0 / 0 9 1 0 / 0 9 Pagamento DAS SIMPLES NACIONAL -R$ 600,00
+1 1 / 0 9 1 1 / 0 9 Saída PIX Pix enviado para FULANO DE TAL -R$ 400,00`;
+  const pItau = montarPreviewExtrato(txtItau, "itau", {});
+  const pC6 = montarPreviewExtratoC6(txtC6, { contasProprias: lerContasProprias("FULANO DE TAL") });
+  // no Itaú, as duas chegadas "PIX TRANSF CAIO…" entram como receita que conta (C1)
+  assert.ok(pItau.itens.every((i) => i.natureza === "receita" && i.computaResumo === true));
+
+  // "grava" os dois extratos no banco em memória, como o aplicar faria
+  let n = 0;
+  const linhas = [...pItau.itens, ...pC6.itens].map((i) => ({
+    id: `t${n++}`, fonte: "extrato", natureza: i.natureza, descricao: i.descricao,
+    data: i.data, valorCents: i.valorCents, computa_resumo: i.computaResumo,
+  }));
+  const r = await criarDb(bancoRepasses(linhas)).marcarRepassesEntreContas("2031-09-07", "2031-09-15");
+  assert.equal(r.marcados, 1);
+
+  const soma = (nat) => linhas.filter((l) => l.natureza === nat && l.computa_resumo).reduce((s, l) => s + l.valorCents, 0);
+  assert.equal(soma("receita"), 1000000);
+  assert.equal(soma("despesa"), 60000);
+  assert.equal(soma("receita") - soma("despesa"), 940000);
+});
