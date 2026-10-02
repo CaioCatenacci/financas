@@ -711,7 +711,7 @@ test("gravarGrupo sem mudanças nem delete não abre transação", async () => {
 
 test("transacoesNaJanela: só candidatas legítimas ao casamento (nem extrato/fatura, nem hash antigo, nem grupo que já tem extrato) e devolve grupo_id", async () => {
   // descricao vem junto (C2): o ambíguo mostra os candidatos na tela e o Caio precisa saber qual é qual.
-  const sql = fakeSql([{ id: "m1", data: "2026-09-02", valor_cents: "250000", grupo_id: "G0", descricao: "aluguel" }]);
+  const sql = fakeSql([{ id: "m1", data: "2026-09-02", valor_cents: "250000", grupo_id: "G0", descricao: "aluguel", representante: true }]);
   const db = criarDb(sql);
   const r = await db.transacoesNaJanela("2026-09-01", "2026-09-30");
   const q = sql.chamadas[0].text;
@@ -719,7 +719,8 @@ test("transacoesNaJanela: só candidatas legítimas ao casamento (nem extrato/fa
   assert.match(q, /linha_hash is null/i);
   assert.match(q, /not exists \(select 1 from transacoes x where x\.grupo_id = t\.grupo_id and x\.fonte = 'extrato'\)/i);
   assert.match(q, /descricao/i);
-  assert.deepEqual(r, [{ id: "m1", data: "2026-09-02", descricao: "aluguel", valorCents: 250000, grupo_id: "G0" }]);
+  // representante (F1): o candidato-grupo do ambíguo leva a descrição de quem conta no grupo.
+  assert.deepEqual(r, [{ id: "m1", data: "2026-09-02", descricao: "aluguel", valorCents: 250000, grupo_id: "G0", representante: true }]);
 });
 
 test("aplicarImportacao: casado insere a linha do extrato no grupo e põe o casado como representante (grupo novo) — tudo numa transação", async () => {

@@ -70,12 +70,15 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
       if (status === "casado") {
         matchId = rec.matchId;
         matchGrupoId = rec.matchGrupoId;
-        disponiveis = disponiveis.filter(e => e.id !== matchId);
+        // F1: o grupo inteiro é um candidato só, então é ele que sai — senão a próxima linha igual
+        // acharia o outro membro sozinho e casaria no MESMO grupo (2 linhas do extrato num grupo).
+        disponiveis = disponiveis.filter(e => e.id !== matchId && !(matchGrupoId && e.grupo_id === matchGrupoId));
       } else if (status === "ambiguo") {
         // C2: os candidatos vão pro app, que deixa o Caio casar à mão. Saem de `disponiveis`, então
         // já respeitam o consumo do §6.2 até esta linha; o que casar depois o app confere na escolha.
         candidatos = rec.candidatos.map(c => ({
           id: c.id, data: c.data, descricao: c.descricao ?? null, valorCents: c.valorCents, grupo_id: c.grupo_id ?? null,
+          ...(c.membros ? { membros: c.membros } : {}), // F1: candidato-grupo (o app rotula "grupo: …")
         }));
       }
     }

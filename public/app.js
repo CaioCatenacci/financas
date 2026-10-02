@@ -286,12 +286,26 @@ export function escolherCandidato(preview, indiceItem, candidatoId) {
   if (!item || item.status !== "ambiguo") return false;
   const cand = (item.candidatos || []).find(c => String(c.id) === String(candidatoId));
   if (!cand) return false;
-  const usado = preview.itens.some(o => o !== item && o.status === "casado" && String(o.matchId) === String(cand.id));
+  // F1: o consumo é por grupo — se outro item do lote já casou no grupo deste candidato (por
+  // qualquer membro), entrar de novo poria duas linhas do extrato no mesmo grupo e a segunda
+  // despesa real sumiria do Resumo.
+  const g = cand.grupo_id ?? null;
+  const usado = preview.itens.some(o => o !== item && o.status === "casado" &&
+    (String(o.matchId) === String(cand.id) || (g !== null && o.matchGrupoId === g)));
   if (usado) return false;
   item.status = "casado";
   item.matchId = cand.id;
   item.matchGrupoId = cand.grupo_id ?? null;
   return true;
+}
+
+// C2/F1: texto do botão de um candidato do ambíguo (sem escape — quem monta o HTML escapa).
+// O candidato-grupo (membros >= 2, vindo de reconciliarLinha) é uma opção só: escolher a foto ou
+// o manual daria no mesmo grupo, então a tela não os separa.
+export function rotuloCandidato(c) {
+  if (c.membros >= 2) return `grupo: ${c.descricao || "—"} (${c.membros} lançamentos)`;
+  const [a, m, d] = String(c.data).slice(0, 10).split("-");
+  return `${d}/${m}/${a} · ${c.descricao || "—"} · R$ ${centavosBR(String(c.valorCents / 100))}`;
 }
 
 // "Aplicar" bloqueia só quando o checksum manda bloquear (extrato com diferença — o saldo não
@@ -1263,12 +1277,12 @@ if (typeof document !== "undefined") {
   });
 
   // ----- Importar (upload PDF → preview → revisão → aplicar; Task 9) -----
-  // C2: um botão por candidato do ambíguo (data · descrição · valor). data-idx é o índice do item
+  // C2: um botão por candidato do ambíguo (rotuloCandidato; F1: o grupo é um botão só). data-idx é o índice do item
   // em preview.itens — é o que escolherCandidato recebe.
   function botoesCandidatos(it) {
     const idx = estado.importar.preview.itens.indexOf(it);
     return (it.candidatos || []).map(c => `<button class="chip impEscolher" type="button" data-idx="${idx}" data-cand="${esc(c.id)}">` +
-      `é este: ${fmtData(c.data)} · ${esc(c.descricao || "—")} · R$ ${centavosBR(String(c.valorCents / 100))}</button>`).join(" ");
+      `é este: ${esc(rotuloCandidato(c))}</button>`).join(" ");
   }
 
   function tabelaItens(titulo, itens, { comAmbiguo = false } = {}) {

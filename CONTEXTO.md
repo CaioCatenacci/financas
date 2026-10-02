@@ -457,6 +457,19 @@ queries num POST só, sem ramificar no meio; a janela entre a leitura e a grava�
 um usuário só). No mesmo espírito, `decidirAgrupar` recusa entrar num grupo existente sem
 representante ("o grupo não tem representante"), olhando o grupo inteiro, não só a seleção.
 
+**O grupo é um candidato só (F1, 02/10/2026):** foto e manual da mesma despesa, agrupados, são
+a mesma coisa — antes viravam dois candidatos e a linha do extrato ficava ambígua sem haver o que
+escolher. `reconciliarLinha` junta os candidatos de mesmo `grupo_id` numa unidade: sobrando uma, a
+linha casa no grupo (o representante não muda); no caso misto (grupo + solto) segue ambígua e o
+grupo aparece **uma vez** na aba Importar, como "grupo: <descrição> (N lançamentos)" (decisão do
+Caio, opção A). A descrição é a do representante, se ele estiver entre os candidatos, senão a do
+membro mais antigo; **N conta só os membros que empataram** (mesmo valor, ±3 dias), não o grupo
+inteiro. **Por que o consumo do lote (§6.2) virou por grupo:** se o candidato é o grupo, quem sai
+de `disponiveis` (e quem `escolherCandidato` recusa) é o grupo inteiro — senão uma segunda linha
+igual do extrato acharia o outro membro sozinho e casaria no mesmo grupo, e a segunda despesa real
+sumiria do Resumo. Valor exato e janela de ±3 dias não mudaram; os importadores Python seguem fora
+(C6).
+
 **Marcar o pagamento da fatura é idempotente (C3, 29/09/2026):** `db.marcarPagamentoFaturaNaoGasto`
 procura, na janela de 62 dias e pelo total exato (os dois sem mudança), as despesas de extrato que
 contam no resumo **e** as que já estão fora dele (`computa_resumo=false`). Se há uma já fora, o

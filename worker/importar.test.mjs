@@ -279,3 +279,39 @@ test("B2: associação removida → a linha do extrato sai sem categoria (o app 
   const item = p.itens.find((i) => i.descricao === "PADARIA EXEMPLO");
   assert.equal(item.categoriaNome, null);
 });
+
+// ---- F1: o grupo conta como um candidato só, e o consumo do lote (§6.2) passa a ser por grupo ----
+// Dados inventados: foto e manual de mesmo valor, agrupados.
+const grupoFotoManual = () => [
+  { id: "foto", data: "2025-12-09", descricao: "padaria", valorCents: 10000, grupo_id: "G1", representante: true },
+  { id: "manual", data: "2025-12-09", descricao: "padaria", valorCents: 10000, grupo_id: "G1", representante: false },
+];
+
+test("F1: grupo com foto + manual de mesmo valor → a linha casa direto no grupo", () => {
+  const p = montarPreviewExtrato(TXT, "c1", { catalogo, associacoes: {}, existentes: grupoFotoManual(), hashes: [] });
+  assert.equal(p.resumo.ambiguos, 0);
+  const c = p.itens.find(i => i.status === "casado");
+  assert.equal(c.matchGrupoId, "G1");
+});
+
+test("F1: duas linhas iguais no lote e um grupo de 2 → só a primeira casa no grupo; a segunda fica nova", () => {
+  // Se o consumo seguisse por id, a segunda linha acharia o outro membro sozinho e casaria no mesmo
+  // grupo: duas linhas do extrato no grupo e a segunda despesa real sumiria do Resumo.
+  const txtDuasIguais = `11/12/2025 SALDO DO DIA 9.176,46
+10/12/2025 PIX QRS LOJA X10/12 -100,00
+10/12/2025 PIX QRS LOJA Y10/12 -100,00
+09/12/2025 SALDO DO DIA 9.376,46`;
+  const p = montarPreviewExtrato(txtDuasIguais, "c1", { catalogo, associacoes: {}, existentes: grupoFotoManual(), hashes: [] });
+  assert.equal(p.resumo.casados, 1);
+  assert.equal(p.resumo.novos, 1);
+  assert.equal(p.itens.filter(i => i.matchGrupoId === "G1").length, 1);
+});
+
+test("F1: no caso misto o candidato-grupo chega ao app com grupo_id e a contagem de membros", () => {
+  const existentes = [...grupoFotoManual(), { id: "s", data: "2025-12-10", descricao: "mercado", valorCents: 10000, grupo_id: null }];
+  const p = montarPreviewExtrato(TXT, "c1", { catalogo, associacoes: {}, existentes, hashes: [] });
+  const amb = p.itens.find(i => i.status === "ambiguo");
+  assert.equal(amb.candidatos.length, 2);
+  assert.deepEqual(amb.candidatos[0], { id: "foto", data: "2025-12-09", descricao: "padaria", valorCents: 10000, grupo_id: "G1", membros: 2 });
+  assert.deepEqual(amb.candidatos[1], { id: "s", data: "2025-12-10", descricao: "mercado", valorCents: 10000, grupo_id: null });
+});
