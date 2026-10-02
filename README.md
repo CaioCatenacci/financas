@@ -36,6 +36,8 @@ wrangler secret put DROPBOX_REFRESH          # OAuth refresh token
 wrangler secret put DROPBOX_APP_KEY          # app key
 wrangler secret put DROPBOX_APP_SECRET       # app secret
 wrangler secret put APP_TOKEN                # token único do acesso (gerar: ex. `uuidgen`)
+wrangler secret put C6_PDF_SENHA            # senha do PDF do extrato do C6 Bank
+wrangler secret put CONTAS_PROPRIAS         # nomes das contas próprias (vírgula), como no extrato do C6
 ```
 
 **Nota:** `ALLOWLIST` **deve ser Secret, não Text** — `wrangler deploy` sobrescreve
