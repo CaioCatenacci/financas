@@ -4,7 +4,7 @@ import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   anelPessoaCategoria, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
-  escolherCandidato, linhaEditavel, idsSelecionaveis, esc,
+  escolherCandidato, rotuloCandidato, linhaEditavel, idsSelecionaveis, esc,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto } from "../public/pdf_extrair.js";
@@ -402,6 +402,77 @@ test("montarDecisao após escolherCandidato agrupado: entra no grupo existente d
   assert.equal(d.casados[0].grupoExistente, true);
   assert.equal(d.casados[0].linha.grupo_id, "G11");
   assert.ok(!JSON.stringify(d).includes("m09"));
+});
+
+// ---------- F1: candidato-grupo (foto + manual agrupados contam como um só) ----------
+// Caso misto do card, com dados inventados: grupo "padaria" (2 lançamentos) + "mercado" solto.
+function previewMisto() {
+  return {
+    checksum: { ok: true, diferencaCents: 0, bloqueiaAplicar: false },
+    itens: [
+      {
+        status: "ambiguo", data: "2025-12-11", descricao: "PIX PADARIA", valorCents: 8000,
+        natureza: "despesa", linhaHash: "hA", matchId: null, matchGrupoId: null, computaResumo: true,
+        categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
+        candidatos: [
+          { id: "foto", data: "2025-12-09", descricao: "padaria", valorCents: 8000, grupo_id: "G1", membros: 2 },
+          { id: "mercado", data: "2025-12-10", descricao: "mercado", valorCents: 8000, grupo_id: null },
+        ],
+      },
+    ],
+  };
+}
+
+test("rotuloCandidato: o grupo aparece como 'grupo: <descrição> (N lançamentos)'; o solto, como antes", () => {
+  const [g, s] = previewMisto().itens[0].candidatos;
+  assert.equal(rotuloCandidato(g), "grupo: padaria (2 lançamentos)");
+  assert.equal(rotuloCandidato(s), "10/12/2025 · mercado · R$ 80,00");
+});
+
+test("escolherCandidato no candidato-grupo casa a linha nesse grupo e a decisão não troca o representante", () => {
+  const p = previewMisto();
+  assert.equal(escolherCandidato(p, 0, "foto"), true);
+  assert.equal(p.itens[0].status, "casado");
+  assert.equal(p.itens[0].matchGrupoId, "G1");
+  const d = montarDecisao(p, CATALOGO_IMPORT, "extrato", () => "nao-usar");
+  // grupoExistente: aplicarImportacao só insere a linha do extrato no grupo; quem conta segue quem era
+  assert.equal(d.casados[0].grupoExistente, true);
+  assert.equal(d.casados[0].linha.grupo_id, "G1");
+  assert.equal(d.casados[0].linha.representante, false);
+});
+
+test("escolherCandidato recusa o grupo (por qualquer membro) quando outra linha do lote já casou nele", () => {
+  // Sem a recusa, duas linhas do extrato entrariam no mesmo grupo e a segunda despesa sumiria do Resumo.
+  const p = previewMisto();
+  p.itens.push({
+    status: "casado", data: "2025-12-10", descricao: "PIX PADARIA 2", valorCents: 8000,
+    natureza: "despesa", linhaHash: "hB", matchId: "manual", matchGrupoId: "G1", computaResumo: true,
+    categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
+  });
+  const antes = JSON.stringify(p.itens[0]);
+  assert.equal(escolherCandidato(p, 0, "foto"), false);
+  assert.equal(JSON.stringify(p.itens[0]), antes);
+  assert.equal(escolherCandidato(p, 0, "mercado"), true); // o solto segue livre
+});
+
+test("F1 ponta a ponta: preview do Exemplo → o grupo vem uma vez e o botão diz 'grupo: padaria (2 lançamentos)'", () => {
+  const txt = `12/12/2025 SALDO DO DIA 920,00
+11/12/2025 PIX PADARIA -80,00
+10/12/2025 SALDO DO DIA 1.000,00`;
+  const existentes = [
+    { id: "foto", data: "2025-12-09", descricao: "padaria", valorCents: 8000, grupo_id: "G1", representante: true },
+    { id: "manual", data: "2025-12-09", descricao: "padaria", valorCents: 8000, grupo_id: "G1", representante: false },
+  ];
+  const so = montarPreviewExtrato(txt, "c1", { catalogo: CATALOGO_IMPORT, associacoes: {}, existentes, hashes: [] });
+  const casado = so.itens.find(i => i.status === "casado");
+  assert.equal(casado.matchGrupoId, "G1"); // sem ambíguo
+  const misto = montarPreviewExtrato(txt, "c1", {
+    catalogo: CATALOGO_IMPORT, associacoes: {},
+    existentes: [...existentes, { id: "mercado", data: "2025-12-10", descricao: "mercado", valorCents: 8000, grupo_id: null }],
+    hashes: [],
+  });
+  const amb = misto.itens.find(i => i.status === "ambiguo");
+  assert.deepEqual(amb.candidatos.map(rotuloCandidato), ["grupo: padaria (2 lançamentos)", "10/12/2025 · mercado · R$ 80,00"]);
 });
 
 // ---------- reconstruirTexto (Task 8: pdf.js -> texto compatível com parseExtrato/parseFatura) ----------

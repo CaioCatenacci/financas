@@ -451,14 +451,15 @@ export function criarDb(sql) {
     async transacoesNaJanela(de, ate) {
       const rows = await sql`
         select id, to_char(data,'YYYY-MM-DD') as data,
-          (round(valor_final*100))::bigint as valor_cents, grupo_id, descricao
+          (round(valor_final*100))::bigint as valor_cents, grupo_id, descricao, representante
         from transacoes t
         where data between ${de} and ${ate}
           and fonte not in ('extrato','fatura')
           and linha_hash is null
           and not exists (select 1 from transacoes x where x.grupo_id = t.grupo_id and x.fonte = 'extrato')`;
       // descricao (C2): o ambíguo lista os candidatos na aba Importar, e o Caio precisa distingui-los.
-      return rows.map(r => ({ id: String(r.id), data: r.data, descricao: r.descricao ?? null, valorCents: Number(r.valor_cents), grupo_id: r.grupo_id ?? null }));
+      // representante (F1): o candidato-grupo leva a descrição de quem conta, se ele estiver na janela.
+      return rows.map(r => ({ id: String(r.id), data: r.data, descricao: r.descricao ?? null, valorCents: Number(r.valor_cents), grupo_id: r.grupo_id ?? null, representante: !!r.representante }));
     },
 
     async hashesNaJanela(de, ate) {
