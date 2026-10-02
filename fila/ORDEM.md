@@ -6,7 +6,6 @@ Agora fica com o Caio.
 ## Agora
 - F4
 - E2
-- C2
 
 ## Próximo
 
