@@ -327,6 +327,7 @@ export async function handleApi(request, env, url, dbOpt = null) {
       kpis: await db.resumoKPIs(de, ate),
       porCategoria: await db.resumoPorCategoria(de, ate),
       porPessoa: await db.resumoPorPessoa(de, ate),
+      porPessoaCategoria: await db.resumoPorPessoaCategoria(de, ate),
       mesVsAnterior: await db.resumoMesVsAnterior(mesRef),
       diario: ateExcl ? await db.resumoDiario(de, ateExcl) : [],
     });

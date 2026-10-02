@@ -244,6 +244,25 @@ test("resumoPorPessoa agrupa por pessoa e natureza no intervalo", async () => {
   assert.match(sql.chamadas[0].text, /coalesce\(p\.nome,\s*'—'\)/i);
 });
 
+test("resumoPorPessoaCategoria soma despesa que conta por pessoa × categoria, em centavos", async () => {
+  // o driver devolve ::bigint como string; a borda converte pra number (senão o front concatena)
+  const sql = fakeSql([{ pessoa: "sem pessoa", categoria: "Casa", total_cents: "70000" }]);
+  const db = criarDb(sql);
+  const r = await db.resumoPorPessoaCategoria("2026-09-01", "2026-09-30");
+  assert.deepEqual(r, [{ pessoa: "sem pessoa", categoria: "Casa", total_cents: 70000 }]);
+  assert.equal(typeof r[0].total_cents, "number");
+  const q = sql.chamadas[0];
+  assert.deepEqual(q.values, ["2026-09-01", "2026-09-30"]);
+  assert.match(q.text, /conta_no_resumo/i);           // nunca computa_resumo: membro de grupo não conta
+  assert.match(q.text, /natureza = 'despesa'/i);
+  assert.match(q.text, /sum\(t\.valor_final\)/i);      // soma em SQL, não em JS
+  assert.match(q.text, /::bigint/i);
+  // left join: despesa sem pessoa_id não some — senão o anel interno não fecha com kpis.despesa
+  assert.match(q.text, /left join pessoas/i);
+  assert.match(q.text, /left join categorias/i);
+  assert.match(q.text, /coalesce\(p\.nome,\s*'sem pessoa'\)/i);
+});
+
 test("listarPessoas retorna ativas ordenadas por nome", async () => {
   const sql = fakeSql([{ id: "p1", nome: "Alice" }]);
   const db = criarDb(sql);
