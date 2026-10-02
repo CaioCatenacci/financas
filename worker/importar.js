@@ -59,6 +59,7 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
     let status;
     let matchId = null;
     let matchGrupoId = null;
+    let candidatos;
     if (!info.computaResumo) {
       // não-gasto (transferência p/ conta própria, aplicação, pagamento de fatura): não entra
       // na reconciliação — não é candidato a "casar" com nada em `existentes`.
@@ -70,6 +71,12 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
         matchId = rec.matchId;
         matchGrupoId = rec.matchGrupoId;
         disponiveis = disponiveis.filter(e => e.id !== matchId);
+      } else if (status === "ambiguo") {
+        // C2: os candidatos vão pro app, que deixa o Caio casar à mão. Saem de `disponiveis`, então
+        // já respeitam o consumo do §6.2 até esta linha; o que casar depois o app confere na escolha.
+        candidatos = rec.candidatos.map(c => ({
+          id: c.id, data: c.data, descricao: c.descricao ?? null, valorCents: c.valorCents, grupo_id: c.grupo_id ?? null,
+        }));
       }
     }
 
@@ -78,6 +85,7 @@ export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {},
       computaResumo: info.computaResumo,
       categoriaNome: info.categoriaNome, subNome: info.subNome, categoriaOrg: info.categoriaOrg,
       contraparteNome: info.contraparteNome,
+      ...(candidatos ? { candidatos } : {}),
     });
 
     if (status === "novo") resumo.novos++;

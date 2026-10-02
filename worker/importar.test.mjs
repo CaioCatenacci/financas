@@ -66,6 +66,32 @@ test("preview extrato: ambíguo quando há mais de um candidato no mesmo valor/j
   assert.equal(p.itens.find(i => i.status === "ambiguo").matchId, null);
 });
 
+test("preview extrato: ambíguo traz os candidatos (id, data, descrição, valor, grupo) pra o Caio escolher na tela", () => {
+  // C2: sem a lista, a única saída do ambíguo era "tratar como novo" — e o lançamento certo virava
+  // duplicata. A regra que decide o ambíguo não muda (valor exato, ±3 dias): só passa a mostrar quem.
+  const p = montarPreviewExtrato(TXT, "c1", {
+    catalogo, associacoes: {},
+    existentes: [
+      { id: "a", data: "2025-12-09", descricao: "padaria", valorCents: 10000, grupo_id: null },
+      { id: "b", data: "2025-12-11", descricao: "padaria foto", valorCents: 10000, grupo_id: "G7" },
+      { id: "fora", data: "2025-12-20", descricao: "longe demais", valorCents: 10000, grupo_id: null },
+    ],
+    hashes: [],
+  });
+  const amb = p.itens.find(i => i.status === "ambiguo");
+  assert.equal(amb.candidatos.length, 2);
+  assert.deepEqual(amb.candidatos, [
+    { id: "a", data: "2025-12-09", descricao: "padaria", valorCents: 10000, grupo_id: null },
+    { id: "b", data: "2025-12-11", descricao: "padaria foto", valorCents: 10000, grupo_id: "G7" },
+  ]);
+  assert.equal(amb.matchId, null); // ninguém escolheu ainda
+});
+
+test("preview extrato: item que não é ambíguo não carrega lista de candidatos", () => {
+  const p = montarPreviewExtrato(TXT, "c1", { catalogo, associacoes: {}, existentes: [{ id: "t9", data: "2025-12-10", valorCents: 10000 }], hashes: [] });
+  assert.equal(p.itens.find(i => i.status === "casado").candidatos, undefined);
+});
+
 test("preview extrato: idempotência — hash já em hashes vira jaTem", () => {
   const lh = linhaHash("c1", "2025-12-10", "PIX QRS LOJA X10/12", 10000, 0);
   const p = montarPreviewExtrato(TXT, "c1", { catalogo, associacoes: {}, existentes: [], hashes: [lh] });

@@ -255,6 +255,25 @@ export function montarDecisao(preview, catalogo, fonte, gerarId = () => crypto.r
   return { novos, naoGasto, casados };
 }
 
+// C2: casa à mão um item "ambiguo" com um dos seus candidatos (vindos do preview). Muta o item
+// (mesmo estilo do "tratar como novo") para status "casado", com matchId/matchGrupoId do escolhido —
+// daí em diante montarDecisao o trata como qualquer casado do Inc 4.6. Recusa (devolve false e não
+// toca no item) quando: o item não é ambíguo, o id não está entre os candidatos dele, ou o candidato
+// já é o matchId de outro casado do lote (consumo do spec §6.2 — senão o mesmo lançamento entraria
+// duas vezes e a segunda linha do extrato ficaria num grupo sem representante, fora do Resumo).
+export function escolherCandidato(preview, indiceItem, candidatoId) {
+  const item = preview?.itens?.[indiceItem];
+  if (!item || item.status !== "ambiguo") return false;
+  const cand = (item.candidatos || []).find(c => String(c.id) === String(candidatoId));
+  if (!cand) return false;
+  const usado = preview.itens.some(o => o !== item && o.status === "casado" && String(o.matchId) === String(cand.id));
+  if (usado) return false;
+  item.status = "casado";
+  item.matchId = cand.id;
+  item.matchGrupoId = cand.grupo_id ?? null;
+  return true;
+}
+
 // "Aplicar" bloqueia só quando o checksum manda bloquear (extrato com diferença — o saldo não
 // fecha, algo foi mal lido). A fatura é AVISO (bloqueiaAplicar=false): IOF/encargos entram no
 // total sem serem lançamentos, então a diferença é esperada e não impede aplicar.
@@ -1176,6 +1195,14 @@ if (typeof document !== "undefined") {
   });
 
   // ----- Importar (upload PDF → preview → revisão → aplicar; Task 9) -----
+  // C2: um botão por candidato do ambíguo (data · descrição · valor). data-idx é o índice do item
+  // em preview.itens — é o que escolherCandidato recebe.
+  function botoesCandidatos(it) {
+    const idx = estado.importar.preview.itens.indexOf(it);
+    return (it.candidatos || []).map(c => `<button class="chip impEscolher" type="button" data-idx="${idx}" data-cand="${esc(c.id)}">` +
+      `é este: ${fmtData(c.data)} · ${esc(c.descricao || "—")} · R$ ${centavosBR(String(c.valorCents / 100))}</button>`).join(" ");
+  }
+
   function tabelaItens(titulo, itens, { comAmbiguo = false } = {}) {
     if (!itens.length) return "";
     const linhas = itens.map((it, i) => `
@@ -1184,7 +1211,7 @@ if (typeof document !== "undefined") {
         <td>${esc(it.descricaoFinal ?? it.descricao)}</td>
         <td>${esc(it.categoriaOrg || it.categoriaNome || categoriaPadrao(estado.catalogo)?.nome || "—")}${it.subNome ? " › " + esc(it.subNome) : ""}</td>
         <td class="val">${it.natureza === "receita" ? "+" : ""}R$ ${centavosBR(String(it.valorCents / 100))}</td>
-        ${comAmbiguo ? `<td><button class="chip impResolve" type="button" data-i="${i}">tratar como novo</button></td>` : "<td></td>"}
+        ${comAmbiguo ? `<td>${botoesCandidatos(it)} <button class="chip impResolve" type="button" data-i="${i}">tratar como novo</button></td>` : "<td></td>"}
       </tr>`).join("");
     return `<div class="impgrupo">
       <h3>${esc(titulo)} <span class="impcount">${itens.length}</span></h3>
@@ -1262,7 +1289,7 @@ if (typeof document !== "undefined") {
       ${tabelaItens("Novos", novos)}
       ${tabelaItens("A agrupar (já lançados; a linha do extrato entra no grupo)", casados)}
       ${tabelaItens("Fora do resumo (transferência/pagamento de fatura)", naoGasto)}
-      ${tabelaItens("Ambíguos — não serão aplicados, a menos que você trate como novo", ambiguos, { comAmbiguo: true })}
+      ${tabelaItens("Ambíguos — não serão aplicados, a menos que você escolha o lançamento certo ou trate como novo", ambiguos, { comAmbiguo: true })}
       ${tabelaItens("Já importados antes (ignorados)", jaTem)}
     `;
   }
@@ -1314,6 +1341,14 @@ if (typeof document !== "undefined") {
       } catch (err) {
         alert("Falha ao aplicar: " + err.message);
       }
+      return;
+    }
+    if (e.target.classList.contains("impEscolher")) {
+      // casa à mão com o candidato escolhido; recusado = esse lançamento já casou com outra linha
+      if (!escolherCandidato(st.preview, +e.target.dataset.idx, e.target.dataset.cand)) {
+        alert("Esse lançamento já está casado com outra linha deste extrato. Escolha outro ou trate como novo.");
+      }
+      drawImportar();
       return;
     }
     if (e.target.classList.contains("impResolve")) {

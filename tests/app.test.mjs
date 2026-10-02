@@ -4,6 +4,7 @@ import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
+  escolherCandidato,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto } from "../public/pdf_extrair.js";
@@ -295,6 +296,93 @@ test("resumoTexto: recontagem AO VIVO acompanha a resolução de ambíguo (não 
   const txt = resumoTexto(preview);
   assert.match(txt, /novos 2/i);      // 1 original + o ambíguo promovido
   assert.match(txt, /ambígu\w* 0/i);  // não sobrou ambíguo
+});
+
+// ---------- escolherCandidato (C2: casar à mão um ambíguo com um dos candidatos) ----------
+// Cenário do card: linha do extrato de 10/12 com dois lançamentos de mesmo valor (09/12 e 11/12).
+// Dados inventados.
+function previewAmbiguo() {
+  return {
+    checksum: { ok: true, diferencaCents: 0, bloqueiaAplicar: false },
+    itens: [
+      {
+        status: "ambiguo", data: "2025-12-10", descricao: "PIX PADARIA", valorCents: 8000,
+        natureza: "despesa", linhaHash: "hA", matchId: null, matchGrupoId: null, computaResumo: true,
+        categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
+        candidatos: [
+          { id: "m09", data: "2025-12-09", descricao: "padaria", valorCents: 8000, grupo_id: null },
+          { id: "m11", data: "2025-12-11", descricao: "padaria", valorCents: 8000, grupo_id: "G11" },
+        ],
+      },
+    ],
+  };
+}
+
+test("escolherCandidato: escolher um candidato solto transforma o ambíguo em casado, sem grupo ainda", () => {
+  const p = previewAmbiguo();
+  assert.equal(escolherCandidato(p, 0, "m09"), true);
+  const it = p.itens[0];
+  assert.equal(it.status, "casado");
+  assert.equal(it.matchId, "m09");
+  assert.equal(it.matchGrupoId, null); // solto: montarDecisao cria o grupo e ele vira representante
+});
+
+test("escolherCandidato: candidato que já está num grupo leva o grupo dele (a linha entra nesse grupo)", () => {
+  const p = previewAmbiguo();
+  assert.equal(escolherCandidato(p, 0, "m11"), true);
+  assert.equal(p.itens[0].matchId, "m11");
+  assert.equal(p.itens[0].matchGrupoId, "G11");
+});
+
+test("escolherCandidato: recusa candidato já casado com outra linha do lote (spec §6.2) e deixa o item como estava", () => {
+  // Sem a recusa, o mesmo lançamento entraria duas vezes em casados com dois grupos novos: o segundo
+  // update não pega (grupo_id is null) e a segunda linha do extrato fica num grupo sem representante,
+  // sumindo do Resumo sem aviso.
+  const p = previewAmbiguo();
+  p.itens.push({
+    status: "casado", data: "2025-12-09", descricao: "PIX PADARIA 2", valorCents: 8000,
+    natureza: "despesa", linhaHash: "hB", matchId: "m09", matchGrupoId: null, computaResumo: true,
+    categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
+  });
+  const antes = JSON.stringify(p.itens[0]);
+  assert.equal(escolherCandidato(p, 0, "m09"), false);
+  assert.equal(JSON.stringify(p.itens[0]), antes);
+  // o outro candidato segue livre
+  assert.equal(escolherCandidato(p, 0, "m11"), true);
+});
+
+test("escolherCandidato: recusa id que não está na lista do item, ou item que não é ambíguo", () => {
+  const p = previewAmbiguo();
+  assert.equal(escolherCandidato(p, 0, "qualquer"), false);
+  assert.equal(p.itens[0].status, "ambiguo");
+  escolherCandidato(p, 0, "m09");
+  assert.equal(escolherCandidato(p, 0, "m11"), false); // já resolvido: não troca por baixo
+  assert.equal(p.itens[0].matchId, "m09");
+});
+
+test("montarDecisao após escolherCandidato solto: grupo novo, candidato vira representante, o outro fica intocado", () => {
+  const p = previewAmbiguo();
+  escolherCandidato(p, 0, "m09");
+  const d = montarDecisao(p, CATALOGO_IMPORT, "extrato", () => "G-novo");
+  assert.equal(d.casados.length, 1);
+  const c = d.casados[0];
+  assert.equal(c.matchId, "m09");
+  assert.equal(c.grupoExistente, false); // aplicarImportacao põe m09 como representante
+  assert.equal(c.linha.grupo_id, "G-novo");
+  assert.equal(c.linha.representante, false);
+  assert.equal(c.linha.linha_hash, "hA");
+  assert.equal(d.novos.length + d.naoGasto.length, 0);
+  assert.ok(!JSON.stringify(d).includes("m11"), "o candidato não escolhido não aparece na decisão");
+});
+
+test("montarDecisao após escolherCandidato agrupado: entra no grupo existente do candidato", () => {
+  const p = previewAmbiguo();
+  escolherCandidato(p, 0, "m11");
+  const d = montarDecisao(p, CATALOGO_IMPORT, "extrato", () => "nao-usar");
+  assert.equal(d.casados[0].matchId, "m11");
+  assert.equal(d.casados[0].grupoExistente, true);
+  assert.equal(d.casados[0].linha.grupo_id, "G11");
+  assert.ok(!JSON.stringify(d).includes("m09"));
 });
 
 // ---------- reconstruirTexto (Task 8: pdf.js -> texto compatível com parseExtrato/parseFatura) ----------

@@ -32,3 +32,13 @@ test("reconciliarLinha: >1 → ambiguo; 0/valor≠/fora da janela → novo", () 
   assert.equal(reconciliarLinha({data:"2025-12-10",valorCents:5000},
     [{id:"a",data:"2025-12-20",valorCents:5000},{id:"b",data:"2025-12-10",valorCents:9999}]).status, "novo");
 });
+
+test("reconciliarLinha: ambíguo devolve os candidatos que empataram (e só eles), pra escolha manual no app", () => {
+  const r = reconciliarLinha({ data: "2025-12-10", valorCents: 8000 }, [
+    { id: "a", data: "2025-12-09", valorCents: 8000 },
+    { id: "b", data: "2025-12-11", valorCents: 8000 },
+    { id: "c", data: "2025-12-10", valorCents: 8001 }, // valor diferente: não é candidato
+  ]);
+  assert.equal(r.status, "ambiguo");
+  assert.deepEqual(r.candidatos.map(c => c.id), ["a", "b"]);
+});
