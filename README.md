@@ -152,7 +152,6 @@ do `CLAUDE.md`.
 ├── public/                          # App web (servido em /app)
 │   ├── index.html                  # Abas: Resumo, Lançamentos, Importar, Ajustes, Planejamento
 │   ├── app.js                      # Lógica do app (regras puras testadas)
-│   ├── app.test.mjs                # Testes do app (node --test)
 │   ├── pdf_extrair.js              # Texto do PDF no navegador (pdf.js)
 │   └── shell.css                   # Estilos
 │
@@ -168,6 +167,7 @@ do `CLAUDE.md`.
 │   └── …                           # parsers Itaú, reconciliar, classificar, ensino, app.mjs
 │
 ├── tests/
+│   ├── app.test.mjs                # Testes do app (node --test; fora de public/ p/ não ir no deploy)
 │   ├── test_import.py              # Testes do import da planilha (pytest)
 │   └── test_*.py                   # Demais tools Python (pytest)
 │

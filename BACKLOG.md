@@ -46,9 +46,4 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   pelo Python pode tirar do resumo outra despesa de extrato de mesmo total na janela. O Worker já
   foi corrigido (`marcarPagamentoFaturaNaoGasto`). Vai junto com C6 (importadores Python no modelo
   antigo). Origem: C3 (29/09/2026).
-- **P2 · Regra do coder e README ainda apontam `public/app.test.mjs`.** O teste do app mudou
-  para `tests/app.test.mjs` (o glob `public/*.test.mjs` saiu do `npm test`), mas
-  `.claude/agents/coder-financas.md` (linha "teste do app mora em `public/app.test.mjs`") e a
-  árvore do `README.md` seguem com o caminho antigo: um coder que siga a regra recria o arquivo
-  em `public/`, fora do `npm test` e de volta no deploy. Regra de agente, PR à parte (não degrau 2).
-  Origem: E1 (01/10/2026).
+- **P2 · Regra do coder ainda aponta `public/app.test.mjs`.** O README já foi corrigido (01/10/2026); falta `.claude/agents/coder-financas.md`, que é regra de agente e vai em PR à parte (não degrau 2). Origem: E1 (01/10/2026).
