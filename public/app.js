@@ -154,6 +154,19 @@ export function montarLinhas(rows) {
   return out;
 }
 
+// F4: o membro órfão (representante fora do período carregado) não conta no Resumo — quem conta é
+// o representante —, então editar a linha dele não teria efeito. Ele é só leitura, como o membro
+// expandido; pra editar, tira do grupo (⤴) ou torna representante (★). Solta e representante
+// (inclusive o de membrosFora, que conta) seguem editáveis.
+export function linhaEditavel(l) {
+  return !l.orfao;
+}
+
+// Ids que o "selecionar todos" e a barra de massa alcançam: só as linhas editáveis.
+export function idsSelecionaveis(linhas) {
+  return linhas.filter(linhaEditavel).map((l) => l.t.id);
+}
+
 // Filtro por cima das linhas montadas: categoria/pessoa/origem/gasto pelo representante (é a
 // linha que conta); TEXTO bate no representante OU em qualquer membro — é assim que se acha uma
 // linha do banco que "sumiu" dentro de um grupo; computa="agrupados" lista só grupos.
@@ -752,6 +765,8 @@ if (typeof document !== "undefined") {
       return;
     }
     $("#rows").innerHTML = linhas.map(l => {
+      // F4: órfão é só leitura, no mesmo template do membro expandido
+      if (!linhaEditavel(l)) return linhaMembro(l.t, l.grupo_id, true);
       const t = l.t;
       const rec = t.natureza === "receita";
       const sel = estado.selecao.has(t.id) ? "checked" : "";
@@ -791,10 +806,20 @@ if (typeof document !== "undefined") {
       </tr>`;
       if (!nMem || !aberto) return principal;
       // membros: só leitura (pra editar, tire do grupo ou torne representante) + 2 ações
-      const membros = l.membros.map(m => `<tr class="membro" data-id="${m.id}" data-grupo="${l.grupo_id}">
+      const membros = l.membros.map(m => linhaMembro(m, l.grupo_id)).join("");
+      return principal + membros;
+    }).join("");
+    atualizarMassaBar();
+  }
+
+  // Linha de membro de grupo, só leitura + ★/⤴. Serve ao membro expandido (class "membro") e ao
+  // órfão (F4), que ganha o selo "membro de grupo" — sem checkbox, sem ⊘ e sem ✕.
+  function linhaMembro(m, grupo_id, orfao = false) {
+    const seloOrfao = orfao ? `<span class="selo-grupo" title="o representante deste grupo está fora do período carregado">membro de grupo</span>` : "";
+    return `<tr${orfao ? "" : ` class="membro"`} data-id="${m.id}" data-grupo="${grupo_id}">
         <td class="selcol"></td>
         <td class="dt">${fmtData(m.data)}</td>
-        <td>${esc(m.descricao || "—")}<span class="selo-grupo">${esc(m.fonte)}</span>${!m.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : ""}</td>
+        <td>${esc(m.descricao || "—")}<span class="selo-grupo">${esc(m.fonte)}</span>${!m.computa_resumo ? `<span class="selo-fora">fora do resumo</span>` : ""}${seloOrfao}</td>
         <td>${esc(m.categoria || "—")}</td>
         <td>${esc(m.subcategoria || "—")}</td>
         <td>${esc(m.pessoa || "—")}</td>
@@ -804,16 +829,13 @@ if (typeof document !== "undefined") {
           <button class="miniBtn representar" title="Tornar representante (passa a ser o que conta)">★</button>
           <button class="miniBtn tirar" title="Tirar do grupo">⤴</button>
         </td>
-      </tr>`).join("");
-      return principal + membros;
-    }).join("");
-    atualizarMassaBar();
+      </tr>`;
   }
 
   // ids atualmente visíveis (respeitando o filtro) — base do "selecionar todos". Linha de grupo
-  // conta pelo representante (membros não são selecionáveis).
+  // conta pelo representante (membros, inclusive o órfão, não são selecionáveis).
   function idsFiltrados() {
-    return filtrarLinhas(montarLinhas(estado.transacoes), estado.filtro).map(l => l.t.id);
+    return idsSelecionaveis(filtrarLinhas(montarLinhas(estado.transacoes), estado.filtro));
   }
 
   // atualiza a barra de massa: contagem, visibilidade e o estado do "selecionar todos".

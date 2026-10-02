@@ -4,7 +4,7 @@ import {
   centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
   agruparPorPessoa, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
-  escolherCandidato,
+  escolherCandidato, linhaEditavel, idsSelecionaveis,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto } from "../public/pdf_extrair.js";
@@ -620,6 +620,35 @@ test("montarLinhas: representante carregado sem seus membros (fora do período) 
 test("filtrarLinhas: computa='agrupados' inclui grupo cujos membros estão fora do período (membrosFora)", () => {
   const L = montarLinhas([REP_SEM_MEMBROS, R[1]]);
   assert.deepEqual(filtrarLinhas(L, { computa: "agrupados" }).map((l) => l.t.id), ["d"]);
+});
+
+// ---- F4: membro órfão é só leitura ----
+// Exemplo do card (valores inventados): grupo com um lançamento manual de 30/09 e a linha do
+// extrato de 02/10; o representante passou a ser a do extrato. Em setembro o manual chega sem o
+// representante (órfão); em outubro o representante chega sem o membro (membrosFora).
+const MANUAL_30_09 = { id: "m1", data: "2026-09-30", descricao: "Mercado", categoria: "Casa", pessoa: null, pessoa_id: null, origem_categoria: "manual", computa_resumo: true, grupo_id: "G3", representante: false, valor_final: "120.00", fonte: "manual" };
+const EXTRATO_02_10 = { ...MANUAL_30_09, id: "e1", data: "2026-10-02", descricao: "PIX MERCADO", representante: true, fonte: "extrato" };
+
+test("linhaEditavel: membro órfão não é editável — editar não teria efeito (quem conta é o representante)", () => {
+  const [orfao] = montarLinhas([MANUAL_30_09]); // setembro
+  assert.equal(orfao.orfao, true);
+  assert.equal(linhaEditavel(orfao), false);
+});
+
+test("linhaEditavel: linha solta e representante seguem editáveis, inclusive o de membrosFora", () => {
+  const L = montarLinhas(R); // "b" solta, "c" representante com o membro "a"
+  assert.equal(linhaEditavel(L.find((l) => l.t.id === "b")), true);
+  assert.equal(linhaEditavel(L.find((l) => l.t.id === "c")), true);
+  const [rep] = montarLinhas([EXTRATO_02_10]); // outubro: só o representante na janela
+  assert.equal(rep.membrosFora, true);
+  assert.equal(linhaEditavel(rep), true); // ele conta, então editar tem efeito
+});
+
+test("idsSelecionaveis: o 'selecionar todos' e a barra de massa não alcançam o órfão", () => {
+  const rows = [R[1], R[2], R[0], MANUAL_30_09]; // solta "b", representante "c" com membro "a", órfão "m1"
+  const L = montarLinhas(rows);
+  assert.deepEqual(L.map((l) => l.t.id), ["b", "c", "m1"]);
+  assert.deepEqual(idsSelecionaveis(L), ["b", "c"]);
 });
 
 // ---- B2: painel de regras aprendidas ----
