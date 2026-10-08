@@ -146,7 +146,7 @@ function previewDeLinhas(linhas, saldos, conta, { existentes = [], hashes = [], 
  */
 export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {}, hashes = [] } = {}) {
   void catalogo; // não usado aqui — ver docstring de montarPreviewExtrato
-  const { itens: itensBrutos, totalCents } = parseFatura(texto, ano);
+  const { itens: itensBrutos, totalCents } = parseFatura(texto, ano, mes);
   const soma = itensBrutos.reduce((s, i) => s + i.valorCents, 0);
   // totalCents=0 quando a fatura não trouxe "Total dos lançamentos atuais" — sem total pra
   // comparar não há o que checar (mesmo critério do tools/importar_fatura.py).
@@ -169,13 +169,17 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
     // linhaHash usa o valor COM sinal (estável/único: compra +X e estorno -X do mesmo lugar/data
     // ficam distintos).
     const lh = linhaHash(conta, item.data, item.descricao, item.valorCents, i);
+    // C8: a linha pode ter sido gravada antes da regra nova, com a chave calculada pela data
+    // antiga (ano da fatura + DD/MM). A linha_hash dela não muda na migração 0010, então ela só é
+    // reconhecida por essa chave.
+    const lhAntiga = linhaHash(conta, item.dataAntiga, item.descricao, item.valorCents, i);
 
     // estorno (valor negativo na fatura) vira RECEITA com valor positivo — igual ao extrato trata
     // crédito. valor_total no banco é sempre >= 0 (check constraint); o net entra em receita−despesa.
     const natureza = item.valorCents < 0 ? "receita" : "despesa";
     const valorCents = Math.abs(item.valorCents);
 
-    if (hashesSet.has(lh)) {
+    if (hashesSet.has(lh) || hashesSet.has(lhAntiga)) {
       itens.push({
         ...item, valorCents, linhaHash: lh, status: "jaTem", matchId: null, computaResumo: null,
         categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null,
@@ -209,6 +213,22 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
   // totalCents = total impresso na fatura (não a soma dos itens novos): quem aplica usa isso pra
   // achar e marcar o pagamento correspondente no extrato como fora do resumo (evita contar 2x).
   return { checksum, itens, resumo, totalCents };
+}
+
+/**
+ * Chaves (linha_hash) que o preview da fatura procura no banco: a nova e a antiga (C8) de cada
+ * item. A rota busca por IGUALDADE, não por janela de data: as linhas corrigidas pela 0010 estão
+ * guardadas um ano antes da data da chave antiga, e uma janela não as acharia.
+ */
+export function chavesFatura(texto, ano, mes) {
+  const conta = `fatura-${ano}${mes}`;
+  const { itens } = parseFatura(texto, ano, mes);
+  const chaves = new Set();
+  itens.forEach((item, i) => {
+    chaves.add(linhaHash(conta, item.data, item.descricao, item.valorCents, i));
+    chaves.add(linhaHash(conta, item.dataAntiga, item.descricao, item.valorCents, i));
+  });
+  return [...chaves];
 }
 
 // F2: a prévia descreve o estado que o app viu; entre ela e o aplicar o Caio pode ter

@@ -330,6 +330,24 @@ test("transacoesNaJanela traz só linha_hash null com valor em cents", async () 
   assert.match(sql.chamadas[0].text, /round\(valor_final\*100\)/i);
 });
 
+test("C8: hashesExistentes busca por igualdade (any), sem janela de data", async () => {
+  // a linha corrigida pela 0010 está um ano antes da data da chave antiga: só a igualdade a acha.
+  const sql = fakeSql([{ linha_hash: "h1" }]);
+  const db = criarDb(sql);
+  const r = await db.hashesExistentes(["h1", "h2"]);
+  assert.deepEqual(r, ["h1"]);
+  assert.match(sql.chamadas[0].text, /linha_hash = any\(/i);
+  assert.doesNotMatch(sql.chamadas[0].text, /\bdata\b/i);
+  assert.deepEqual(sql.chamadas[0].values, [["h1", "h2"]]);
+});
+
+test("C8: hashesExistentes sem chaves não consulta o banco", async () => {
+  const sql = fakeSql([{ linha_hash: "x" }]);
+  const db = criarDb(sql);
+  assert.deepEqual(await db.hashesExistentes([]), []);
+  assert.equal(sql.chamadas.length, 0);
+});
+
 test("hashesNaJanela devolve os hashes não-nulos", async () => {
   const sql = fakeSql([{ linha_hash:"abc" }]);
   const db = criarDb(sql);

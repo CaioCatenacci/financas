@@ -481,6 +481,17 @@ total tirada do resumo à mão também bloqueia a marcação automática (conser
 ajustar à mão). Gravar o vínculo pediria coluna nova. O `tools/importar_fatura.py` segue com o
 defeito (BACKLOG).
 
+**Data do item da fatura (C8, 08/10/2026):** a fatura traz só dia/mês da compra e o parser
+completava com o ano da fatura — parcela de compra do fim do ano anterior caía num mês futuro.
+Regra nova (`worker/fatura.js`, decisão do Caio, opção A): **parcela** fica no mês/ano da fatura
+informados no import, com o dia da compra (dia inexistente → último dia do mês); **item sem
+parcela** fica na data da compra, com o ano da fatura − 1 quando o mês da compra é maior que o da
+fatura. **O histórico não é refeito** (opção 1): parcelas antigas seguem na data da compra; só as
+linhas erradas das faturas importadas em 08/09/2026 voltaram um ano (`migrations/0010`, critério no
+arquivo, idempotente, 81 linhas). Como a `linha_hash` dessas linhas não muda, o preview calcula
+também a chave do jeito antigo e acha a linha por **igualdade de hash** (não por janela de data):
+reimportar a fatura não duplica. Os importadores Python seguem fora (C6).
+
 ## 17. Extrato do C6 Bank e a receita da Wise (C1, 02/10/2026)
 
 A conta PJ fica no C6 e recebe da Wise só o que paga as contas da empresa; o resto da conversão

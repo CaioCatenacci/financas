@@ -288,6 +288,7 @@ function dbApiFake() {
 
 // Importar handleApi para teste — precisa ser exportado
 import { handleApi } from "./index.js";
+import { linhaHash as linhaHashC8 } from "./reconciliar.js";
 
 test("GET /api/pessoas retorna lista de pessoas", async () => {
   const db = dbApiFake();
@@ -334,6 +335,7 @@ function dbImportarFake() {
     associacoesPorNome: async () => ({}),
     transacoesNaJanela: async () => [],
     hashesNaJanela: async () => [],
+    hashesExistentes: async () => [],
     aplicarImportacao: async (d) => {
       estado.aplicado = d;
       return { gravados: (d.novos || []).length + (d.naoGasto || []).length, agrupados: (d.casados || []).length, naoGasto: (d.naoGasto || []).length };
@@ -451,6 +453,30 @@ test("POST /api/importar/preview (fatura) padroniza o mês p/ 2 dígitos (idempo
     return data.itens[0].linhaHash;
   };
   assert.equal(await call(5), await call("05"), "mes 5 e '05' devem gerar o mesmo linha_hash");
+});
+
+test("C8: POST /api/importar/preview (fatura) busca as chaves nova e antiga por igualdade e não duplica a linha corrigida", async () => {
+  // banco depois da 0010: a linha está em 2025-05-29 (um ano antes) com a linha_hash antiga
+  // (data 2026-05-29 = ano da fatura + DD/MM). A fatura é de 2026-04: compra de maio à vista
+  // numa fatura de abril → a regra nova data em 2025-05-29. Uma janela de data não acharia a
+  // chave antiga; a busca por igualdade acha.
+  const antiga = linhaHashC8("fatura-202604", "2026-05-29", "PARK E CO ESTACIONAME", 1700, 0);
+  let pedidas = null;
+  const db = {
+    ...dbImportarFake(),
+    hashesNaJanela: async () => { throw new Error("fatura não usa janela"); },
+    hashesExistentes: async (ch) => { pedidas = ch; return ch.filter((h) => h === antiga); },
+  };
+  const env = { APP_TOKEN: "token123", DATABASE_URL: "" };
+  const request = new Request("http://localhost/api/importar/preview", {
+    method: "POST", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+    body: JSON.stringify({ tipo: "fatura", texto: TXT_FATURA_MIN, ano: 2026, mes: 4 }),
+  });
+  const data = await (await handleApi(request, env, new URL(request.url), db)).json();
+  assert.ok(pedidas.includes(antiga), "a chave antiga entra na busca");
+  assert.ok(pedidas.includes(linhaHashC8("fatura-202604", "2025-05-29", "PARK E CO ESTACIONAME", 1700, 0)), "a nova também");
+  assert.equal(data.resumo.jaTem, 1);
+  assert.equal(data.resumo.novos, 0);
 });
 
 test("POST /api/importar/preview (fatura) sem ano/mês → 400 com mensagem clara (não 500)", async () => {

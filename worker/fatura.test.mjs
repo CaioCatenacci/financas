@@ -85,3 +85,48 @@ test("fatura densa: extrai a parcela do fim do estabelecimento", () => {
   assert.equal(e.parcela, "01/03");
   assert.ok(!/\d{2}\/\d{2}$/.test(e.descricao), "a descrição não termina com a parcela");
 });
+
+// ---- C8: datação pelo mês da fatura (números inventados) ----
+// A fatura só traz DD/MM. Com o ano E o mês da fatura, a parcela fica no mês em que foi cobrada
+// (com o dia da compra) e a compra à vista de um mês "maior" que o da fatura é do ano anterior —
+// senão uma parcela 12/12 de compra de outubro ganhava o ano da fatura e caía no futuro.
+const linhaFat = (dd, mm, est, valor) => `                ${dd}/${mm}      ${est}                          ${valor}`;
+
+test("C8: parcela fica no ano-mês da fatura com o dia da compra (Exemplo: 15/11 parc 03/10 na fatura 2026-03)", () => {
+  const r = parseFatura(linhaFat("15", "11", "LOJA X 03/10", "50,00"), 2026, "03");
+  assert.equal(r.itens[0].parcela, "03/10");
+  assert.equal(r.itens[0].data, "2026-03-15");
+});
+
+test("C8: parcela com dia que não existe no mês da fatura vai para o último dia (31/01 na fatura 2026-02)", () => {
+  const r = parseFatura(linhaFat("31", "01", "LOJA Z 02/04", "10,00"), 2026, 2);
+  assert.equal(r.itens[0].data, "2026-02-28");
+});
+
+test("C8: sem parcela, mês da compra maior que o da fatura → ano da fatura menos um (28/12 na fatura 2026-03)", () => {
+  const r = parseFatura(linhaFat("28", "12", "LOJA Y", "20,00"), 2026, "03");
+  assert.equal(r.itens[0].parcela, null);
+  assert.equal(r.itens[0].data, "2025-12-28");
+});
+
+test("C8: sem parcela, mês da compra até o mês da fatura → ano da fatura", () => {
+  const r = parseFatura([linhaFat("02", "03", "LOJA A", "5,00"), linhaFat("20", "02", "LOJA B", "6,00")].join("\n"), 2026, "03");
+  assert.deepEqual(r.itens.map(i => i.data), ["2026-03-02", "2026-02-20"]);
+});
+
+test("C8: virada de ano — fatura 2026-01, compra 20/12: à vista vai a 2025-12-20, parcela a 2026-01-20", () => {
+  const r = parseFatura([linhaFat("20", "12", "LOJA V", "7,00"), linhaFat("20", "12", "LOJA P 02/06", "8,00")].join("\n"), 2026, "01");
+  assert.equal(r.itens[0].data, "2025-12-20");
+  assert.equal(r.itens[1].data, "2026-01-20");
+});
+
+test("C8: com o mês, cada item guarda a data do jeito de antes (ano da fatura + DD/MM), para achar a chave antiga", () => {
+  const r = parseFatura(linhaFat("15", "11", "LOJA X 03/10", "50,00"), 2026, "03");
+  assert.equal(r.itens[0].dataAntiga, "2026-11-15");
+});
+
+test("C8: sem o mês, o parser segue como antes (ano da fatura + DD/MM, sem campo novo)", () => {
+  const r = parseFatura(linhaFat("15", "11", "LOJA X 03/10", "50,00"), 2026);
+  assert.equal(r.itens[0].data, "2026-11-15");
+  assert.equal("dataAntiga" in r.itens[0], false);
+});
