@@ -247,6 +247,8 @@ implantação em `docs/superpowers/plans/2026-09-26-fila-autonoma.md`.
 8. `DROPBOX_APP_KEY` — app key Dropbox
 9. `DROPBOX_APP_SECRET` — app secret Dropbox
 10. `APP_TOKEN` — token único do acesso ao app web
+11. `C6_PDF_SENHA` — senha do PDF do extrato do C6 Bank (usada só no navegador, via `GET /api/importar/c6-senha`)
+12. `CONTAS_PROPRIAS` — nomes das contas do Caio, separados por vírgula, como aparecem no extrato do C6 (repasse entre contas próprias sai do resumo)
 
 Configurar via `wrangler secret put NOME` (lê do stdin).
 
