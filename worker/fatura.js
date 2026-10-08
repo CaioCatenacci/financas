@@ -38,12 +38,34 @@ function _cents(v) {
 }
 
 /**
+ * Data de um item da fatura (C8). A fatura só traz DD/MM da compra; completar sempre com o ano da
+ * fatura jogava no futuro a parcela 12/12 de uma compra de outubro (fatura de setembro do ano
+ * seguinte) e a compra de dezembro numa fatura de janeiro. A regra:
+ * - PARCELA: fica no mês/ano da fatura em que foi cobrada, com o dia da compra (dia que não existe
+ *   no mês — 31 em fevereiro — vira o último dia do mês);
+ * - À VISTA: data da compra; se o mês da compra é maior que o da fatura, é do ano anterior.
+ */
+export function dataItemFatura(dd, mm, ano, mes, temParcela) {
+  const a = Number(ano), m = Number(mes), d = Number(dd), mc = Number(mm);
+  const p2 = (n) => String(n).padStart(2, "0");
+  if (temParcela) {
+    const ultimo = new Date(Date.UTC(a, m, 0)).getUTCDate();
+    return `${a}-${p2(m)}-${p2(Math.min(d, ultimo))}`;
+  }
+  return `${mc > m ? a - 1 : a}-${p2(mc)}-${p2(d)}`;
+}
+
+/**
  * Parser da fatura Itaú.
  * @param {string} texto - Texto da fatura (pdf.js reconstruído por linhas)
  * @param {number} ano - Ano do período da fatura (a fatura só traz DD/MM)
+ * @param {string|number} [mes] - Mês do período. Com ele, a data segue `dataItemFatura` e cada item
+ *   ganha `dataAntiga` (ano da fatura + DD/MM, o jeito de antes do C8), para o preview achar as
+ *   linhas gravadas com a chave antiga. Sem ele, o comportamento é o antigo (sem `dataAntiga`).
  * @returns {{itens: Array, totalCents: number}}
  */
-export function parseFatura(texto, ano) {
+export function parseFatura(texto, ano, mes) {
+  const comMes = mes !== undefined && mes !== null && mes !== "";
   const itens = [];
   let totalCents = 0;
 
@@ -81,11 +103,13 @@ export function parseFatura(texto, ano) {
         est = est.slice(0, pm.index).replace(/[\s*]+$/, "").trim();
       }
 
+      const antiga = `${ano}-${mm}-${dd}`;
       itens.push({
-        data: `${ano}-${mm}-${dd}`,
+        data: comMes ? dataItemFatura(dd, mm, ano, mes, !!parcela) : antiga,
         descricao: est,
         valorCents: _cents(m[4]),
         parcela,
+        ...(comMes ? { dataAntiga: antiga } : {}),
       });
     }
   }

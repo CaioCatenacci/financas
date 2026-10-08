@@ -10,10 +10,9 @@ import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js"
 import { parseAprender } from "./teach.js";
 import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
-import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, aplicar, conferirPreviaCasados } from "./importar.js";
+import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
-import { parseFatura } from "./fatura.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
@@ -482,17 +481,12 @@ export async function handleApi(request, env, url, dbOpt = null) {
       if (!ano || ano < 2000 || ano > 2100 || !mesNum || mesNum < 1 || mesNum > 12) {
         return erroJson("Informe ano (ex.: 2025) e mês (1–12) da fatura.", 400);
       }
-      const { itens } = parseFatura(b.texto, ano);
-      const hoje = new Date().toISOString().slice(0, 10);
-      let de = hoje, ate = hoje;
-      if (itens.length) {
-        de = itens.reduce((min, i) => (i.data < min ? i.data : min), itens[0].data);
-        ate = itens.reduce((max, i) => (i.data > max ? i.data : max), itens[0].data);
-      }
-      const hashes = await db.hashesNaJanela(de, ate);
       // mês com 2 dígitos: entra na conta sintética fatura-${ano}${mes} da linha_hash. "5" e "05"
       // gerariam hashes diferentes p/ a mesma fatura (quebrando a dedup — o bloco 2 gravou "05").
       const mes = String(mesNum).padStart(2, "0");
+      // C8: busca por igualdade das chaves nova e antiga de cada item, não por janela de data —
+      // a linha corrigida pela 0010 está um ano antes da data da chave antiga.
+      const hashes = await db.hashesExistentes(chavesFatura(b.texto, ano, mes));
       return j(montarPreviewFatura(b.texto, ano, mes, { catalogo, associacoes, hashes }));
     }
 

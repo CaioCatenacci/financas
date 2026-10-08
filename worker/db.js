@@ -462,6 +462,17 @@ export function criarDb(sql) {
       return rows.map(r => ({ id: String(r.id), data: r.data, descricao: r.descricao ?? null, valorCents: Number(r.valor_cents), grupo_id: r.grupo_id ?? null, representante: !!r.representante }));
     },
 
+    // C8: dedup da fatura por IGUALDADE de linha_hash (chaves nova e antiga calculadas antes). Não
+    // usa janela de data: a linha corrigida pela 0010 fica um ano antes da data da chave antiga.
+    async hashesExistentes(chaves) {
+      if (!chaves || !chaves.length) return [];
+      const rows = await sql`
+        select linha_hash
+        from transacoes
+        where linha_hash = any(${chaves})`;
+      return rows.map(r => r.linha_hash);
+    },
+
     async hashesNaJanela(de, ate) {
       const rows = await sql`
         select linha_hash

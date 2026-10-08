@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { montarPreviewExtrato, montarPreviewFatura, aplicar, conferirPreviaCasados } from "./importar.js";
+import { montarPreviewExtrato, montarPreviewFatura, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { linhaHash } from "./reconciliar.js";
 
 const catalogo = { categorias: [{ id: "cO", nome: "Outros" }, { id: "cT", nome: "Transferências" }], subcategorias: [] };
@@ -314,4 +314,49 @@ test("F1: no caso misto o candidato-grupo chega ao app com grupo_id e a contagem
   assert.equal(amb.candidatos.length, 2);
   assert.deepEqual(amb.candidatos[0], { id: "foto", data: "2025-12-09", descricao: "padaria", valorCents: 10000, grupo_id: "G1", membros: 2 });
   assert.deepEqual(amb.candidatos[1], { id: "s", data: "2025-12-10", descricao: "mercado", valorCents: 10000, grupo_id: null });
+});
+
+// ---- C8: chave antiga (números inventados) ----
+// As linhas gravadas antes do C8 têm a linha_hash calculada com a data antiga (ano da fatura +
+// DD/MM da compra). Depois da migração 0010 algumas foram guardadas com um ano a menos, mas a
+// linha_hash não mudou. Reimportar a fatura tem que achá-las pela chave antiga — senão duplica.
+const TXT_FAT_MAR = `                DATA       ESTABELECIMENTO                       VALOR EM R$
+                15/11      LOJA X 03/10                          50,00
+                28/12      LOJA Y                          20,00`;
+
+test("C8: montarPreviewFatura data pela regra nova (Exemplo da fatura de março)", () => {
+  const p = montarPreviewFatura(TXT_FAT_MAR, 2026, "03", { catalogo, associacoes: {}, hashes: [] });
+  assert.deepEqual(p.itens.map(i => i.data), ["2026-03-15", "2025-12-28"]);
+  // a chave nova usa a data nova
+  assert.equal(p.itens[0].linhaHash, linhaHash("fatura-202603", "2026-03-15", "LOJA X", 5000, 0));
+});
+
+test("C8: linha gravada com a chave antiga (e data já corrigida) → jaTem, não duplica", () => {
+  // como o banco fica depois da 0010: data = antiga − 1 ano, linha_hash = a antiga, intacta.
+  const antigas = [
+    linhaHash("fatura-202603", "2026-11-15", "LOJA X", 5000, 0),
+    linhaHash("fatura-202603", "2026-12-28", "LOJA Y", 2000, 1),
+  ];
+  const p = montarPreviewFatura(TXT_FAT_MAR, 2026, "03", { catalogo, associacoes: {}, hashes: antigas });
+  assert.equal(p.resumo.jaTem, 2);
+  assert.equal(p.resumo.novos, 0);
+});
+
+test("C8: linha gravada pela regra nova (hash novo) → jaTem", () => {
+  const novas = [
+    linhaHash("fatura-202603", "2026-03-15", "LOJA X", 5000, 0),
+    linhaHash("fatura-202603", "2025-12-28", "LOJA Y", 2000, 1),
+  ];
+  const p = montarPreviewFatura(TXT_FAT_MAR, 2026, "03", { catalogo, associacoes: {}, hashes: novas });
+  assert.equal(p.resumo.jaTem, 2);
+  assert.equal(p.resumo.novos, 0);
+});
+
+test("C8: chavesFatura devolve a chave nova e a antiga de cada item (a rota busca por igualdade)", () => {
+  const ch = chavesFatura(TXT_FAT_MAR, 2026, "03");
+  assert.ok(ch.includes(linhaHash("fatura-202603", "2026-03-15", "LOJA X", 5000, 0)));
+  assert.ok(ch.includes(linhaHash("fatura-202603", "2026-11-15", "LOJA X", 5000, 0)));
+  assert.ok(ch.includes(linhaHash("fatura-202603", "2025-12-28", "LOJA Y", 2000, 1)));
+  assert.ok(ch.includes(linhaHash("fatura-202603", "2026-12-28", "LOJA Y", 2000, 1)));
+  assert.equal(ch.length, 4);
 });
