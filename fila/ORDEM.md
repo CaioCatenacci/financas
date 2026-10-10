@@ -1,16 +1,20 @@
 # Ordem da fila
 
-Semeada em 2026-09-26 a partir do BACKLOG: P2 em Próximo, P3 em Depois. A faixa
-Agora fica com o Caio.
+Reorganizada em 2026-10-09 em torno dos três objetivos do projeto: (1) o que entra cobre o
+que sai; (2) para onde o dinheiro vai; (3) a casa. A faixa Agora fica com o Caio.
 
 ## Agora
 
 ## Próximo
+- G1
+- G2
+- G3
+- A2
+- G4
+- A1
+- A3
 
 ## Depois
-- A1
-- A2
-- A3
 - B3
 - C4
 - C5
