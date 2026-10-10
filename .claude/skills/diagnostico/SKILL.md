@@ -25,7 +25,7 @@ o que falta (fonte e até que dia) e pergunte se escreve assim mesmo. O app já 
 
 1. `## 1. Fechou no azul?` — saldo do mês contra a média dos 3 anteriores; selo de estimado se for.
 2. `## 2. O que puxou o gasto` — categorias que mais pesaram e as que mais cresceram, com a causa.
-3. `## 3. O que estourou o orçamento` — tabela categoria × alvo × realizado; alvo irreal é achado.
+3. `## 3. O que estourou o orçamento` — lista categoria · realizado contra alvo; alvo irreal é achado.
 4. `## 4. Oportunidades de economia` — onde cortar, com o valor por mês; separe escolha de prioridade
    (saúde, escola) de desperdício.
 5. `## 5. Pendências do fechamento` — o que falta importar, sem categoria, lançamento estranho.
