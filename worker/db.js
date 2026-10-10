@@ -405,6 +405,47 @@ export function criarDb(sql) {
       return rows.map(r => ({ mes: r.mes, receita_cents: Number(r.receita_cents), despesa_cents: Number(r.despesa_cents) }));
     },
 
+    // ---- G2: fechamento do mês (o que falta importar) ----
+    // uma linha por import aplicado, com o período que o próprio arquivo cobre
+    async registrarImportacao({ conta, tipo, de, ate }) {
+      await sql`
+        insert into importacoes (conta, tipo, de, ate)
+        values (${conta}, ${tipo}, ${de}, ${ate})`;
+    },
+
+    // até onde cada fonte vai: max(ate) por conta/tipo
+    async coberturaImportacoes() {
+      return await sql`
+        select conta, tipo, to_char(max(ate),'YYYY-MM-DD') as ate
+        from importacoes
+        group by conta, tipo`;
+    },
+
+    // meses com fatura importada na janela [de, ateExcl) — a fatura é gravada com de = dia 01
+    // do mês do vencimento, então o mês dela é o de `de`
+    async faturasImportadas(de, ateExcl) {
+      const rows = await sql`
+        select distinct to_char(de,'YYYY-MM') as mes
+        from importacoes
+        where tipo = 'fatura' and de >= ${de} and de < ${ateExcl}
+        order by 1`;
+      return rows.map(r => r.mes);
+    },
+
+    // lançamentos na categoria padrão (flag, nunca o nome: ela pode ser renomeada), por mês, na
+    // janela [de, ateExcl). Contagem em SQL, só o que conta no resumo (o membro de grupo que não
+    // é representante não aparece como linha e não precisa de triagem).
+    async semCategoriaPorMes(de, ateExcl) {
+      const rows = await sql`
+        select to_char(t.data,'YYYY-MM') as mes, count(*) as n
+        from transacoes t
+        join categorias c on c.id = t.categoria_id
+        where c.padrao and t.conta_no_resumo and t.data >= ${de} and t.data < ${ateExcl}
+        group by to_char(t.data,'YYYY-MM')
+        order by 1`;
+      return rows.map(r => ({ mes: r.mes, n: Number(r.n) }));
+    },
+
     // ---- Inc 4: planejamento (metas) ----
     async metasBaselines() {
       const rows = await sql`

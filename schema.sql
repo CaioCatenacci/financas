@@ -115,3 +115,15 @@ create table conversoes (
   criado_em  timestamptz not null default now()
 );
 create index idx_conversoes_data on conversoes (data);
+
+-- G2: um import aplicado e o período que o arquivo cobre (extrato: 1º ao último "Saldo do dia";
+-- fatura: o mês do vencimento; wise: 1ª à última conversão). Cobertura de uma fonte = max(ate).
+create table importacoes (
+  id        uuid        primary key default gen_random_uuid(),
+  conta     text        not null,                  -- 'itau' | 'c6' | 'wise'
+  tipo      text        not null check (tipo in ('extrato','fatura','wise')),
+  de        date,
+  ate       date        not null,
+  criado_em timestamptz not null default now()
+);
+create index idx_importacoes_conta_tipo on importacoes (conta, tipo, ate);

@@ -331,6 +331,65 @@ export function montarSaldoMes(kpis, salario) {
   return { receita_cents, despesa_cents, saldo_cents: receita_cents - despesa_cents, estimado: !!(salario && salario.estimado) };
 }
 
+// ---------- G2: fechamento do mês (o que falta importar) ----------
+// O servidor decide o estado (worker/fechamento.js); aqui só rótulo e a ligação de cada fonte com
+// o tipo da aba Importar que a resolve.
+const ESTADOS_FECHAMENTO = { fechado: "fechado", parcial: "parcial", faltando: "faltando" };
+export function rotuloEstadoFechamento(estado) {
+  return ESTADOS_FECHAMENTO[estado] || "—";
+}
+
+const ddmm = (iso) => (iso ? `${String(iso).slice(8, 10)}/${String(iso).slice(5, 7)}` : "");
+
+// uma linha por fonte: {fonte, texto, falta, tipo}. `tipo` (o valor de TIPOS_IMPORT) só vem em
+// quem falta, inteira ou em parte — é o clique que leva à aba Importar com o tipo escolhido.
+// Salário estimado aponta pra Wise (é a conversão que ainda não chegou); sem categoria é
+// pendência, não import, e só aparece quando há alguma.
+export function linhasFechamento(m) {
+  const f = (m && m.fontes) || {};
+  const extrato = (rot, fonte, tipo) => {
+    const x = f[fonte] || {};
+    const falta = x.cobertura !== "cheia";
+    return { fonte, texto: x.ate ? `${rot} até ${ddmm(x.ate)}` : `${rot}: falta`, falta, tipo: falta ? tipo : null };
+  };
+  const fat = f.fatura || {}, sal = f.salario || {};
+  const linhas = [
+    extrato("Itaú", "itau", "extrato"),
+    extrato("C6", "c6", "c6"),
+    { fonte: "fatura", texto: fat.existe ? "fatura: ok" : "fatura: falta", falta: !fat.existe, tipo: fat.existe ? null : "fatura" },
+    { fonte: "salario", texto: sal.estimado ? "salário: estimado" : "salário: ok", falta: !!sal.estimado, tipo: sal.estimado ? "wise" : null },
+  ];
+  const n = Number(m && m.sem_categoria) || 0;
+  if (n > 0) linhas.push({ fonte: "sem_categoria", texto: `${n} sem categoria`, falta: false, tipo: null });
+  return linhas;
+}
+
+// o mês selecionado dentro da resposta de /api/fechamento (null se não veio)
+export function mesDoFechamento(resp, mes) {
+  return ((resp && resp.meses) || []).find((m) => m.mes === mes) || null;
+}
+
+// grade mês × fonte (link "ver 12 meses"): cada célula traz a cobertura (vira a cor) e um texto curto
+export function gradeFechamento(resp) {
+  const colunas = ["Itaú", "C6", "Fatura", "Salário", "Sem categoria"];
+  const linhas = ((resp && resp.meses) || []).map((m) => {
+    const f = m.fontes || {};
+    const ext = (x = {}) => ({ cobertura: x.cobertura || "faltando", texto: x.ate ? ddmm(x.ate) : "falta" });
+    const fat = f.fatura || {}, sal = f.salario || {};
+    const n = Number(m.sem_categoria) || 0;
+    return {
+      mes: m.mes, estado: m.estado,
+      celulas: [
+        ext(f.itau), ext(f.c6),
+        { cobertura: fat.existe ? "cheia" : "faltando", texto: fat.existe ? "ok" : "falta" },
+        { cobertura: sal.estimado ? "estimado" : "cheia", texto: sal.estimado ? "estimado" : "ok" },
+        { cobertura: n ? "pendente" : "cheia", texto: String(n) },
+      ],
+    };
+  });
+  return { colunas, linhas };
+}
+
 // fonte gravada na transação: só 'extrato' ou 'fatura' (o C6 é extrato).
 export function fonteDoTipo(tipo) {
   return tipo === "fatura" ? "fatura" : "extrato";
@@ -401,6 +460,7 @@ if (typeof document !== "undefined") {
     selecao: new Set(), // ids selecionados p/ edição em massa (persiste ao filtrar/re-renderizar)
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
     lancTudo: false,
+    fechamento: null, fechamentoGrade: false, // G2: /api/fechamento e o "ver 12 meses" aberto
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
     sunburstPessoaFoco: null, // D6: pessoa focada no sunburst pessoa → categoria; separado do de cima
                               // de propósito: focar um sunburst não mexe no outro
@@ -457,6 +517,30 @@ if (typeof document !== "undefined") {
       cel("Despesa", despesa, "--despesa", receita ? `${Math.round(despesa / receita * 100)}% da receita` : "&nbsp;") +
       `<div class="card kpi"><div class="lbl">Saldo guardado</div><div class="val">R$ ${Math.round(saldo).toLocaleString("pt-BR")}</div><div class="delta ${saldo >= 0 ? "up" : "down"}">${pct}% da receita</div></div>` +
       cel("Reembolso (IR)", reembolso, "--c3", "dedutível");
+  }
+
+  // ----- G2: fechamento do mês — o que falta importar -----
+  // Estado do mês selecionado e uma linha por fonte; a fonte que falta é botão (leva à aba
+  // Importar com o tipo escolhido). "ver 12 meses" abre a grade mês × fonte.
+  function drawFechamento() {
+    const el = $("#fechamento"); if (!el) return;
+    const m = mesDoFechamento(estado.fechamento, estado.mes);
+    if (!m) { el.innerHTML = ""; el.classList.add("hidden"); return; }
+    el.classList.remove("hidden");
+    const fontes = linhasFechamento(m).map(l => l.tipo
+      ? `<button type="button" class="chip fechfonte fech-falta" data-tipo="${esc(l.tipo)}" title="importar">${esc(l.texto)}</button>`
+      : `<span class="fechfonte${l.fonte === "sem_categoria" ? " fech-pend" : ""}">${esc(l.texto)}</span>`).join("");
+    let grade = "";
+    if (estado.fechamentoGrade) {
+      const g = gradeFechamento(estado.fechamento);
+      grade = `<table class="fechgrade"><thead><tr><th>Mês</th>${g.colunas.map(c => `<th>${esc(c)}</th>`).join("")}<th>Estado</th></tr></thead><tbody>` +
+        g.linhas.map(l => `<tr><td>${esc(mesLabelAno(l.mes))}</td>${l.celulas.map(c => `<td class="fech-${esc(c.cobertura)}">${esc(c.texto)}</td>`).join("")}` +
+          `<td><span class="fechselo fech-${esc(l.estado)}">${esc(rotuloEstadoFechamento(l.estado))}</span></td></tr>`).join("") +
+        `</tbody></table>`;
+    }
+    el.innerHTML = `<div class="fechtopo"><span class="fechselo fech-${esc(m.estado)}">${esc(rotuloEstadoFechamento(m.estado))}</span>` +
+      `<div class="fechfontes">${fontes}</div>` +
+      `<button type="button" class="chip" id="fechver">${estado.fechamentoGrade ? "esconder 12 meses" : "ver 12 meses"}</button></div>${grade}`;
   }
 
   // ----- G1: saldo do mês (salário por competência) -----
@@ -1567,16 +1651,19 @@ if (typeof document !== "undefined") {
         if (st.tipo === "wise") {
           // G1: manda só as conversões novas; o servidor grava em `conversoes` (dedup por linha_hash)
           const conversoes = st.preview.itens.filter(it => it.status === "novo");
-          st.ultimoResultado = await apiPost("/api/importar/aplicar", { tipo: "wise", conversoes });
+          // G2: a cobertura (1ª à última conversão do CSV) vai junto, pra entrar em importacoes
+          st.ultimoResultado = await apiPost("/api/importar/aplicar", { tipo: "wise", conversoes, cobertura: st.preview.cobertura || null });
           st.preview = null;
           drawImportar();
           return;
         }
         const decisao = montarDecisao(st.preview, estado.catalogo, fonteDoTipo(st.tipo));
         // tipo: no extrato (Itaú ou C6) o servidor pareia os repasses entre contas próprias (C1)
-        const payload = { decisao, tipo: st.tipo };
+        // G2: cobertura = período que o PDF cobre (do 1º ao último "Saldo do dia"), vai pra importacoes
+        const payload = { decisao, tipo: st.tipo, cobertura: st.preview.cobertura || null };
         // fatura: manda o total impresso + ano/mês pro servidor achar o pagamento no extrato e
-        // marcá-lo fora do resumo (evita contar o gasto do cartão duas vezes).
+        // marcá-lo fora do resumo (evita contar o gasto do cartão duas vezes). G2: vai sempre, mesmo
+        // sem total — o servidor grava o mês da fatura em importacoes.
         if (st.tipo === "fatura") payload.fatura = { totalCents: st.preview.totalCents, ano: st.ano, mes: st.mes };
         st.ultimoResultado = await apiPost("/api/importar/aplicar", payload);
         st.preview = null; // evita reaplicar o mesmo lote sem novo preview
@@ -1627,13 +1714,14 @@ if (typeof document !== "undefined") {
       const qsResumo = `?mes=${estado.mes}`;
       const rt = transacoesRange();
       const qsTransacoes = `?de=${rt.de}&ate=${rt.ate}`;
-      const [resumo, metasMes, transacoes, catalogo, pessoas, saldoMensal] = await Promise.all([
+      const [resumo, metasMes, transacoes, catalogo, pessoas, saldoMensal, fechamento] = await Promise.all([
         apiGet("/api/resumo" + qsResumo), apiGet("/api/metas" + qsResumo),
         apiGet("/api/transacoes" + qsTransacoes), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
         apiGet(`/api/saldo-mensal?ate=${estado.mes}`), // G1
+        carregarFechamento(), // G2
       ]);
       estado.resumo = resumo; estado.metasMes = metasMes; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
-      estado.saldoMensal = saldoMensal;
+      estado.saldoMensal = saldoMensal; estado.fechamento = fechamento;
       // remove da seleção ids que sumiram (troca de período/recarga) — evita "selecionados" fantasmas
       const presentes = new Set(transacoes.map(t => t.id));
       for (const id of estado.selecao) if (!presentes.has(id)) estado.selecao.delete(id);
@@ -1642,8 +1730,13 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); drawRows();
+      drawKPIs(); drawFechamento(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
+  }
+
+  // G2: o bloco de fechamento é informativo — se a rota falhar, o Resumo carrega sem ele
+  function carregarFechamento() {
+    return apiGet(`/api/fechamento?ate=${estado.mes}`).catch(() => null);
   }
 
   // Inc 4.5 Tarefa 7: recarrega só o Resumo (resumo do mês + metas do mês, p/ o orçamento
@@ -1652,9 +1745,9 @@ if (typeof document !== "undefined") {
   async function carregarResumo() {
     try {
       const qs = `?mes=${estado.mes}`;
-      const [resumo, metasMes, saldoMensal] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs), apiGet(`/api/saldo-mensal?ate=${estado.mes}`)]);
-      estado.resumo = resumo; estado.metasMes = metasMes; estado.saldoMensal = saldoMensal;
-      drawKPIs(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet();
+      const [resumo, metasMes, saldoMensal, fechamento] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs), apiGet(`/api/saldo-mensal?ate=${estado.mes}`), carregarFechamento()]);
+      estado.resumo = resumo; estado.metasMes = metasMes; estado.saldoMensal = saldoMensal; estado.fechamento = fechamento;
+      drawKPIs(); drawFechamento(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet();
     } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
   }
 
@@ -1698,6 +1791,16 @@ if (typeof document !== "undefined") {
     if (v === "lanc") carregarLancamentos();
     else if (v === "planejamento") renderPlanejamento();
     else if (v === "resumo") carregarResumo();
+  });
+  // G2: fonte que falta → aba Importar com o tipo daquela fonte; "ver 12 meses" abre/fecha a grade
+  $("#fechamento").addEventListener("click", e => {
+    const fonte = e.target.closest(".fech-falta");
+    if (fonte) {
+      estado.importar.tipo = fonte.dataset.tipo; estado.importar.preview = null;
+      document.querySelector('.tab[data-view="importar"]')?.click();
+      return;
+    }
+    if (e.target.id === "fechver") { estado.fechamentoGrade = !estado.fechamentoGrade; drawFechamento(); }
   });
   $("#lancTudo").addEventListener("click", () => {
     estado.lancTudo = !estado.lancTudo;

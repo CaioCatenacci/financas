@@ -575,6 +575,32 @@ converte dólar quando o Caio pede — um mês com o salário de três, o seguin
   lançamento manual de salário contaria em dobro; os importadores Python seguem no modelo antigo
   (BACKLOG C6). A receita da Paola e as outras receitas (reembolso, restituição) seguem como estão.
 
+## 19. Fechamento do mês: o que falta importar (G2, 10/10/2026)
+
+Para o saldo do mês ser confiável, o mês precisa do extrato do Itaú, do C6 e da fatura. A última
+data com movimento não diz até onde o PDF foi; por isso **a cobertura é gravada no import**.
+
+- **`importacoes(conta, tipo ∈ {extrato, fatura, wise}, de, ate)`** (migração `0013`, sem semente;
+  o histórico entra por arquivo local em `dados/`). O `/api/importar/aplicar` grava uma linha por
+  import: extrato do primeiro ao último "Saldo do dia" do PDF, **inclusive** o saldo da data de
+  emissão (os previews devolvem `cobertura {de, ate}` e o app a reenvia); Itaú sempre `conta =
+  'itau'`, C6 `'c6'`; fatura `conta = 'itau'`, do dia 01 ao último dia do **mês do vencimento**
+  (ano/mês vão sempre, mesmo sem total); Wise da primeira à última conversão do CSV. Sem período
+  válido, não grava (não inventa cobertura).
+- **Cobertura de uma fonte = `max(ate)`** por conta/tipo. Um buraco no meio (mês nunca importado
+  entre dois imports) fica invisível — aceito: os dados não têm buraco e o fluxo é sempre para
+  frente. Salário = a última `conversoes.data`, de qualquer origem (a linha `wise` de `importacoes`
+  fica gravada, mas não é lida).
+- **Regra pura** (`worker/fechamento.js`): fonte com `ate` até o último dia do mês (ou depois) =
+  cheia, dentro do mês = parcial, antes do dia 01 ou sem import = faltando; fatura é binária.
+  Mês = **faltando > parcial > fechado**; o mês corrente (por parâmetro, sem relógio) nunca fecha.
+  **Sem categoria não trava** (contado em SQL pela flag `padrao`, só `conta_no_resumo`; volta como
+  "N sem categoria") e **salário estimado não trava** (só informa).
+- **API/UI:** `GET /api/fechamento?ate=YYYY-MM` (12 meses; `ate` inválido → 400). Bloco no topo do
+  Resumo, acima do "Saldo do mês": estado do mês, uma linha por fonte; a fonte que falta leva à aba
+  Importar com o tipo escolhido; "ver 12 meses" abre a grade mês × fonte. Se a rota falhar, o
+  Resumo carrega sem o bloco.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

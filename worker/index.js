@@ -15,6 +15,7 @@ import { parseExtrato } from "./extrato.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { alocarSalario, mesesAte } from "./salario.js";
+import { montarFechamento, ultimoDiaDoMes } from "./fechamento.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 
@@ -182,6 +183,30 @@ function montarDepsTelegram(env) {
     confirmar: (chat, texto, id) => enviarConfirmacao(env.TELEGRAM_TOKEN, chat, texto, id),
     responderImpl: (chat, texto) => responder(env.TELEGRAM_TOKEN, chat, texto),
   };
+}
+
+// ---- G2: período coberto por um import (vai para `importacoes`) ----
+const ISO_DIA = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+function periodoValido(p) {
+  if (!p || !ISO_DIA.test(p.ate || "")) return null;
+  return { de: ISO_DIA.test(p.de || "") ? p.de : null, ate: p.ate };
+}
+function periodoDe(datas) {
+  const ds = datas.filter(Boolean).map((d) => String(d).slice(0, 10)).sort();
+  return ds.length ? { de: ds[0], ate: ds[ds.length - 1] } : null;
+}
+function importacaoDoAplicar(b) {
+  if (b.tipo === "extrato" || b.tipo === "c6") {
+    const cob = periodoValido(b.cobertura);
+    return cob ? { conta: b.tipo === "c6" ? "c6" : "itau", tipo: "extrato", ...cob } : null;
+  }
+  if (b.fatura) {
+    const ano = parseInt(b.fatura.ano, 10), mes = parseInt(b.fatura.mes, 10);
+    if (!ano || ano < 2000 || ano > 2100 || !mes || mes < 1 || mes > 12) return null;
+    const ym = `${ano}-${String(mes).padStart(2, "0")}`;
+    return { conta: "itau", tipo: "fatura", de: `${ym}-01`, ate: ultimoDiaDoMes(ym) };
+  }
+  return null;
 }
 
 export async function handleApi(request, env, url, dbOpt = null) {
@@ -364,6 +389,25 @@ export async function handleApi(request, env, url, dbOpt = null) {
       const receita_cents = s.receita_cents + (salarios[i].brl_cents || 0);
       return { mes, receita_cents, despesa_cents: s.despesa_cents, saldo_cents: receita_cents - s.despesa_cents, estimado: salarios[i].estimado };
     }));
+  }
+
+  // ---- G2: fechamento do mês — o que falta importar ----
+  // 12 meses terminando em `ate`. Coberturas e contagens em SQL (importacoes, categoria padrão por
+  // flag); a regra do estado é pura (worker/fechamento.js) e recebe o mês corrente daqui.
+  if (url.pathname === "/api/fechamento" && request.method === "GET") {
+    const ate = url.searchParams.get("ate");
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
+    const meses = mesesAte(ate, 12);
+    const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+    const [coberturas, faturas, semCategoria, params, conversoes] = await Promise.all([
+      db.coberturaImportacoes(), db.faturasImportadas(de, ateExcl), db.semCategoriaPorMes(de, ateExcl),
+      db.salarioParams(), db.conversoes(),
+    ]);
+    // salário: cobertura = a última conversão, de qualquer origem (wise ou nomad)
+    const ultimaConversao = conversoes.reduce((m, c) => (!m || String(c.data) > m ? String(c.data).slice(0, 10) : m), null);
+    const salarios = alocarSalario(conversoes, params, meses);
+    const mesCorrente = new Date().toISOString().slice(0, 7);
+    return j({ ate, mes_corrente: mesCorrente, meses: montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao }) });
   }
 
   if (url.pathname === "/api/salario" && request.method === "GET") return j(await db.salarioParams());
@@ -555,7 +599,11 @@ export async function handleApi(request, env, url, dbOpt = null) {
       const lista = (b.conversoes || []).map((c) => ({
         data: c.data, usd_cents: c.usd_cents, brl_cents: c.brl_cents, origem: "wise", linhaHash: c.linhaHash,
       }));
-      return j(await db.inserirConversoes(lista));
+      const r = await db.inserirConversoes(lista);
+      // G2: o CSV cobre da primeira à última conversão (a prévia manda; sem ela, as enviadas)
+      const cob = periodoValido(b.cobertura) || periodoValido(periodoDe((b.conversoes || []).map((c) => c.data)));
+      if (cob) await db.registrarImportacao({ conta: "wise", tipo: "wise", ...cob });
+      return j(r);
     }
     // F2: confere a prévia contra o banco ANTES de gravar (fora da sql.transaction do aplicar).
     // A janela entre esta leitura e a gravação é aceita: app de um usuário só.
@@ -578,6 +626,11 @@ export async function handleApi(request, env, url, dbOpt = null) {
       r.pagamentoCandidatos = pg.candidatos;
       if (pg.jaMarcado) r.pagamentoJaMarcado = true; // C3: reaplicação; o app de hoje ignora
     }
+    // G2: uma linha em importacoes por import, com o período que o arquivo cobre. Extrato: o que
+    // a prévia leu dos "Saldo do dia" (Itaú sempre conta 'itau', C6 'c6'); fatura: o mês do
+    // vencimento, dia 01 ao último dia. Sem período válido não grava (não inventa cobertura).
+    const imp = importacaoDoAplicar(b);
+    if (imp) { await db.registrarImportacao(imp); r.importacao = imp; }
     // C1: depois de qualquer extrato (Itaú ou C6), pareia os repasses do C6 para conta própria
     // com a chegada no Itaú, na janela do que foi importado (±3 dias) — serve às duas ordens.
     if (b.tipo === "extrato" || b.tipo === "c6") {

@@ -1043,3 +1043,44 @@ test("saldoPorMes soma receita e despesa por mês em SQL, filtrando por conta_no
   assert.match(sql.chamadas[0].text, /group by/i);
   assert.deepEqual(r, [{ mes: "2026-09", receita_cents: 100000, despesa_cents: 3800000 }]);
 });
+
+// ---------- G2: fechamento do mês ----------
+test("G2 registrarImportacao grava uma linha em importacoes com conta, tipo e o período do arquivo", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.registrarImportacao({ conta: "itau", tipo: "extrato", de: "2031-07-01", ate: "2031-07-31" });
+  assert.match(sql.chamadas[0].text, /insert into importacoes \(conta, tipo, de, ate\)/i);
+  assert.deepEqual(sql.chamadas[0].values, ["itau", "extrato", "2031-07-01", "2031-07-31"]);
+});
+
+test("G2 coberturaImportacoes: max(ate) por conta/tipo, agregado em SQL", async () => {
+  const sql = fakeSql([{ conta: "itau", tipo: "extrato", ate: "2031-07-31" }]);
+  const db = criarDb(sql);
+  const r = await db.coberturaImportacoes();
+  assert.match(sql.chamadas[0].text, /max\(ate\)/i);
+  assert.match(sql.chamadas[0].text, /group by conta, tipo/i);
+  assert.deepEqual(r, [{ conta: "itau", tipo: "extrato", ate: "2031-07-31" }]);
+});
+
+test("G2 faturasImportadas: meses (pelo dia 01 gravado em de) que têm fatura, na janela", async () => {
+  const sql = fakeSql([{ mes: "2031-07" }]);
+  const db = criarDb(sql);
+  const r = await db.faturasImportadas("2030-08-01", "2031-08-01");
+  assert.match(sql.chamadas[0].text, /from importacoes/i);
+  assert.match(sql.chamadas[0].text, /tipo = 'fatura'/i);
+  assert.deepEqual(r, ["2031-07"]);
+});
+
+test("G2 semCategoriaPorMes conta em SQL pela flag padrao (nunca pelo nome), por mês, só o que conta no resumo", async () => {
+  const sql = fakeSql([{ mes: "2031-07", n: "6" }]);
+  const db = criarDb(sql);
+  const r = await db.semCategoriaPorMes("2030-08-01", "2031-08-01");
+  const q = sql.chamadas[0].text;
+  assert.match(q, /c\.padrao/);
+  assert.match(q, /count\(\*\)/i);
+  assert.match(q, /group by/i);
+  assert.match(q, /conta_no_resumo/);
+  assert.doesNotMatch(q, /computa_resumo/);
+  assert.doesNotMatch(q, /Não Identificado|Outros/);
+  assert.deepEqual(r, [{ mes: "2031-07", n: 6 }]);
+});

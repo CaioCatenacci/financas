@@ -344,6 +344,8 @@ function dbImportarFake() {
       estado.pagamento = { totalCents, de, ate };
       return { marcados: 1, candidatos: 1 };
     },
+    // G2: o aplicar grava o período coberto pelo arquivo
+    registrarImportacao: async (i) => { (estado.importacoes ||= []).push(i); },
   };
 }
 
@@ -885,6 +887,7 @@ function dbAplicarFake(linhas) {
     membrosDosGrupos: async (gs) => { f.chamadas.push("membrosDosGrupos"); return linhas.filter((l) => l.grupo_id && gs.includes(l.grupo_id)); },
     aplicarImportacao: async (d) => { f.chamadas.push("aplicarImportacao"); return { gravados: 0, agrupados: d.casados.length, naoGasto: 0 }; },
     marcarPagamentoFaturaNaoGasto: async () => { f.chamadas.push("marcarPagamentoFaturaNaoGasto"); return { marcados: 1, candidatos: 1 }; },
+    registrarImportacao: async () => { f.chamadas.push("registrarImportacao"); }, // G2
   };
   return f;
 }
@@ -953,7 +956,8 @@ test("POST /api/importar/aplicar sem casados não lê nada antes de gravar", asy
   const db = dbAplicarFake([]);
   const r = await aplicarCom(db, []);
   assert.equal(r.status, 200);
-  assert.deepEqual(db.chamadas, ["aplicarImportacao", "marcarPagamentoFaturaNaoGasto"]);
+  // G2: a fatura também registra o mês coberto em importacoes, depois de gravar
+  assert.deepEqual(db.chamadas, ["aplicarImportacao", "marcarPagamentoFaturaNaoGasto", "registrarImportacao"]);
 });
 
 // ---------- F2: POST /api/grupos num grupo sem representante → 400 ----------
@@ -1333,11 +1337,96 @@ test("G1 POST /api/importar/preview tipo wise: conversões novas × já importad
 
 test("G1 POST /api/importar/aplicar tipo wise grava as conversões (origem wise) e devolve a contagem", async () => {
   const gravadas = [];
-  const db = { inserirConversoes: async (l) => { gravadas.push(...l); return { gravados: l.length }; } };
+  const db = { inserirConversoes: async (l) => { gravadas.push(...l); return { gravados: l.length }; }, registrarImportacao: async () => {} };
   const conversoes = [{ data: "2026-08-14", usd_cents: 500000, brl_cents: 2600000, taxa: 5.2, linhaHash: "h" }];
   const req = new Request("http://localhost/api/importar/aplicar", { method: "POST", headers: { ...G1_COOK, "content-type": "application/json" }, body: JSON.stringify({ tipo: "wise", conversoes }) });
   const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
   assert.equal(data.gravados, 1);
   assert.equal(gravadas[0].origem, "wise");
   assert.equal(gravadas[0].linhaHash, "h");
+});
+
+// ---------- G2: fechamento do mês ----------
+test("G2 POST /api/importar/aplicar grava em importacoes o período do arquivo nos quatro tipos", async () => {
+  const casos = [
+    // extrato do Itaú: a conta é sempre 'itau' (a fonte "Itaú" do fechamento lê conta='itau')
+    [{ tipo: "extrato", decisao: { novos: [], naoGasto: [], casados: [] }, cobertura: { de: "2031-07-01", ate: "2031-07-31" } },
+      { conta: "itau", tipo: "extrato", de: "2031-07-01", ate: "2031-07-31" }],
+    [{ tipo: "c6", decisao: { novos: [], naoGasto: [], casados: [] }, cobertura: { de: "2031-09-09", ate: "2031-09-28" } },
+      { conta: "c6", tipo: "extrato", de: "2031-09-09", ate: "2031-09-28" }],
+    // fatura sem total impresso: grava do mesmo jeito (o mês do vencimento, dia 01 ao último dia)
+    [{ tipo: "fatura", decisao: { novos: [], naoGasto: [], casados: [] }, fatura: { totalCents: 0, ano: 2031, mes: 2 } },
+      { conta: "itau", tipo: "fatura", de: "2031-02-01", ate: "2031-02-28" }],
+    [{ tipo: "wise", conversoes: [{ data: "2031-08-14", usd_cents: 100, brl_cents: 500, linhaHash: "h" }], cobertura: { de: "2031-08-04", ate: "2031-08-14" } },
+      { conta: "wise", tipo: "wise", de: "2031-08-04", ate: "2031-08-14" }],
+  ];
+  for (const [corpo, esperado] of casos) {
+    const db = { ...dbImportarFake(), inserirConversoes: async (l) => ({ gravados: l.length }), marcarRepassesEntreContas: async () => ({ marcados: 0, avisos: [] }) };
+    const req = reqApi("/api/importar/aplicar", "POST", corpo);
+    const r = await handleApi(req, envApi, new URL(req.url), db);
+    assert.equal(r.status, 200, corpo.tipo);
+    assert.deepEqual(db.estado.importacoes, [esperado], corpo.tipo);
+  }
+});
+
+test("G2 aplicar wise sem cobertura no corpo: o período sai da primeira e da última conversão enviada", async () => {
+  const db = { ...dbImportarFake(), inserirConversoes: async (l) => ({ gravados: l.length }) };
+  const conversoes = [{ data: "2031-08-14", usd_cents: 1, brl_cents: 5, linhaHash: "a" }, { data: "2031-08-04", usd_cents: 1, brl_cents: 5, linhaHash: "b" }];
+  const req = reqApi("/api/importar/aplicar", "POST", { tipo: "wise", conversoes });
+  await handleApi(req, envApi, new URL(req.url), db);
+  assert.deepEqual(db.estado.importacoes, [{ conta: "wise", tipo: "wise", de: "2031-08-04", ate: "2031-08-14" }]);
+});
+
+test("G2 aplicar de extrato sem cobertura válida não inventa período (nada em importacoes)", async () => {
+  for (const cobertura of [undefined, null, { de: "x", ate: "2031-13-40" }]) {
+    const db = { ...dbImportarFake(), marcarRepassesEntreContas: async () => ({ marcados: 0, avisos: [] }) };
+    const req = reqApi("/api/importar/aplicar", "POST", { tipo: "extrato", decisao: { novos: [], naoGasto: [], casados: [] }, cobertura });
+    assert.equal((await handleApi(req, envApi, new URL(req.url), db)).status, 200);
+    assert.equal(db.estado.importacoes, undefined);
+  }
+});
+
+function dbFechamentoFake() {
+  const estado = {};
+  return {
+    estado,
+    coberturaImportacoes: async () => [
+      { conta: "itau", tipo: "extrato", ate: "2024-09-30" },
+      { conta: "c6", tipo: "extrato", ate: "2024-09-28" },
+    ],
+    faturasImportadas: async (de, ateExcl) => { estado.faturas = { de, ateExcl }; return ["2024-08", "2024-09"]; },
+    semCategoriaPorMes: async (de, ateExcl) => { estado.semCat = { de, ateExcl }; return [{ mes: "2024-09", n: 3 }, { mes: "2024-08", n: 6 }]; },
+    salarioParams: async () => [{ vigente_desde: "2024-01-01", usd_cents: 100 }],
+    conversoes: async () => [{ data: "2024-08-20", usd_cents: 100, brl_cents: 500, origem: "wise" }],
+  };
+}
+
+// datas no passado: a rota usa o relógio para o mês corrente, e um mês futuro nunca fecha
+test("G2 GET /api/fechamento?ate= devolve 12 meses terminando em ate, com estado e fontes por mês", async () => {
+  const db = dbFechamentoFake();
+  const req = reqApi("/api/fechamento?ate=2024-10", "GET");
+  const data = await (await handleApi(req, envApi, new URL(req.url), db)).json();
+  assert.equal(data.meses.length, 12);
+  assert.equal(data.meses[0].mes, "2023-11");
+  assert.equal(data.meses[11].mes, "2024-10");
+  assert.deepEqual(db.estado.semCat, { de: "2023-11-01", ateExcl: "2024-11-01" });
+  assert.deepEqual(db.estado.faturas, { de: "2023-11-01", ateExcl: "2024-11-01" });
+  const ago = data.meses[9], set = data.meses[10], out = data.meses[11];
+  assert.equal(ago.estado, "fechado");
+  assert.equal(ago.sem_categoria, 6);
+  assert.equal(set.estado, "parcial");
+  assert.deepEqual(set.fontes.c6, { ate: "2024-09-28", cobertura: "parcial" });
+  assert.equal(set.sem_categoria, 3);
+  assert.equal(out.estado, "faltando");
+  assert.deepEqual(out.fontes.fatura, { existe: false, cobertura: "faltando" });
+  // salário: até a última conversão (de qualquer origem); setembro já é estimado
+  assert.deepEqual(set.fontes.salario, { ate: "2024-08-20", estimado: true });
+  assert.equal(ago.fontes.salario.estimado, false);
+});
+
+test("G2 GET /api/fechamento com ate inválido ou ausente → 400, sem ler o banco", async () => {
+  for (const q of ["", "?ate=2024-13", "?ate=x", "?ate=2024-1"]) {
+    const req = reqApi(`/api/fechamento${q}`, "GET");
+    assert.equal((await handleApi(req, envApi, new URL(req.url), {})).status, 400, q);
+  }
 });

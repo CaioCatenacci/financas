@@ -433,3 +433,41 @@ test("G1 montarPreviewWise: conversões viram itens novo/jaTem pela linha_hash; 
   assert.equal(p.resumo.jaTem, 1);
   assert.equal(p.checksum.bloqueiaAplicar, false);
 });
+
+// ---- G2: cobertura do arquivo (fechamento do mês) ----
+// O PDF termina num "Saldo do dia" que pode vir DEPOIS do último lançamento (a data de emissão):
+// é até ali que o arquivo cobre. A última data com movimento não diz isso — por isso a cobertura
+// sai dos saldos, e o conferirChecksum (que descarta esse saldo final) não entra na conta.
+test("G2 preview extrato Itaú devolve a cobertura {de, ate} = primeiro e último 'Saldo do dia', inclusive o posterior ao último lançamento", () => {
+  const txt = `01/07/2031 SALDO DO DIA 1.000,00
+03/07/2031 PIX QRS LOJA FICTICIA03/07 -100,00
+03/07/2031 SALDO DO DIA 900,00
+31/07/2031 SALDO DO DIA 900,00`;
+  const p = montarPreviewExtrato(txt, "itau", { catalogo, associacoes: {}, existentes: [], hashes: [] });
+  assert.deepEqual(p.cobertura, { de: "2031-07-01", ate: "2031-07-31" });
+});
+
+test("G2 preview extrato sem nenhum 'Saldo do dia': cobertura nula (não inventa período)", () => {
+  const p = montarPreviewExtrato(`03/07/2031 PIX QRS LOJA FICTICIA03/07 -100,00`, "itau", { catalogo, associacoes: {}, existentes: [], hashes: [] });
+  assert.equal(p.cobertura, null);
+});
+
+test("G2 preview C6 devolve a cobertura pelos 'Saldo do dia' do parser do C6", () => {
+  const txt = `Setembro 2031
+0 9 / 0 9 0 9 / 0 9 Saldo do dia R$ 0,00
+1 0 / 0 9 1 0 / 0 9 Entrada PIX Pix recebido de CAMBIO FICTICIO LTDA R$ 1.000,00
+1 0 / 0 9 1 0 / 0 9 Saldo do dia R$ 1.000,00
+2 8 / 0 9 2 8 / 0 9 Saldo do dia R$ 1.000,00`;
+  const p = montarPreviewExtratoC6(txt, { catalogo, existentes: [], hashes: [] });
+  assert.deepEqual(p.cobertura, { de: "2031-09-09", ate: "2031-09-28" });
+});
+
+test("G2 preview Wise devolve a cobertura {de, ate} = primeira e última conversão do CSV (inclusive as já importadas)", async () => {
+  const { montarPreviewWise } = await import("./importar.js");
+  const { hashWise } = await import("./wise.js");
+  const cab = '"TransferWise ID",Date,"Date Time",Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees","Exchange To Amount","Transaction Type","Transaction Details Type"';
+  const conv = (id, d, usd, brl) => `${id},${d},"${d} 10:00:00.000",-${usd},USD,"Converted USD to BRL",,0.00,USD,BRL,5.00000,,,,,,,,,1.00,${brl},DEBIT,CONVERSION`;
+  const csv = [cab, conv("BALANCE-901", "14-08-2031", "100.00", "500.00"), conv("BALANCE-902", "04-08-2031", "100.00", "500.00")].join("\n");
+  const p = montarPreviewWise(csv, { hashes: [hashWise("BALANCE-902")] });
+  assert.deepEqual(p.cobertura, { de: "2031-08-04", ate: "2031-08-14" });
+});
