@@ -52,3 +52,7 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 - **P3 · Buraco no meio da cobertura fica invisível.** A cobertura de uma fonte é `max(ate)` de
   `importacoes`: um mês nunca importado entre dois imports aparece coberto. Os dados de hoje não
   têm buraco; se aparecer, a regra passa a olhar a união dos períodos. Origem: G2 (10/10/2026).
+- **P2 · Rotina do assistente para escrever o diagnóstico.** O app já guarda e mostra
+  (`PUT/GET /api/diagnostico`, roteiro no CONTEXTO §20); falta a skill/rotina que lê as rotas e
+  escreve o texto. É regra de agente (`.claude/`), vai em PR à parte, não pelo degrau 2.
+  Origem: G3 (10/10/2026).
