@@ -47,3 +47,9 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   foi corrigido (`marcarPagamentoFaturaNaoGasto`). Vai junto com C6 (importadores Python no modelo
   antigo). Origem: C3 (29/09/2026).
 - **P2 · Regra do coder ainda aponta `public/app.test.mjs`.** O README já foi corrigido (01/10/2026); falta `.claude/agents/coder-financas.md`, que é regra de agente e vai em PR à parte (não degrau 2). Origem: E1 (01/10/2026).
+- **P3 · Lembrete do fechamento pelo Telegram.** O app já mostra o que falta importar por mês
+  (`/api/fechamento`); avisar no Telegram quando um mês passado segue "faltando" ficou de fora de
+  propósito (primeiro o app mostrar). Origem: G2 (10/10/2026).
+- **P3 · Buraco no meio da cobertura fica invisível.** A cobertura de uma fonte é `max(ate)` de
+  `importacoes`: um mês nunca importado entre dois imports aparece coberto. Os dados de hoje não
+  têm buraco; se aparecer, a regra passa a olhar a união dos períodos. Origem: G2 (10/10/2026).
