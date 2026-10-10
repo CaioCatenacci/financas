@@ -369,6 +369,45 @@ export function mesDoFechamento(resp, mes) {
   return ((resp && resp.meses) || []).find((m) => m.mes === mes) || null;
 }
 
+// ---- G3: diagnóstico mensal ----
+// O texto é markdown escrito pelo assistente (roteiro no CONTEXTO §20); o app só guarda e mostra.
+export const SEM_DIAGNOSTICO = "ainda não há diagnóstico deste mês";
+export const AVISO_MES_PARCIAL = "mês parcial: o diagnóstico pode mudar";
+
+// Markdown simples → HTML: só o que o roteiro usa (## título, parágrafo, lista "- ", **negrito**).
+// Cada linha passa por esc() ANTES de virar tag: o texto vem da API e nada dele pode virar HTML.
+export function markdownSimples(texto) {
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  const out = [];
+  let par = [], lista = [];
+  const fecharPar = () => { if (par.length) out.push(`<p>${par.join("<br>")}</p>`); par = []; };
+  const fecharLista = () => { if (lista.length) out.push(`<ul>${lista.map((i) => `<li>${i}</li>`).join("")}</ul>`); lista = []; };
+  for (const bruta of String(texto ?? "").split(/\r?\n/)) {
+    const linha = bruta.trim();
+    if (!linha) { fecharPar(); fecharLista(); continue; }
+    if (linha.startsWith("## ")) { fecharPar(); fecharLista(); out.push(`<h2>${inline(linha.slice(3).trim())}</h2>`); continue; }
+    if (linha.startsWith("- ")) { fecharPar(); lista.push(inline(linha.slice(2).trim())); continue; }
+    fecharLista(); par.push(inline(linha));
+  }
+  fecharPar(); fecharLista();
+  return out.join("");
+}
+
+// O aviso aparece quando o mês não está 'fechado' (faltando ou parcial) no /api/fechamento.
+// Sem resposta (rota falhou) não avisa: como o bloco do G2, é informativo, não bloqueia.
+export function avisoMesParcial(fechamento, mes) {
+  const m = mesDoFechamento(fechamento, mes);
+  return !!m && m.estado !== "fechado";
+}
+
+// conteúdo da aba: o aviso (se for o caso) e, abaixo, o texto renderizado ou a frase do vazio
+export function htmlDiagnostico(diag, fechamento, mes) {
+  const aviso = avisoMesParcial(fechamento, mes) ? `<p class="diag-aviso">${esc(AVISO_MES_PARCIAL)}</p>` : "";
+  const texto = diag && diag.texto;
+  if (!texto) return `${aviso}<p class="diag-vazio">${esc(SEM_DIAGNOSTICO)}</p>`;
+  return `${aviso}<div class="diag-texto">${markdownSimples(texto)}</div>`;
+}
+
 // grade mês × fonte (link "ver 12 meses"): cada célula traz a cobertura (vira a cor) e um texto curto
 export function gradeFechamento(resp) {
   const colunas = ["Itaú", "C6", "Fatura", "Salário", "Sem categoria"];
@@ -1751,6 +1790,18 @@ if (typeof document !== "undefined") {
     } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
   }
 
+  // G3: o texto do mês + o fechamento (para o aviso de mês parcial); o fechamento falhar não
+  // impede o texto (carregarFechamento já devolve null). Guarda o mês pedido: se o #mesSel trocar
+  // no meio, a resposta velha não sobrescreve a nova.
+  async function carregarDiagnostico() {
+    const mes = estado.mes;
+    try {
+      const [diag, fechamento] = await Promise.all([apiGet(`/api/diagnostico?mes=${mes}`), carregarFechamento()]);
+      if (mes !== estado.mes) return;
+      $("#diagtexto").innerHTML = htmlDiagnostico(diag, fechamento, mes);
+    } catch (e) { alert("Falha ao carregar diagnóstico: " + e.message); }
+  }
+
   // Recarrega só as transações (aba Lançamentos) com o range corrente — usado pela troca de
   // mês/"Todos os meses" p/ não refazer o fetch do Resumo (agora em carregarResumo()).
   async function carregarLancamentos() {
@@ -1775,11 +1826,13 @@ if (typeof document !== "undefined") {
     $("#importar").classList.toggle("hidden", v !== "importar");
     $("#ajustes").classList.toggle("hidden", v !== "ajustes");
     $("#planejamento").classList.toggle("hidden", v !== "planejamento");
+    $("#diagnostico").classList.toggle("hidden", v !== "diagnostico");
     if (v === "ajustes") drawAjustes();
     if (v === "importar") drawImportar();
     if (v === "lanc") carregarLancamentos();
     if (v === "planejamento") renderPlanejamento();
     if (v === "resumo") carregarResumo();
+    if (v === "diagnostico") carregarDiagnostico();
   }));
 
   // Inc 4.5 Tarefa 7: mês global — agora governa Lançamentos, Planejamento E Resumo (os
@@ -1791,6 +1844,7 @@ if (typeof document !== "undefined") {
     if (v === "lanc") carregarLancamentos();
     else if (v === "planejamento") renderPlanejamento();
     else if (v === "resumo") carregarResumo();
+    else if (v === "diagnostico") carregarDiagnostico();
   });
   // G2: fonte que falta → aba Importar com o tipo daquela fonte; "ver 12 meses" abre/fecha a grade
   $("#fechamento").addEventListener("click", e => {

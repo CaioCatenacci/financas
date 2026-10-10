@@ -78,6 +78,12 @@
   .bulletlabel{font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .bullettrack{width:100%;height:20px}
   .bulletval{font-family:var(--mono);font-variant-numeric:tabular-nums;font-size:12px;color:var(--mut);white-space:nowrap;text-align:right}
+  /* G3: diagnóstico mensal */
+  #diagtexto h2{margin:18px 0 6px}
+  #diagtexto h2:first-child{margin-top:0}
+  #diagtexto p,#diagtexto li{line-height:1.55}
+  .diag-aviso{color:var(--mut);font-size:12px;border-left:3px solid var(--despesa);padding-left:8px;margin:0 0 12px}
+  .diag-vazio{color:var(--mut)}
 </style>
 </head>
 <body>
@@ -93,6 +99,7 @@
       <button class="tab" data-view="importar">Importar</button>
       <button class="tab" data-view="ajustes">Ajustes</button>
       <button class="tab" data-view="planejamento">Planejamento</button>
+      <button class="tab" data-view="diagnostico">Diagnóstico</button>
     </div>
     <button class="iconbtn" id="theme" title="Alternar tema">◐</button>
   </div>
@@ -224,6 +231,9 @@
       </table>
     </div>
   </section>
+
+  <!-- G3: diagnóstico mensal — o texto que o assistente escreveu para o mês de #mesSel (só leitura) -->
+  <section id="diagnostico" class="hidden"><div class="card" id="diagtexto"></div></section>
 
   <section id="importar" class="hidden"></section>
 
