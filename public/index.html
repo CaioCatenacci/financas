@@ -58,6 +58,20 @@
   /* Inc 4.5 Tarefa 9: bullet chart orçamento × realizado — mesma estrutura de linha do
      .dbrow (dumbbell), rótulo + track SVG + valores; vive aqui pela mesma razão do bloco
      acima (task só toca index.html/app.js). */
+  /* G2: fechamento do mês — selo do estado, uma etiqueta por fonte e a grade de 12 meses */
+  .fechtopo{display:flex;flex-wrap:wrap;align-items:center;gap:10px}
+  .fechfontes{display:flex;flex-wrap:wrap;gap:8px;flex:1}
+  .fechfonte{font-size:13px;color:var(--mut);padding:4px 8px}
+  .fechfonte.fech-falta{color:var(--neg);cursor:pointer}
+  .fechfonte.fech-pend{color:var(--aviso)}
+  .fechselo{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;padding:4px 10px;border-radius:999px}
+  .fechselo.fech-fechado{color:var(--pos);background:color-mix(in srgb, var(--pos) 12%, transparent)}
+  .fechselo.fech-parcial{color:var(--aviso);background:color-mix(in srgb, var(--aviso) 12%, transparent)}
+  .fechselo.fech-faltando{color:var(--neg);background:color-mix(in srgb, var(--neg) 12%, transparent)}
+  .fechgrade{width:100%;margin-top:12px;border-collapse:collapse;font-size:13px}
+  .fechgrade th,.fechgrade td{padding:4px 6px;border-bottom:1px solid var(--line);text-align:center}
+  .fechgrade td.fech-parcial,.fechgrade td.fech-estimado,.fechgrade td.fech-pendente{background:color-mix(in srgb, var(--aviso) 12%, transparent)}
+  .fechgrade td.fech-faltando{background:color-mix(in srgb, var(--neg) 12%, transparent)}
   .bulletwrap{display:flex;flex-direction:column;gap:12px}
   .bulletrow{display:grid;grid-template-columns:160px 1fr 170px;align-items:center;gap:10px}
   .bulletrow:hover{background:var(--sunk);border-radius:8px;margin:-3px -6px;padding:3px 6px}
@@ -91,6 +105,10 @@
 
   <section id="resumo">
     <div class="grid kpis" id="kpis" style="margin-bottom:16px"></div>
+
+    <!-- G2: fechamento do mês — o que falta importar (Itaú, C6, fatura, salário) e quantos estão
+         sem categoria; a fonte que falta leva à aba Importar; "ver 12 meses" abre a grade. -->
+    <div class="card hidden" id="fechamento" style="margin-bottom:16px"></div>
 
     <!-- G1: saldo do mês com o salário por competência (USD convertido ao câmbio real, FIFO) e a
          série dos 12 meses. O selo "estimado" aparece quando parte do salário ainda não foi convertida. -->

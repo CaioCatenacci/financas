@@ -6,6 +6,7 @@ import {
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
   escolherCandidato, rotuloCandidato, linhaEditavel, idsSelecionaveis, esc,
   TIPOS_IMPORT, fonteDoTipo, corpoPreview,
+  rotuloEstadoFechamento, linhasFechamento, gradeFechamento, mesDoFechamento,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto, abrirPdf } from "../public/pdf_extrair.js";
@@ -924,4 +925,61 @@ test("G1 montarSaldoMes: o selo 'estimado' segue salario.estimado; sem salário 
   assert.equal(montarSaldoMes({ receita: "41600.00", despesa: "0.00" }, { brl_cents: 4160000, estimado: true }).estimado, true);
   assert.equal(montarSaldoMes({ receita: "100.00", despesa: "0.00" }, null).estimado, false);
   assert.equal(montarSaldoMes({}, { estimado: false }).saldo_cents, 0);
+});
+
+// ---------- G2: fechamento do mês (bloco no topo do Resumo) ----------
+// Formato de um mês como /api/fechamento devolve (datas inventadas).
+const mesFech = (over = {}) => ({
+  mes: "2031-09", estado: "parcial", sem_categoria: 3,
+  fontes: {
+    itau: { ate: "2031-09-30", cobertura: "cheia" },
+    c6: { ate: "2031-09-28", cobertura: "parcial" },
+    fatura: { existe: false, cobertura: "faltando" },
+    salario: { ate: "2031-08-20", estimado: true },
+  },
+  ...over,
+});
+
+test("G2 rotuloEstadoFechamento: os três estados com rótulo legível; desconhecido não quebra", () => {
+  assert.equal(rotuloEstadoFechamento("fechado"), "fechado");
+  assert.equal(rotuloEstadoFechamento("parcial"), "parcial");
+  assert.equal(rotuloEstadoFechamento("faltando"), "faltando");
+  assert.equal(rotuloEstadoFechamento("x"), "—");
+});
+
+test("G2 linhasFechamento: uma linha por fonte, no texto do card, e o tipo da aba Importar em quem falta", () => {
+  const ls = linhasFechamento(mesFech());
+  assert.deepEqual(ls.map((l) => l.texto), ["Itaú até 30/09", "C6 até 28/09", "fatura: falta", "salário: estimado", "3 sem categoria"]);
+  // clicar leva à aba Importar com o tipo daquela fonte; o que está cheio não é clicável
+  assert.deepEqual(ls.map((l) => l.tipo), [null, "c6", "fatura", "wise", null]);
+  assert.deepEqual(ls.map((l) => l.falta), [false, true, true, true, false]);
+});
+
+test("G2 linhasFechamento: fonte sem import nenhum diz 'falta' e leva ao tipo certo; sem pendência não tem linha de sem categoria", () => {
+  const ls = linhasFechamento(mesFech({
+    sem_categoria: 0,
+    fontes: {
+      itau: { ate: null, cobertura: "faltando" }, c6: { ate: "2031-09-30", cobertura: "cheia" },
+      fatura: { existe: true, cobertura: "cheia" }, salario: { ate: "2031-09-20", estimado: false },
+    },
+  }));
+  assert.deepEqual(ls.map((l) => l.texto), ["Itaú: falta", "C6 até 30/09", "fatura: ok", "salário: ok"]);
+  assert.equal(ls[0].tipo, "extrato");
+  assert.ok(ls.slice(1).every((l) => l.tipo === null));
+});
+
+test("G2 mesDoFechamento acha o mês selecionado na resposta (o último dos 12)", () => {
+  const r = { meses: [mesFech({ mes: "2031-08" }), mesFech()] };
+  assert.equal(mesDoFechamento(r, "2031-09").mes, "2031-09");
+  assert.equal(mesDoFechamento(r, "2030-01"), null);
+  assert.equal(mesDoFechamento(null, "2031-09"), null);
+});
+
+test("G2 gradeFechamento: uma linha por mês × fonte, com a cobertura de cada célula e o estado do mês", () => {
+  const g = gradeFechamento({ meses: [mesFech({ mes: "2031-08", estado: "fechado" }), mesFech()] });
+  assert.deepEqual(g.colunas, ["Itaú", "C6", "Fatura", "Salário", "Sem categoria"]);
+  assert.equal(g.linhas.length, 2);
+  assert.equal(g.linhas[0].estado, "fechado");
+  assert.deepEqual(g.linhas[1].celulas.map((c) => c.cobertura), ["cheia", "parcial", "faltando", "estimado", "pendente"]);
+  assert.deepEqual(g.linhas[1].celulas.map((c) => c.texto), ["30/09", "28/09", "falta", "estimado", "3"]);
 });
