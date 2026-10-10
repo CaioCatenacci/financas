@@ -418,3 +418,18 @@ Setembro 2031
   assert.equal(semLista.itens[0].computaResumo, false);
   assert.equal(semLista.itens[1].computaResumo, true);
 });
+
+test("G1 montarPreviewWise: conversões viram itens novo/jaTem pela linha_hash; nunca bloqueia aplicar", async () => {
+  const { montarPreviewWise } = await import("./importar.js");
+  const { hashWise } = await import("./wise.js");
+  const csv = [
+    '"TransferWise ID",Date,"Date Time",Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees","Exchange To Amount","Transaction Type","Transaction Details Type"',
+    'BALANCE-1,04-08-2031,"04-08-2031 10:00:00.000",-8000.00,USD,"Converted USD to BRL",,0.00,USD,BRL,5.00000,,,,,,,,,1.00,40000.00,DEBIT,CONVERSION',
+    'BALANCE-2,14-08-2031,"14-08-2031 10:00:00.000",-5000.00,USD,"Converted USD to BRL",,0.00,USD,BRL,5.20000,,,,,,,,,1.00,26000.00,DEBIT,CONVERSION',
+  ].join("\n");
+  const p = montarPreviewWise(csv, { hashes: [hashWise("BALANCE-1")] });
+  assert.deepEqual(p.itens.map((i) => i.status), ["jaTem", "novo"]);
+  assert.equal(p.resumo.novos, 1);
+  assert.equal(p.resumo.jaTem, 1);
+  assert.equal(p.checksum.bloqueiaAplicar, false);
+});

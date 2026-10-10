@@ -9,6 +9,7 @@ import { parseExtratoC6, ehRepasseProprio } from "./extrato_c6.js";
 import { classificar, normalizarDescritor } from "./classificar.js";
 import { normalizarNome } from "./contraparte.js";
 import { linhaHash, reconciliarLinha } from "./reconciliar.js";
+import { parseWiseCsv } from "./wise.js";
 
 function resumoVazio() {
   return { novos: 0, casados: 0, naoGasto: 0, ambiguos: 0, jaTem: 0 };
@@ -255,6 +256,20 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
   // totalCents = total impresso na fatura (não a soma dos itens novos): quem aplica usa isso pra
   // achar e marcar o pagamento correspondente no extrato como fora do resumo (evita contar 2x).
   return { checksum, itens, resumo, totalCents };
+}
+
+/**
+ * G1: preview do CSV da Wise — não vira transação: cada conversão USD→BRL vai pra `conversoes`,
+ * e o salário do mês sai de alocarSalario. Mesma forma dos outros previews (checksum/itens/resumo)
+ * pra aba Importar reaproveitar a tela; `hashes` são as linha_hash já gravadas (dedup).
+ */
+export function montarPreviewWise(texto, { hashes = [] } = {}) {
+  const { conversoes, ignoradas, erros } = parseWiseCsv(texto);
+  const hashesSet = new Set(hashes);
+  const itens = conversoes.map((c) => ({ ...c, status: hashesSet.has(c.linhaHash) ? "jaTem" : "novo" }));
+  const resumo = { ...resumoVazio(), ignoradas };
+  for (const i of itens) { if (i.status === "novo") resumo.novos++; else resumo.jaTem++; }
+  return { checksum: { ok: true, diferencaCents: 0, bloqueiaAplicar: false }, itens, resumo, avisos: erros };
 }
 
 /**

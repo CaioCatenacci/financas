@@ -981,3 +981,65 @@ test("Exemplo C1: Itaú + C6 importados e o repasse pareado → receita 10.000, 
   assert.equal(soma("despesa"), 60000);
   assert.equal(soma("receita") - soma("despesa"), 940000);
 });
+
+// ---------- G1: salário por competência ----------
+test("salarioParams lê salario_param com vigente_desde no dia 01 e usd_cents como número", async () => {
+  const sql = fakeSql([{ vigente_desde: "2026-01-01", usd_cents: "800000" }]);
+  const db = criarDb(sql);
+  const r = await db.salarioParams();
+  assert.match(sql.chamadas[0].text, /from salario_param/i);
+  assert.deepEqual(r, [{ vigente_desde: "2026-01-01", usd_cents: 800000 }]);
+});
+
+test("setSalarioParam grava por upsert em vigente_desde (dia 01)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.setSalarioParam("2026-03-01", 800000);
+  assert.match(sql.chamadas[0].text, /insert into salario_param/i);
+  assert.match(sql.chamadas[0].text, /on conflict \(vigente_desde\)/i);
+  assert.deepEqual(sql.chamadas[0].values, ["2026-03-01", 800000]);
+});
+
+test("conversoes lê todas em ordem de data, centavos como número", async () => {
+  const sql = fakeSql([{ id: "c1", data: "2026-08-04", usd_cents: "800000", brl_cents: "4000000", origem: "wise" }]);
+  const db = criarDb(sql);
+  const r = await db.conversoes();
+  assert.match(sql.chamadas[0].text, /from conversoes/i);
+  assert.match(sql.chamadas[0].text, /order by data/i);
+  assert.equal(r[0].usd_cents, 800000);
+  assert.equal(r[0].brl_cents, 4000000);
+});
+
+test("conversoesHashes consulta por igualdade (dedup do CSV da Wise); lista vazia nem consulta", async () => {
+  const sql = fakeSql([{ linha_hash: "h1" }]);
+  const db = criarDb(sql);
+  assert.deepEqual(await db.conversoesHashes([]), []);
+  assert.equal(sql.chamadas.length, 0);
+  assert.deepEqual(await db.conversoesHashes(["h1", "h2"]), ["h1"]);
+  assert.match(sql.chamadas[0].text, /from conversoes/i);
+});
+
+test("inserirConversoes grava o lote numa transação, com on conflict (linha_hash) do nothing — aplicar duas vezes não duplica", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const r = await db.inserirConversoes([
+    { data: "2026-08-04", usd_cents: 800000, brl_cents: 4000000, origem: "wise", linhaHash: "h1" },
+    { data: "2026-08-14", usd_cents: 500000, brl_cents: 2600000, origem: "wise", linhaHash: "h2" },
+  ]);
+  assert.equal(sql.transacao.length, 2);
+  assert.equal(r.gravados, 2);
+  assert.match(sql.chamadas[0].text, /insert into conversoes/i);
+  assert.match(sql.chamadas[0].text, /on conflict \(linha_hash\) do nothing/i);
+  assert.ok(sql.chamadas[0].values.includes("h1"));
+  assert.equal(await db.inserirConversoes([]).then((x) => x.gravados), 0);
+});
+
+test("saldoPorMes soma receita e despesa por mês em SQL, filtrando por conta_no_resumo, em centavos", async () => {
+  const sql = fakeSql([{ mes: "2026-09", receita_cents: "100000", despesa_cents: "3800000" }]);
+  const db = criarDb(sql);
+  const r = await db.saldoPorMes("2025-10-01", "2026-10-01");
+  assert.match(sql.chamadas[0].text, /conta_no_resumo/);
+  assert.doesNotMatch(sql.chamadas[0].text, /computa_resumo/);
+  assert.match(sql.chamadas[0].text, /group by/i);
+  assert.deepEqual(r, [{ mes: "2026-09", receita_cents: 100000, despesa_cents: 3800000 }]);
+});

@@ -344,6 +344,67 @@ export function criarDb(sql) {
       return rows.map(r => ({ ...r, total_cents: Number(r.total_cents) }));
     },
 
+
+    // ---- G1: salário por competência ----
+    // baseline com vigência (mesmo modelo de metas): ::bigint chega string do driver → Number na borda.
+    async salarioParams() {
+      const rows = await sql`
+        select to_char(vigente_desde,'YYYY-MM-01') as vigente_desde, usd_cents
+        from salario_param
+        order by vigente_desde`;
+      return rows.map(r => ({ vigente_desde: r.vigente_desde, usd_cents: Number(r.usd_cents) }));
+    },
+
+    async setSalarioParam(mesDia01, usdCents) {
+      await sql`
+        insert into salario_param (vigente_desde, usd_cents)
+        values (${mesDia01}, ${usdCents})
+        on conflict (vigente_desde) do update set usd_cents = excluded.usd_cents`;
+    },
+
+    // todas as conversões (Wise + carga Nomad): a alocação FIFO roda em worker/salario.js, que
+    // precisa da sequência inteira — não dá pra recortar por mês sem mudar o resultado.
+    async conversoes() {
+      const rows = await sql`
+        select id, to_char(data,'YYYY-MM-DD') as data, usd_cents, brl_cents, origem
+        from conversoes
+        order by data, criado_em`;
+      return rows.map(r => ({ ...r, usd_cents: Number(r.usd_cents), brl_cents: Number(r.brl_cents) }));
+    },
+
+    // dedup do CSV da Wise: por igualdade de linha_hash (sha256 do TransferWise ID)
+    async conversoesHashes(chaves) {
+      if (!chaves || !chaves.length) return [];
+      const rows = await sql`
+        select linha_hash from conversoes where linha_hash = any(${chaves})`;
+      return rows.map(r => r.linha_hash);
+    },
+
+    // lote numa transação; on conflict do nothing = aplicar o mesmo CSV duas vezes não duplica
+    async inserirConversoes(lista) {
+      if (!lista || !lista.length) return { gravados: 0 };
+      const queries = lista.map(c => sql`
+        insert into conversoes (data, usd_cents, brl_cents, origem, linha_hash)
+        values (${c.data}, ${c.usd_cents}, ${c.brl_cents}, ${c.origem || 'wise'}, ${c.linhaHash})
+        on conflict (linha_hash) do nothing`);
+      await sql.transaction(queries);
+      return { gravados: lista.length };
+    },
+
+    // receita (sem o salário, que vem de alocarSalario) e despesa que contam, por mês, na janela
+    // meio-aberta [de, ateExcl). Soma em SQL, centavos inteiros, filtro por conta_no_resumo.
+    async saldoPorMes(de, ateExcl) {
+      const rows = await sql`
+        select to_char(data,'YYYY-MM') as mes,
+               (round(coalesce(sum(valor_final) filter (where natureza = 'receita'), 0)*100))::bigint as receita_cents,
+               (round(coalesce(sum(valor_final) filter (where natureza = 'despesa'), 0)*100))::bigint as despesa_cents
+        from transacoes
+        where conta_no_resumo and data >= ${de} and data < ${ateExcl}
+        group by to_char(data,'YYYY-MM')
+        order by 1`;
+      return rows.map(r => ({ mes: r.mes, receita_cents: Number(r.receita_cents), despesa_cents: Number(r.despesa_cents) }));
+    },
+
     // ---- Inc 4: planejamento (metas) ----
     async metasBaselines() {
       const rows = await sql`
