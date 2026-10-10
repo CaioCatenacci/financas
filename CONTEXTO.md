@@ -601,6 +601,38 @@ data com movimento não diz até onde o PDF foi; por isso **a cobertura é grava
   Importar com o tipo escolhido; "ver 12 meses" abre a grade mês × fonte. Se a rota falhar, o
   Resumo carrega sem o bloco.
 
+## 20. Diagnóstico mensal: a análise escrita do mês (G3, 10/10/2026)
+
+O Resumo mostra os números; o diagnóstico diz o que eles significam. Começa **manual**: o
+assistente escreve o texto sob pedido e o app só guarda e mostra (gerar no Worker com modelo fica
+para depois de o roteiro se provar; editar pelo app, não).
+
+- **`diagnosticos(mes text pk, texto text not null, atualizado_em)`** (migração `0014`, sem
+  semente). O CHECK da tabela só confere o formato `AAAA-MM`; o Worker valida o mês de verdade.
+  Reescrever um mês troca o texto e o carimbo (upsert): o diagnóstico é refeito, não versionado.
+- **API:** `GET /api/diagnostico?mes=YYYY-MM` → `{mes, texto, atualizado_em}` ou `{mes, texto:
+  null}` (200, não 404); `PUT /api/diagnostico {mes, texto}` grava. Mês inválido ou texto vazio →
+  400; atrás do token como o resto de `/api`.
+- **Aba "Diagnóstico":** segue `#mesSel`. O texto é markdown simples (`##` título, parágrafo,
+  lista `-`, `**negrito**`) renderizado por `markdownSimples` (`public/app.js`, puro), que passa
+  cada linha por `esc()` antes de montar tag. Sem texto: "ainda não há diagnóstico deste mês".
+  Quando o `/api/fechamento` diz que o mês não está `fechado` (faltando ou parcial), o aviso "mês
+  parcial: o diagnóstico pode mudar" vem acima; se a rota falhar, não há aviso (informativo).
+
+**O roteiro do texto** (fixo, nesta ordem; cada seção é um `## N. Título`):
+
+1. **Fechou no azul?** `saldo_cents` do mês (`/api/saldo-mensal`) contra a média dos 3 meses
+   anteriores, dizendo quando o salário é **estimado** (o selo do G1).
+2. **O que puxou o gasto.** As categorias que mais pesaram no mês e as que mais cresceram contra o
+   mês anterior.
+3. **O que estourou o orçamento.** Categoria × alvo do Planejamento (`/api/metas`).
+4. **Oportunidades de economia.** Onde um corte faria diferença, sempre com o valor por mês.
+5. **Pendências do fechamento.** O que o G2 (`/api/fechamento`) diz que falta: fontes faltando,
+   `sem_categoria`, lançamentos grandes sem explicação.
+6. **O caminho da casa.** Fica vazia até o A2 e o G4.
+
+A rotina do assistente para escrever o texto é regra de agente (`.claude/`) e vai numa PR à parte.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

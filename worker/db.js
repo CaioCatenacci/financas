@@ -446,6 +446,23 @@ export function criarDb(sql) {
       return rows.map(r => ({ mes: r.mes, n: Number(r.n) }));
     },
 
+    // ---- G3: diagnóstico mensal (texto markdown escrito pelo assistente; o app só guarda) ----
+    async diagnosticoDoMes(mes) {
+      const rows = await sql`
+        select mes, texto, atualizado_em
+        from diagnosticos
+        where mes = ${mes}`;
+      return rows[0] || null;
+    },
+
+    // reescrever o mês troca o texto e o carimbo: o diagnóstico é refeito, não versionado
+    async gravarDiagnostico(mes, texto) {
+      await sql`
+        insert into diagnosticos (mes, texto)
+        values (${mes}, ${texto})
+        on conflict (mes) do update set texto = excluded.texto, atualizado_em = now()`;
+    },
+
     // ---- Inc 4: planejamento (metas) ----
     async metasBaselines() {
       const rows = await sql`

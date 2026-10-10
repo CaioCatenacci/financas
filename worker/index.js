@@ -422,6 +422,24 @@ export async function handleApi(request, env, url, dbOpt = null) {
   // ---- Inc 4: planejamento (metas) ----
   const mesValido = (m) => /^\d{4}-(0[1-9]|1[0-2])$/.test(m || "");
 
+  // ---- G3: diagnóstico mensal — a análise escrita do mês ----
+  // O texto (markdown, roteiro no CONTEXTO §20) é escrito pelo assistente via PUT; o app só lê.
+  // Mês sem diagnóstico devolve texto null (200), não 404: a aba mostra o vazio sem tratar erro.
+  if (url.pathname === "/api/diagnostico" && request.method === "GET") {
+    const mes = url.searchParams.get("mes");
+    if (!mesValido(mes)) return erroJson("mes inválido (use YYYY-MM)", 400);
+    const d = await db.diagnosticoDoMes(mes);
+    return j(d ? { mes, texto: d.texto, atualizado_em: d.atualizado_em } : { mes, texto: null });
+  }
+
+  if (url.pathname === "/api/diagnostico" && request.method === "PUT") {
+    const b = await body();
+    if (!mesValido(b.mes)) return erroJson("mes inválido (use YYYY-MM)", 400);
+    if (typeof b.texto !== "string" || !b.texto.trim()) return erroJson("texto obrigatório (markdown do diagnóstico)", 400);
+    await db.gravarDiagnostico(b.mes, b.texto);
+    return j({ ok: true });
+  }
+
   if (url.pathname === "/api/metas" && request.method === "GET") {
     const mes = url.searchParams.get("mes");
     if (!mesValido(mes)) return erroJson("mes inválido (use YYYY-MM)", 400);

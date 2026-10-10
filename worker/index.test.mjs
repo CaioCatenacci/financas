@@ -1430,3 +1430,71 @@ test("G2 GET /api/fechamento com ate inválido ou ausente → 400, sem ler o ban
     assert.equal((await handleApi(req, envApi, new URL(req.url), {})).status, 400, q);
   }
 });
+
+// ---------- G3: diagnóstico mensal ----------
+// o texto é livre (markdown escrito pelo assistente); o Worker só guarda e devolve por mês
+function dbDiagnosticoFake(linhas = {}) {
+  const estado = { lidos: [], gravados: [] };
+  return {
+    estado,
+    diagnosticoDoMes: async (mes) => { estado.lidos.push(mes); return linhas[mes] || null; },
+    gravarDiagnostico: async (mes, texto) => { estado.gravados.push({ mes, texto }); },
+  };
+}
+
+test("G3 GET /api/diagnostico?mes= devolve {mes, texto, atualizado_em} quando o mês tem diagnóstico", async () => {
+  const db = dbDiagnosticoFake({ "2026-09": { mes: "2026-09", texto: "## 1. Fechou no azul?\nSim.", atualizado_em: "2026-10-01T12:00:00Z" } });
+  const req = reqApi("/api/diagnostico?mes=2026-09", "GET");
+  const r = await handleApi(req, envApi, new URL(req.url), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { mes: "2026-09", texto: "## 1. Fechou no azul?\nSim.", atualizado_em: "2026-10-01T12:00:00Z" });
+  assert.deepEqual(db.estado.lidos, ["2026-09"]);
+});
+
+test("G3 GET /api/diagnostico sem diagnóstico no mês → 200 com texto null (não 404: a aba mostra o vazio)", async () => {
+  const db = dbDiagnosticoFake();
+  const req = reqApi("/api/diagnostico?mes=2026-10", "GET");
+  const r = await handleApi(req, envApi, new URL(req.url), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { mes: "2026-10", texto: null });
+});
+
+test("G3 PUT /api/diagnostico grava o texto do mês (upsert) e devolve ok", async () => {
+  const db = dbDiagnosticoFake();
+  const req = reqApi("/api/diagnostico", "PUT", { mes: "2026-09", texto: "## 1. Fechou no azul?" });
+  const r = await handleApi(req, envApi, new URL(req.url), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { ok: true });
+  assert.deepEqual(db.estado.gravados, [{ mes: "2026-09", texto: "## 1. Fechou no azul?" }]);
+});
+
+test("G3 mes inválido ou ausente → 400 legível, sem ler nem gravar o banco", async () => {
+  const db = dbDiagnosticoFake();
+  for (const q of ["", "?mes=", "?mes=2026-13", "?mes=2026-9", "?mes=x"]) {
+    const req = reqApi(`/api/diagnostico${q}`, "GET");
+    const r = await handleApi(req, envApi, new URL(req.url), db);
+    assert.equal(r.status, 400, q);
+    assert.match((await r.json()).erro, /mes inválido/);
+  }
+  for (const mes of [undefined, "", "2026-13", "2026-9"]) {
+    const req = reqApi("/api/diagnostico", "PUT", { mes, texto: "x" });
+    assert.equal((await handleApi(req, envApi, new URL(req.url), db)).status, 400, String(mes));
+  }
+  // texto vazio ou não-string: a coluna é not null e um diagnóstico em branco não diz nada
+  for (const texto of [undefined, "", "   ", 42]) {
+    const req = reqApi("/api/diagnostico", "PUT", { mes: "2026-09", texto });
+    assert.equal((await handleApi(req, envApi, new URL(req.url), db)).status, 400, String(texto));
+  }
+  assert.deepEqual(db.estado.lidos, []);
+  assert.deepEqual(db.estado.gravados, []);
+});
+
+test("G3 /api/diagnostico sem token → 401, sem ler nem gravar", async () => {
+  const db = dbDiagnosticoFake({ "2026-09": { mes: "2026-09", texto: "segredo", atualizado_em: "x" } });
+  const get = new Request("http://localhost/api/diagnostico?mes=2026-09");
+  assert.equal((await handleApi(get, envApi, new URL(get.url), db)).status, 401);
+  const put = new Request("http://localhost/api/diagnostico", { method: "PUT", body: JSON.stringify({ mes: "2026-09", texto: "x" }) });
+  assert.equal((await handleApi(put, envApi, new URL(put.url), db)).status, 401);
+  assert.deepEqual(db.estado.lidos, []);
+  assert.deepEqual(db.estado.gravados, []);
+});

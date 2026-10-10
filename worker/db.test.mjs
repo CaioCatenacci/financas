@@ -1084,3 +1084,31 @@ test("G2 semCategoriaPorMes conta em SQL pela flag padrao (nunca pelo nome), por
   assert.doesNotMatch(q, /Não Identificado|Outros/);
   assert.deepEqual(r, [{ mes: "2031-07", n: 6 }]);
 });
+
+// ---- G3: diagnóstico mensal ----
+test("diagnosticoDoMes lê só o mês pedido e devolve null quando não há texto", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  assert.equal(await db.diagnosticoDoMes("2026-10"), null);
+  assert.match(sql.chamadas[0].text, /from diagnosticos/i);
+  assert.match(sql.chamadas[0].text, /where mes = \?/i);
+  assert.deepEqual(sql.chamadas[0].values, ["2026-10"]);
+});
+
+test("diagnosticoDoMes devolve a linha quando existe", async () => {
+  const linha = { mes: "2026-09", texto: "## 1. Fechou no azul?", atualizado_em: "2026-10-01T00:00:00Z" };
+  const db = criarDb(fakeSql([linha]));
+  assert.deepEqual(await db.diagnosticoDoMes("2026-09"), linha);
+});
+
+test("gravarDiagnostico faz upsert por mes e renova atualizado_em (reescrever troca texto e carimbo)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.gravarDiagnostico("2026-09", "texto novo");
+  const { text, values } = sql.chamadas[0];
+  assert.match(text, /insert into diagnosticos/i);
+  assert.match(text, /on conflict \(mes\) do update/i);
+  assert.match(text, /texto\s*=\s*excluded\.texto/i);
+  assert.match(text, /atualizado_em\s*=\s*now\(\)/i);
+  assert.deepEqual(values, ["2026-09", "texto novo"]);
+});

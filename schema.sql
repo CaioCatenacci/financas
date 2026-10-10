@@ -127,3 +127,10 @@ create table importacoes (
   criado_em timestamptz not null default now()
 );
 create index idx_importacoes_conta_tipo on importacoes (conta, tipo, ate);
+
+-- G3: diagnóstico mensal (markdown escrito pelo assistente, roteiro no CONTEXTO §20); um por mês.
+create table diagnosticos (
+  mes           text        primary key check (mes ~ '^\d{4}-\d{2}$'),
+  texto         text        not null,
+  atualizado_em timestamptz not null default now()
+);

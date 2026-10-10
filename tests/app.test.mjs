@@ -7,6 +7,7 @@ import {
   escolherCandidato, rotuloCandidato, linhaEditavel, idsSelecionaveis, esc,
   TIPOS_IMPORT, fonteDoTipo, corpoPreview,
   rotuloEstadoFechamento, linhasFechamento, gradeFechamento, mesDoFechamento,
+  markdownSimples, avisoMesParcial, htmlDiagnostico, AVISO_MES_PARCIAL, SEM_DIAGNOSTICO,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto, abrirPdf } from "../public/pdf_extrair.js";
@@ -982,4 +983,77 @@ test("G2 gradeFechamento: uma linha por mês × fonte, com a cobertura de cada c
   assert.equal(g.linhas[0].estado, "fechado");
   assert.deepEqual(g.linhas[1].celulas.map((c) => c.cobertura), ["cheia", "parcial", "faltando", "estimado", "pendente"]);
   assert.deepEqual(g.linhas[1].celulas.map((c) => c.texto), ["30/09", "28/09", "falta", "estimado", "3"]);
+});
+
+// ---------- G3: diagnóstico mensal ----------
+// O texto vem do assistente pela API; o renderizador é deliberadamente pequeno (o roteiro só usa
+// títulos, parágrafos, listas e negrito) e escapa tudo antes de montar tag: nada do texto vira HTML.
+test("markdownSimples: '## ' vira título h2", () => {
+  assert.equal(markdownSimples("## 1. Fechou no azul?"), "<h2>1. Fechou no azul?</h2>");
+});
+
+test("markdownSimples: linhas seguidas formam um parágrafo; linha em branco separa parágrafos", () => {
+  assert.equal(markdownSimples("primeira linha\ncontinua\n\noutro"), "<p>primeira linha<br>continua</p><p>outro</p>");
+});
+
+test("markdownSimples: linhas '- ' viram uma lista ul", () => {
+  assert.equal(markdownSimples("- mercado\n- escola"), "<ul><li>mercado</li><li>escola</li></ul>");
+});
+
+test("markdownSimples: **negrito** vira strong, também em título e item de lista", () => {
+  assert.equal(markdownSimples("gastou **R$ 100** a mais"), "<p>gastou <strong>R$ 100</strong> a mais</p>");
+  assert.equal(markdownSimples("## **Sim**"), "<h2><strong>Sim</strong></h2>");
+  assert.equal(markdownSimples("- **Casa**: alta"), "<ul><li><strong>Casa</strong>: alta</li></ul>");
+});
+
+test("markdownSimples: o exemplo do item (título, parágrafo e lista; \r\n tolerado)", () => {
+  assert.equal(
+    markdownSimples("## 1. Fechou no azul?\r\nSim: +R$ 2,5 mil, contra -R$ 2 mil de média\n- item"),
+    "<h2>1. Fechou no azul?</h2><p>Sim: +R$ 2,5 mil, contra -R$ 2 mil de média</p><ul><li>item</li></ul>",
+  );
+});
+
+test("markdownSimples: <script> e aspas saem escapados (esc antes das tags)", () => {
+  const html = markdownSimples("<script>alert('x')</script>\n- <b>\n## <img onerror=1>");
+  assert.ok(!html.includes("<script>"));
+  assert.ok(html.includes("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"));
+  assert.ok(html.includes("<li>&lt;b&gt;</li>"));
+  assert.ok(html.includes("<h2>&lt;img onerror=1&gt;</h2>"));
+});
+
+test("markdownSimples: vazio ou null não monta nada", () => {
+  assert.equal(markdownSimples(""), "");
+  assert.equal(markdownSimples(null), "");
+});
+
+test("avisoMesParcial: só o mês 'fechado' fica sem aviso; faltando e parcial avisam", () => {
+  const resp = { meses: [
+    { mes: "2026-08", estado: "fechado" },
+    { mes: "2026-09", estado: "faltando" },
+    { mes: "2026-10", estado: "parcial" },
+  ] };
+  assert.equal(avisoMesParcial(resp, "2026-08"), false);
+  assert.equal(avisoMesParcial(resp, "2026-09"), true);
+  assert.equal(avisoMesParcial(resp, "2026-10"), true);
+});
+
+test("avisoMesParcial: sem resposta do fechamento (rota falhou) não avisa — o aviso é informativo", () => {
+  assert.equal(avisoMesParcial(null, "2026-09"), false);
+  assert.equal(avisoMesParcial({ meses: [] }, "2026-09"), false);
+});
+
+test("htmlDiagnostico: sem texto mostra a frase exata do vazio, e o aviso vem acima do texto", () => {
+  assert.equal(SEM_DIAGNOSTICO, "ainda não há diagnóstico deste mês");
+  assert.equal(AVISO_MES_PARCIAL, "mês parcial: o diagnóstico pode mudar");
+  const fech = { meses: [{ mes: "2026-09", estado: "faltando" }, { mes: "2026-08", estado: "fechado" }] };
+  const vazio = htmlDiagnostico({ mes: "2026-10", texto: null }, fech, "2026-10");
+  assert.ok(vazio.includes(SEM_DIAGNOSTICO));
+  // mês sem texto e sem fechar: o aviso aparece mesmo assim (o mês ainda vai mudar)
+  assert.ok(htmlDiagnostico({ mes: "2026-09", texto: null }, fech, "2026-09").includes(AVISO_MES_PARCIAL));
+  const set = htmlDiagnostico({ mes: "2026-09", texto: "## 1. Fechou no azul?\nSim." }, fech, "2026-09");
+  assert.ok(set.includes(AVISO_MES_PARCIAL));
+  assert.ok(set.indexOf(AVISO_MES_PARCIAL) < set.indexOf("<h2>1. Fechou no azul?</h2>"));
+  const ago = htmlDiagnostico({ mes: "2026-08", texto: "texto" }, fech, "2026-08");
+  assert.ok(!ago.includes(AVISO_MES_PARCIAL));
+  assert.ok(ago.includes("<p>texto</p>"));
 });
