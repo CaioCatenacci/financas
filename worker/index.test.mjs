@@ -667,7 +667,12 @@ function dbResumoFake() {
   const estado = { mesRef: null, de: null, ateExcl: null };
   return {
     estado,
-    resumoKPIs: async () => ({ receita: 1000, despesa: 500, reembolso: 0 }),
+    // G1: salário por competência (números inventados): USD 8.000 desde jan/2026, uma conversão
+    // de 8.000 → 40.000 em setembro — setembro fecha exato
+    salarioParams: async () => [{ vigente_desde: "2026-01-01", usd_cents: 800000 }],
+    conversoes: async () => [{ id: "c1", data: "2026-09-03", usd_cents: 800000, brl_cents: 4000000, origem: "wise" }],
+    saldoPorMes: async (de, ateExcl) => { estado.saldo = { de, ateExcl }; return [{ mes: "2026-09", receita_cents: 100000, despesa_cents: 3800000 }]; },
+    resumoKPIs: async () => ({ receita: "1000.00", despesa: "500.00", reembolso: "0.00" }),
     resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
     resumoPorPessoa: async () => [{ pessoa: "Alice", natureza: "despesa", total: 300 }],
     resumoPorPessoaCategoria: async (de, ate) => { estado.ppc = { de, ate }; return [{ pessoa: "Alice", categoria: "Casa", total_cents: 30000 }]; },
@@ -1229,4 +1234,110 @@ test("POST /api/importar/aplicar de fatura não pareia repasse (só extrato tem 
   const req = reqApi("/api/importar/aplicar", "POST", { decisao: { novos: [{ dataISO: "2031-09-12" }], naoGasto: [], casados: [] }, tipo: "fatura" });
   await handleApi(req, envApi, new URL(req.url), db);
   assert.equal(chamou, false);
+});
+
+// ---------- G1: salário por competência ----------
+const G1_ENV = { APP_TOKEN: "token123", DATABASE_URL: "" };
+const G1_COOK = { "Cookie": "token=token123" };
+
+test("G1 /api/resumo?mes= devolve salario em centavos e kpis.receita (reais) = salário + outras receitas", async () => {
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/resumo?mes=2026-09", { headers: G1_COOK });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.deepEqual(data.salario, { mes: "2026-09", brl_cents: 4000000, usd_cents: 800000, taxa: 5, estimado: false });
+  assert.equal(data.kpis.receita, "41000.00"); // 40.000 de salário + 1.000 das outras receitas, string em reais como hoje
+  assert.equal(data.kpis.despesa, "500.00");
+});
+
+test("G1 /api/resumo?mes= num mês sem conversão: salário estimado (última taxa) e o selo vai junto", async () => {
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/resumo?mes=2026-10", { headers: G1_COOK });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(data.salario.estimado, true);
+  assert.equal(data.salario.brl_cents, 4000000);
+});
+
+test("G1 /api/resumo?mes= antes do primeiro parâmetro: salario nulo e kpis.receita só das outras receitas", async () => {
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/resumo?mes=2025-06", { headers: G1_COOK });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(data.salario.brl_cents, null);
+  assert.equal(data.salario.estimado, false);
+  assert.equal(data.kpis.receita, "1000.00");
+});
+
+test("G1 /api/saldo-mensal?ate= devolve 12 meses com receita (salário + outras), despesa, saldo e estimado", async () => {
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/saldo-mensal?ate=2026-09", { headers: G1_COOK });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(data.length, 12);
+  assert.equal(data[0].mes, "2025-10");
+  assert.deepEqual(db.estado.saldo, { de: "2025-10-01", ateExcl: "2026-10-01" }); // janela meio-aberta dos 12 meses
+  const set = data[11];
+  // Exemplo do card: salário 40.000 + 1.000 de outras receitas − 38.000 de despesa
+  assert.deepEqual(set, { mes: "2026-09", receita_cents: 4100000, despesa_cents: 3800000, saldo_cents: 300000, estimado: false });
+  // mês sem transação e sem salário em dólar (antes do parâmetro) vem zerado, não some
+  assert.deepEqual(data[0], { mes: "2025-10", receita_cents: 0, despesa_cents: 0, saldo_cents: 0, estimado: false });
+  // mês coberto só por estimativa carrega o selo
+  assert.equal(data[7].mes, "2026-05");
+  assert.equal(data[7].estimado, true);
+});
+
+test("G1 /api/saldo-mensal sem ate válido usa o mês corrente", async () => {
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/saldo-mensal", { headers: G1_COOK });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(data[11].mes, new Date().toISOString().slice(0, 7));
+});
+
+test("G1 GET /api/salario lista os parâmetros; PUT grava {vigente_desde, usd_cents} no dia 01", async () => {
+  const gravados = [];
+  const db = { salarioParams: async () => [{ vigente_desde: "2026-01-01", usd_cents: 800000 }], setSalarioParam: async (d, u) => gravados.push([d, u]) };
+  const get = new Request("http://localhost/api/salario", { headers: G1_COOK });
+  assert.deepEqual(await (await handleApi(get, G1_ENV, new URL(get.url), db)).json(), [{ vigente_desde: "2026-01-01", usd_cents: 800000 }]);
+  const put = new Request("http://localhost/api/salario", { method: "PUT", headers: { ...G1_COOK, "content-type": "application/json" }, body: JSON.stringify({ vigente_desde: "2026-03", usd_cents: 850000 }) });
+  const r = await handleApi(put, G1_ENV, new URL(put.url), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(gravados, [["2026-03-01", 850000]]);
+});
+
+test("G1 PUT /api/salario recusa mês inválido ou usd_cents não inteiro (nada chega ao banco)", async () => {
+  const gravados = [];
+  const db = { setSalarioParam: async (d, u) => gravados.push([d, u]) };
+  for (const body of [{ vigente_desde: "x", usd_cents: 1 }, { vigente_desde: "2026-03", usd_cents: 12.5 }, { vigente_desde: "2026-03", usd_cents: -1 }]) {
+    const put = new Request("http://localhost/api/salario", { method: "PUT", headers: { ...G1_COOK, "content-type": "application/json" }, body: JSON.stringify(body) });
+    assert.equal((await handleApi(put, G1_ENV, new URL(put.url), db)).status, 400);
+  }
+  assert.equal(gravados.length, 0);
+});
+
+const CSV_G1 = [
+  '"TransferWise ID",Date,"Date Time",Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees","Exchange To Amount","Transaction Type","Transaction Details Type"',
+  'BALANCE-111,04-08-2026,"04-08-2026 09:00:00.000",8000.00,USD,"Received money",,8000.00,,,,"Empresa Exemplo",,,,,,,,0.00,,CREDIT,DEPOSIT',
+  'BALANCE-222,04-08-2026,"04-08-2026 10:00:00.000",-8000.00,USD,"Converted USD to BRL",,0.00,USD,BRL,5.00000,,,,,,,,,12.34,40000.00,DEBIT,CONVERSION',
+  'BALANCE-333,14-08-2026,"14-08-2026 10:00:00.000",-5000.00,USD,"Converted USD to BRL",,0.00,USD,BRL,5.20000,,,,,,,,,8.00,26000.00,DEBIT,CONVERSION',
+].join("\n");
+
+test("G1 POST /api/importar/preview tipo wise: conversões novas × já importadas (por linha_hash)", async () => {
+  const { hashWise } = await import("./wise.js");
+  const db = { catalogo: async () => ({ categorias: [], subcategorias: [] }), associacoesPorNome: async () => ({}), conversoesHashes: async () => [hashWise("BALANCE-222")] };
+  const req = new Request("http://localhost/api/importar/preview", { method: "POST", headers: { ...G1_COOK, "content-type": "application/json" }, body: JSON.stringify({ tipo: "wise", texto: CSV_G1 }) });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(data.resumo.novos, 1);
+  assert.equal(data.resumo.jaTem, 1);
+  assert.equal(data.resumo.ignoradas, 1);
+  assert.equal(data.checksum.bloqueiaAplicar, false);
+  assert.deepEqual(data.itens.map((i) => i.status), ["jaTem", "novo"]);
+  assert.equal(data.itens[1].usd_cents, 500000);
+});
+
+test("G1 POST /api/importar/aplicar tipo wise grava as conversões (origem wise) e devolve a contagem", async () => {
+  const gravadas = [];
+  const db = { inserirConversoes: async (l) => { gravadas.push(...l); return { gravados: l.length }; } };
+  const conversoes = [{ data: "2026-08-14", usd_cents: 500000, brl_cents: 2600000, taxa: 5.2, linhaHash: "h" }];
+  const req = new Request("http://localhost/api/importar/aplicar", { method: "POST", headers: { ...G1_COOK, "content-type": "application/json" }, body: JSON.stringify({ tipo: "wise", conversoes }) });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(data.gravados, 1);
+  assert.equal(gravadas[0].origem, "wise");
+  assert.equal(gravadas[0].linhaHash, "h");
 });

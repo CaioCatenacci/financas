@@ -314,7 +314,22 @@ export const TIPOS_IMPORT = [
   { valor: "extrato", rotulo: "Extrato Itaú (conta corrente)" },
   { valor: "c6", rotulo: "Extrato C6 Bank" },
   { valor: "fatura", rotulo: "Fatura (cartão)" },
+  // G1: o CSV da conta em USD da Wise não vira transação — vira `conversoes` (salário por competência)
+  { valor: "wise", rotulo: "Wise (CSV da conta em USD)" },
 ];
+
+// G1: como o arquivo é lido no navegador. A Wise exporta CSV (texto puro, sem pdf.js); o resto é PDF.
+export function leituraDoTipo(tipo) {
+  return tipo === "wise" ? "csv" : "pdf";
+}
+
+// G1: o card "Saldo do mês" lê kpis (reais, string — o salário já está somado em kpis.receita
+// pelo servidor) e o selo vem de salario.estimado. Devolve centavos inteiros.
+export function montarSaldoMes(kpis, salario) {
+  const cents = (v) => Math.round(parseFloat(v || 0) * 100);
+  const receita_cents = cents(kpis && kpis.receita), despesa_cents = cents(kpis && kpis.despesa);
+  return { receita_cents, despesa_cents, saldo_cents: receita_cents - despesa_cents, estimado: !!(salario && salario.estimado) };
+}
 
 // fonte gravada na transação: só 'extrato' ou 'fatura' (o C6 é extrato).
 export function fonteDoTipo(tipo) {
@@ -323,6 +338,7 @@ export function fonteDoTipo(tipo) {
 
 // corpo do POST /api/importar/preview para cada tipo.
 export function corpoPreview(tipo, texto, { conta = null, ano = null, mes = null } = {}) {
+  if (tipo === "wise") return { tipo: "wise", texto };
   if (tipo === "c6") return { tipo: "c6", texto, conta: "c6" };
   if (tipo === "fatura") return { tipo, texto, ano, mes };
   return { tipo, texto, conta: conta || "conta" };
@@ -441,6 +457,50 @@ if (typeof document !== "undefined") {
       cel("Despesa", despesa, "--despesa", receita ? `${Math.round(despesa / receita * 100)}% da receita` : "&nbsp;") +
       `<div class="card kpi"><div class="lbl">Saldo guardado</div><div class="val">R$ ${Math.round(saldo).toLocaleString("pt-BR")}</div><div class="delta ${saldo >= 0 ? "up" : "down"}">${pct}% da receita</div></div>` +
       cel("Reembolso (IR)", reembolso, "--c3", "dedutível");
+  }
+
+  // ----- G1: saldo do mês (salário por competência) -----
+  function drawSaldoMes() {
+    const el = $("#saldomes"); if (!el) return;
+    const sal = estado.resumo.salario;
+    const s = montarSaldoMes(estado.resumo.kpis || {}, sal);
+    const selo = s.estimado ? `<span class="selo-diferem" title="parte do salário deste mês ainda não foi convertida: valor pela última taxa conhecida">estimado</span>` : "";
+    const linha = (lbl, cents, cor) => `<div class="saldolinha"><span class="lbl">${lbl}</span><span class="val" style="color:var(${cor})">${cents < 0 ? "−" : ""}${BRL(Math.abs(cents) / 100)}</span></div>`;
+    const usd = sal && sal.usd_cents != null ? `USD ${centavosBR(String(sal.usd_cents / 100))}` + (sal.taxa != null ? ` × ${sal.taxa.toFixed(4).replace(".", ",")}` : "") : "sem salário em dólar neste mês";
+    el.innerHTML =
+      linha("Receita", s.receita_cents, "--receita") +
+      linha("Despesa", s.despesa_cents, "--despesa") +
+      `<div class="saldolinha saldototal"><span class="lbl">Saldo ${selo}</span><span class="val ${s.saldo_cents >= 0 ? "up" : "down"}">${s.saldo_cents < 0 ? "−" : ""}${BRL(Math.abs(s.saldo_cents) / 100)}</span></div>` +
+      `<p class="sub" style="margin-top:8px">salário: ${esc(usd)}</p>`;
+  }
+
+  // G1: barras de saldo dos 12 meses de /api/saldo-mensal. Estimado = barra com contorno tracejado.
+  function drawSaldo12() {
+    const el = $("#saldo12"); if (!el) return;
+    const serie = estado.saldoMensal || [];
+    if (!serie.length) { el.innerHTML = `<p class="sub">sem dados</p>`; return; }
+    const W = 560, H = 200, pl = 8, pr = 8, pb = 28, pt = 16, iw = W - pl - pr, ih = H - pt - pb;
+    const maxAbs = Math.max(1, ...serie.map(m => Math.abs(m.saldo_cents)));
+    const Y = v => pt + ih * (maxAbs - v) / (2 * maxAbs);
+    const gap = iw / serie.length, bw = gap * 0.62;
+    let bars = "", labels = "";
+    serie.forEach((m, i) => {
+      const x = pl + gap * i + (gap - bw) / 2;
+      const y0 = Y(0), y1 = Y(m.saldo_cents);
+      const col = m.saldo_cents >= 0 ? "var(--pos)" : "var(--neg)";
+      const extra = m.estimado ? ` stroke="${col}" stroke-dasharray="3 2" fill-opacity="0.35"` : "";
+      bars += `<rect x="${x.toFixed(1)}" y="${Math.min(y0, y1).toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(Math.abs(y1 - y0), 1).toFixed(1)}" rx="2" data-i="${i}" style="fill:${col}"${extra}/>`;
+      const [a, mm] = m.mes.split("-").map(Number);
+      labels += `<text class="axis" x="${(x + bw / 2).toFixed(1)}" y="${H - 10}" text-anchor="middle">${MES[mm - 1]}${mm === 1 || i === 0 ? "/" + String(a).slice(2) : ""}</text>`;
+    });
+    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Saldo dos últimos 12 meses"><line x1="${pl}" x2="${W - pr}" y1="${Y(0).toFixed(1)}" y2="${Y(0).toFixed(1)}" stroke-width="1" style="stroke:var(--line)"/>${bars}${labels}</svg>`;
+    el.querySelectorAll("rect").forEach(rc => {
+      rc.addEventListener("mousemove", e => {
+        const m = serie[+rc.dataset.i];
+        showTip(e, `<b>${esc(m.mes)}</b>${m.estimado ? " · estimado" : ""}<br>receita ${BRL(m.receita_cents / 100)}<br>despesa ${BRL(m.despesa_cents / 100)}<br>saldo ${m.saldo_cents < 0 ? "−" : ""}${BRL(Math.abs(m.saldo_cents) / 100)}`);
+      });
+      rc.addEventListener("mouseleave", hideTip);
+    });
   }
 
   // ----- Inc 4.5 Tarefa 7: gasto no mês — acumulado × orçamento -----
@@ -1323,9 +1383,30 @@ if (typeof document !== "undefined") {
     </div>`;
   }
 
+  // G1: tabela das conversões da Wise (USD, BRL, taxa) — valores em centavos vindos do preview.
+  function tabelaConversoes(titulo, itens) {
+    if (!itens.length) return "";
+    const linhas = itens.map(c => `
+      <tr>
+        <td class="dt">${fmtData(c.data)}</td>
+        <td class="val">USD ${centavosBR(String(c.usd_cents / 100))}</td>
+        <td class="val">R$ ${centavosBR(String(c.brl_cents / 100))}</td>
+        <td class="val">${c.taxa != null ? c.taxa.toFixed(4).replace(".", ",") : "—"}</td>
+      </tr>`).join("");
+    return `<div class="impgrupo">
+      <h3>${esc(titulo)} <span class="impcount">${itens.length}</span></h3>
+      <div class="tblwrap"><table><thead><tr>
+        <th>Data</th><th style="text-align:right">Dólares</th><th style="text-align:right">Reais</th><th style="text-align:right">Taxa</th>
+      </tr></thead><tbody>${linhas}</tbody></table></div>
+    </div>`;
+  }
+
   // mensagem de resultado do "Aplicar" (compartilhada pelos dois ramos de render de drawImportar).
   function msgResultado(r) {
     if (!r) return "";
+    if (r.agrupados == null && r.naoGasto == null) { // G1: resultado do tipo wise (só conversões)
+      return `<p class="impresultado">✅ ${r.gravados} conversão(ões) gravada(s). Atualize o Resumo para ver o salário do mês.</p>`;
+    }
     let extra = "";
     if (r.pagamentoMarcado != null) { // presente só em fatura
       extra = r.pagamentoMarcado
@@ -1360,20 +1441,22 @@ if (typeof document !== "undefined") {
     const preview = st.preview;
     const isFatura = st.tipo === "fatura";
     const isC6 = st.tipo === "c6";
+    const isWise = st.tipo === "wise"; // G1: CSV, lido como texto; vira conversões, não transações
+    const ehPdf = leituraDoTipo(st.tipo) === "pdf";
 
     const controles = `
       <div class="card" style="margin-bottom:16px">
-        <div class="cardhead"><div><h2>Importar extrato ou fatura (PDF)</h2><p class="sub">o PDF é lido no navegador; só o texto vai pro servidor</p></div></div>
+        <div class="cardhead"><div><h2>Importar extrato, fatura (PDF) ou conversões da Wise (CSV)</h2><p class="sub">o arquivo é lido no navegador; só o texto vai pro servidor</p></div></div>
         <div class="impctl">
           <select id="imptipo" aria-label="Tipo de importação">
             ${TIPOS_IMPORT.map(t => `<option value="${t.valor}" ${st.tipo === t.valor ? "selected" : ""}>${esc(t.rotulo)}</option>`).join("")}
           </select>
-          ${isC6 ? ""
+          ${isC6 || isWise ? ""
             : !isFatura
             ? `<input id="impconta" type="text" placeholder="conta (ex.: itau)" value="itau">`
             : `<input id="impano" type="text" inputmode="numeric" placeholder="ano" style="width:80px">
                <input id="impmes" type="text" inputmode="numeric" placeholder="mês" style="width:60px">`}
-          <input id="imparquivo" type="file" accept="application/pdf">
+          <input id="imparquivo" type="file" accept="${ehPdf ? "application/pdf" : ".csv,text/csv"}">
           <button id="imppreview" class="chip" type="button">${st.carregando ? "Lendo…" : "Pré-visualizar"}</button>
         </div>
         <div id="impsenhabox" class="impctl"></div>
@@ -1392,6 +1475,22 @@ if (typeof document !== "undefined") {
       : chk.bloqueiaAplicar
         ? `<span class="impchk impchk-bad">✕ checksum não bate (diferença R$ ${diff}) — aplicar desabilitado</span>`
         : `<span class="impchk impchk-warn">⚠ diferença de R$ ${diff} — provável IOF/encargos da fatura (não bloqueia)</span>`;
+
+    if (isWise) {
+      // G1: só conversões USD→BRL; "já tinha" = mesma linha_hash gravada antes (não duplica)
+      const novasW = preview.itens.filter(it => it.status === "novo");
+      const jaTemW = preview.itens.filter(it => it.status === "jaTem");
+      $("#importar").innerHTML = controles + `
+        <div class="card" style="margin-bottom:16px">
+          <div class="cardhead"><div><h2>Preview</h2><p class="sub">conversões USD → BRL · novas ${novasW.length} · já tinha ${jaTemW.length} · outras linhas ignoradas ${preview.resumo?.ignoradas ?? 0}</p></div></div>
+          ${(preview.avisos || []).map(a => `<p class="impchk impchk-warn">⚠ ${esc(a)}</p>`).join("")}
+          ${msgResultado(st.ultimoResultado)}
+          <div style="margin-top:14px"><button id="impaplicar" class="chip" type="button" ${novasW.length ? "" : "disabled"}>Aplicar</button></div>
+        </div>
+        ${tabelaConversoes("Novas", novasW)}
+        ${tabelaConversoes("Já importadas antes (ignoradas)", jaTemW)}`;
+      return;
+    }
 
     const novos = preview.itens.filter(it => it.status === "novo");
     const casados = preview.itens.filter(it => it.status === "casado");
@@ -1423,8 +1522,8 @@ if (typeof document !== "undefined") {
     const st = estado.importar;
     if (e.target.id === "imppreview") {
       const arquivo = $("#imparquivo")?.files?.[0];
-      if (!arquivo) { alert("Escolha um arquivo PDF."); return; }
       st.tipo = $("#imptipo").value;
+      if (!arquivo) { alert(leituraDoTipo(st.tipo) === "csv" ? "Escolha o arquivo CSV." : "Escolha um arquivo PDF."); return; }
       // Captura TODOS os valores do form ANTES de re-renderizar: drawImportar() (chamado logo
       // abaixo p/ mostrar "Lendo…") recria os inputs vazios, então ler conta/ano/mês depois dele
       // pegava string vazia (conta virava "conta", ano virava 0 → 500 no servidor).
@@ -1438,6 +1537,11 @@ if (typeof document !== "undefined") {
       }
       st.carregando = true; st.ultimoResultado = null; drawImportar();
       try {
+        if (leituraDoTipo(st.tipo) === "csv") {
+          // G1: CSV é texto — vai direto, sem pdf.js
+          st.preview = await apiPost("/api/importar/preview", corpoPreview(st.tipo, await arquivo.text()));
+          return;
+        }
         const buf = await arquivo.arrayBuffer();
         const modo = st.tipo === "fatura" ? "layout" : "simples";
         // C1: o PDF do C6 tem senha — tenta a do secret; se faltar ou não abrir, pede num campo.
@@ -1460,6 +1564,14 @@ if (typeof document !== "undefined") {
     if (e.target.id === "impaplicar") {
       if (!podeAplicar(st.preview)) return;
       try {
+        if (st.tipo === "wise") {
+          // G1: manda só as conversões novas; o servidor grava em `conversoes` (dedup por linha_hash)
+          const conversoes = st.preview.itens.filter(it => it.status === "novo");
+          st.ultimoResultado = await apiPost("/api/importar/aplicar", { tipo: "wise", conversoes });
+          st.preview = null;
+          drawImportar();
+          return;
+        }
         const decisao = montarDecisao(st.preview, estado.catalogo, fonteDoTipo(st.tipo));
         // tipo: no extrato (Itaú ou C6) o servidor pareia os repasses entre contas próprias (C1)
         const payload = { decisao, tipo: st.tipo };
@@ -1515,11 +1627,13 @@ if (typeof document !== "undefined") {
       const qsResumo = `?mes=${estado.mes}`;
       const rt = transacoesRange();
       const qsTransacoes = `?de=${rt.de}&ate=${rt.ate}`;
-      const [resumo, metasMes, transacoes, catalogo, pessoas] = await Promise.all([
+      const [resumo, metasMes, transacoes, catalogo, pessoas, saldoMensal] = await Promise.all([
         apiGet("/api/resumo" + qsResumo), apiGet("/api/metas" + qsResumo),
         apiGet("/api/transacoes" + qsTransacoes), apiGet("/api/catalogo"), apiGet("/api/pessoas"),
+        apiGet(`/api/saldo-mensal?ate=${estado.mes}`), // G1
       ]);
       estado.resumo = resumo; estado.metasMes = metasMes; estado.transacoes = transacoes; estado.catalogo = catalogo; estado.pessoas = pessoas;
+      estado.saldoMensal = saldoMensal;
       // remove da seleção ids que sumiram (troca de período/recarga) — evita "selecionados" fantasmas
       const presentes = new Set(transacoes.map(t => t.id));
       for (const id of estado.selecao) if (!presentes.has(id)) estado.selecao.delete(id);
@@ -1528,7 +1642,7 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); drawRows();
+      drawKPIs(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
@@ -1538,9 +1652,9 @@ if (typeof document !== "undefined") {
   async function carregarResumo() {
     try {
       const qs = `?mes=${estado.mes}`;
-      const [resumo, metasMes] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs)]);
-      estado.resumo = resumo; estado.metasMes = metasMes;
-      drawKPIs(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet();
+      const [resumo, metasMes, saldoMensal] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs), apiGet(`/api/saldo-mensal?ate=${estado.mes}`)]);
+      estado.resumo = resumo; estado.metasMes = metasMes; estado.saldoMensal = saldoMensal;
+      drawKPIs(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet();
     } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
   }
 
@@ -1715,6 +1829,6 @@ if (typeof document !== "undefined") {
   });
 
   try { const t = localStorage.getItem("tema"); if (t) document.documentElement.setAttribute("data-theme", t); } catch { /* ignora */ }
-  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); } }, 150); });
+  addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => { if (estado.resumo) { drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); } }, 150); });
   carregar();
 }

@@ -92,6 +92,19 @@
   <section id="resumo">
     <div class="grid kpis" id="kpis" style="margin-bottom:16px"></div>
 
+    <!-- G1: saldo do mês com o salário por competência (USD convertido ao câmbio real, FIFO) e a
+         série dos 12 meses. O selo "estimado" aparece quando parte do salário ainda não foi convertida. -->
+    <div class="grid two" style="margin-bottom:16px">
+      <div class="card">
+        <div class="cardhead"><div><h2>Saldo do mês</h2><p class="sub">salário do mês + outras receitas − despesas que contam</p></div></div>
+        <div id="saldomes"></div>
+      </div>
+      <div class="card">
+        <div class="cardhead"><div><h2>Saldo dos últimos 12 meses</h2><p class="sub">receita − despesa, mês a mês · tracejado = estimado</p></div></div>
+        <div id="saldo12"></div>
+      </div>
+    </div>
+
     <!-- D6: linha 1 "Gasto no mês" + mês vs anterior; linha 2 só o waterfall; linha 3 os dois
          sunbursts lado a lado (categoria → sub e pessoa → categoria, sem seletor); por fim o bullet. -->
     <div class="grid two" style="margin-bottom:16px">

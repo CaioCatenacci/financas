@@ -5,10 +5,12 @@ import { normalizarNome } from "./contraparte.js";
 
 // Padrões de NÃO-GASTO (conservador; editável). Ordem importa.
 const _NAO_GASTO = [
-  { rx: /\bAPLICACAO\b|PERSONDIF|COR COMP CDB|\bCDB\b|PERS BLACK/i, cat: "Investimentos" },
-  // conta própria da Paola. O "PIX TRANSF <Caio>…" saiu daqui (C1): no Itaú é a chegada da Wise
-  // (receita, conta por padrão); só sai do resumo quando pareia com um repasse do C6 —
-  // db.marcarRepassesEntreContas. Os importadores Python seguem com o padrão antigo (BACKLOG C6).
+  // G1: aplicação E resgate (RESGATE, AG. RESGATE, INT RESGATE) são movimento de investimento —
+  // nem gasto nem receita. Antes só a aplicação saía e o resgate entrava como receita.
+  { rx: /\bAPLICACAO\b|RESGATE|PERSONDIF|COR COMP CDB|\bCDB\b|PERS BLACK/i, cat: "Investimentos" },
+  // conta própria da Paola. O "PIX TRANSF <Caio>…" não mora aqui: no Itaú é a chegada da Wise, e
+  // sai do resumo pela lista CONTAS_PROPRIAS (prefixo do nome), em montarPreviewExtrato (G1) — o
+  // nome nunca vai no código. Os importadores Python seguem com o padrão antigo (BACKLOG C6).
   { rx: /PIX TRANSF PAOLA\b/i, cat: "Transferências" },
   { rx: /PAGAMENTO.*(CARTAO|FATURA)|DEB.*CARTAO/i, cat: "Fatura de cartão" },
 ];

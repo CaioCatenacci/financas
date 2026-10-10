@@ -7,7 +7,9 @@ import { parseExtrato, conferirChecksum } from "./extrato.js";
 import { parseFatura } from "./fatura.js";
 import { parseExtratoC6, ehRepasseProprio } from "./extrato_c6.js";
 import { classificar, normalizarDescritor } from "./classificar.js";
+import { normalizarNome } from "./contraparte.js";
 import { linhaHash, reconciliarLinha } from "./reconciliar.js";
+import { parseWiseCsv } from "./wise.js";
 
 function resumoVazio() {
   return { novos: 0, casados: 0, naoGasto: 0, ambiguos: 0, jaTem: 0 };
@@ -27,13 +29,55 @@ function resumoVazio() {
  * @param {string} conta - identificador da conta (entra na linha_hash)
  * @param {{catalogo:Object, associacoes:Object, existentes:Array, hashes:Array}} ctx
  */
-export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {}, existentes = [], hashes = [] } = {}) {
+export function montarPreviewExtrato(texto, conta, { catalogo, associacoes = {}, existentes = [], hashes = [], contasProprias = [] } = {}) {
   void catalogo; // não usado aqui — ver docstring
   const { linhas, saldos } = parseExtrato(texto);
-  return previewDeLinhas(linhas, saldos, conta, { associacoes, existentes, hashes, classificarLinha: (l) => classificar(l.descricao, associacoes) });
+  const avisos = [];
+  if (!contasProprias.length) avisos.push(AVISO_SEM_CONTAS_ITAU);
+  const classificarLinha = (l) => {
+    if (ehChegadaPropriaItau(l, contasProprias)) return naoGastoTransferencia(l);
+    return classificar(l.descricao, associacoes);
+  };
+  const p = previewDeLinhas(linhas, saldos, conta, { associacoes, existentes, hashes, classificarLinha });
+  return { ...p, avisos };
 }
 
 const AVISO_SEM_CONTAS = "CONTAS_PROPRIAS não configurado: nenhuma saída Pix foi tratada como repasse entre contas próprias (todas contam no resumo).";
+const AVISO_SEM_CONTAS_ITAU = "CONTAS_PROPRIAS não configurado: nenhum 'PIX TRANSF <nome>' foi tratado como chegada da Wise (todos contam como receita).";
+
+function naoGastoTransferencia(l) {
+  return { contraparteNome: normalizarDescritor(l.descricao), categoriaNome: null, subNome: null, computaResumo: false, categoriaOrg: "Transferências" };
+}
+
+// G1 — a chegada da Wise/Nomad é transferência entre contas próprias, não receita: a receita do
+// mês é o salário alocado (worker/salario.js). Sem nome no código (repositório público): a lista
+// vem do secret CONTAS_PROPRIAS, já normalizada por lerContasProprias.
+//
+// Itaú: "PIX TRANSF <nome cortado><DD/MM>" — o Itaú corta o nome e cola a data no fim, então o
+// que sobra é comparado como PREFIXO de um nome da lista (nunca igualdade). Só entrada (receita).
+const _PIX_TRANSF_ITAU = /^PIX TRANSF\s+(.+?)\s*(\d{2}\/\d{2})?\s*$/i;
+export function ehChegadaPropriaItau(linha, contasProprias) {
+  if (!contasProprias || !contasProprias.length) return false;
+  if (linha.natureza !== "receita") return false;
+  const m = _PIX_TRANSF_ITAU.exec(linha.descricao || "");
+  if (!m) return false;
+  const prefixo = normalizarNome(m[1]);
+  if (!prefixo) return false;
+  return contasProprias.some((n) => n.startsWith(prefixo));
+}
+
+// C6: "Pix recebido de OURIBANK…" (literal: é o banco por onde a Nomad chegava) ou
+// "Pix recebido de <nome da lista>" (a PJ do Caio, igualdade — o C6 traz o nome inteiro).
+const _PIX_RECEBIDO_C6 = /^Pix recebido de\s+(.+)$/i;
+export function ehChegadaPropriaC6(linha, contasProprias) {
+  if (linha.natureza !== "receita") return false;
+  const m = _PIX_RECEBIDO_C6.exec(linha.descricao || "");
+  if (!m) return false;
+  const nome = normalizarNome(m[1]);
+  if (!nome) return false;
+  if (nome.startsWith("OURIBANK")) return true;
+  return (contasProprias || []).includes(nome);
+}
 
 /**
  * Preview do extrato do C6 Bank: o mesmo fluxo do Itaú (checksum pelos "Saldo do dia", linha_hash
@@ -49,9 +93,8 @@ export function montarPreviewExtratoC6(texto, { catalogo, associacoes = {}, exis
   if (!contasProprias.length) avisos.push(AVISO_SEM_CONTAS);
   if (semAno) avisos.push(`${semAno} linha(s) sem o mês/ano no cabeçalho ficaram de fora.`);
   const classificarLinha = (l) => {
-    if (ehRepasseProprio(l, contasProprias)) {
-      return { contraparteNome: normalizarDescritor(l.descricao), categoriaNome: null, subNome: null, computaResumo: false, categoriaOrg: "Transferências" };
-    }
+    // saída pra conta própria (C1) ou chegada da Wise/Nomad (G1): as duas são transferência
+    if (ehRepasseProprio(l, contasProprias) || ehChegadaPropriaC6(l, contasProprias)) return naoGastoTransferencia(l);
     return classificar(l.descricao, associacoes);
   };
   const p = previewDeLinhas(linhas, saldos, "c6", { associacoes, existentes, hashes, classificarLinha });
@@ -213,6 +256,20 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
   // totalCents = total impresso na fatura (não a soma dos itens novos): quem aplica usa isso pra
   // achar e marcar o pagamento correspondente no extrato como fora do resumo (evita contar 2x).
   return { checksum, itens, resumo, totalCents };
+}
+
+/**
+ * G1: preview do CSV da Wise — não vira transação: cada conversão USD→BRL vai pra `conversoes`,
+ * e o salário do mês sai de alocarSalario. Mesma forma dos outros previews (checksum/itens/resumo)
+ * pra aba Importar reaproveitar a tela; `hashes` são as linha_hash já gravadas (dedup).
+ */
+export function montarPreviewWise(texto, { hashes = [] } = {}) {
+  const { conversoes, ignoradas, erros } = parseWiseCsv(texto);
+  const hashesSet = new Set(hashes);
+  const itens = conversoes.map((c) => ({ ...c, status: hashesSet.has(c.linhaHash) ? "jaTem" : "novo" }));
+  const resumo = { ...resumoVazio(), ignoradas };
+  for (const i of itens) { if (i.status === "novo") resumo.novos++; else resumo.jaTem++; }
+  return { checksum: { ok: true, diferencaCents: 0, bloqueiaAplicar: false }, itens, resumo, avisos: erros };
 }
 
 /**

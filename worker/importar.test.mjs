@@ -360,3 +360,76 @@ test("C8: chavesFatura devolve a chave nova e a antiga de cada item (a rota busc
   assert.ok(ch.includes(linhaHash("fatura-202603", "2026-12-28", "LOJA Y", 2000, 1)));
   assert.equal(ch.length, 4);
 });
+
+// ---------- G1: chegada da Wise/Nomad fora do resumo por regra (lista CONTAS_PROPRIAS) ----------
+// Nomes inventados. A lista entra por parâmetro nos dois extratos; o nome nunca mora no código.
+import { montarPreviewExtratoC6 } from "./importar.js";
+import { lerContasProprias } from "./extrato_c6.js";
+const CONTAS_G1 = lerContasProprias("Fulano de Tal Silva; EMPRESA FICTICIA LTDA");
+
+test("G1 Itaú: 'PIX TRANSF <prefixo de um nome da lista>' (nome cortado) é chegada da Wise — fora do resumo, Transferências", () => {
+  const txt = `10/12/2025 SALDO DO DIA 8.876,46
+10/12/2025 PIX TRANSF FULANO DE10/12 1.000,00
+09/12/2025 SALDO DO DIA 7.876,46`;
+  const p = montarPreviewExtrato(txt, "itau", { catalogo, existentes: [{ id: "t1", data: "2025-12-10", valorCents: 100000 }], hashes: [], contasProprias: CONTAS_G1 });
+  const it = p.itens[0];
+  assert.equal(it.computaResumo, false);
+  assert.equal(it.categoriaOrg, "Transferências");
+  assert.equal(it.status, "naoGasto"); // não reconcilia com o lançamento de mesmo valor
+});
+
+test("G1 Itaú: sem a lista, 'PIX TRANSF <nome>' segue como receita que conta (e o preview avisa)", () => {
+  const txt = `10/12/2025 SALDO DO DIA 8.876,46
+10/12/2025 PIX TRANSF FULANO DE10/12 1.000,00
+09/12/2025 SALDO DO DIA 7.876,46`;
+  const p = montarPreviewExtrato(txt, "itau", { catalogo, existentes: [], hashes: [] });
+  assert.equal(p.itens[0].computaResumo, true);
+  assert.ok(p.avisos.some((a) => /CONTAS_PROPRIAS/.test(a)));
+  // nome que não está na lista também conta (receita de outra pessoa)
+  const p2 = montarPreviewExtrato(txt.replace("FULANO DE", "OUTRA PE"), "itau", { catalogo, existentes: [], hashes: [], contasProprias: CONTAS_G1 });
+  assert.equal(p2.itens[0].computaResumo, true);
+});
+
+test("G1 Itaú: o prefixo tem que ser o começo do nome — 'PIX TRANSF DE TAL' não casa com 'FULANO DE TAL SILVA'; e PIX TRANSF de saída não é chegada", () => {
+  const txt = `10/12/2025 SALDO DO DIA 8.876,46
+10/12/2025 PIX TRANSF DE TAL SI10/12 1.000,00
+10/12/2025 PIX TRANSF FULANO DE10/12 -200,00
+09/12/2025 SALDO DO DIA 8.076,46`;
+  const p = montarPreviewExtrato(txt, "itau", { catalogo, existentes: [], hashes: [], contasProprias: CONTAS_G1 });
+  assert.equal(p.itens[0].computaResumo, true);
+  assert.equal(p.itens[1].computaResumo, true); // despesa 'PIX TRANSF' sai do escopo desta regra
+});
+
+test("G1 C6: 'Pix recebido de OURIBANK' (literal) e 'Pix recebido de <nome da lista>' saem do resumo, Transferências", () => {
+  const txt = `Extrato de conta corrente
+Setembro 2031
+0 1 / 0 9 0 1 / 0 9 Saldo do dia R$ 100,00
+1 0 / 0 9 1 0 / 0 9 Entrada PIX Pix recebido de OURIBANK R$ 1.000,00
+1 0 / 0 9 1 0 / 0 9 Entrada PIX Pix recebido de EMPRESA FICTICIA LTDA R$ 500,00
+1 0 / 0 9 1 0 / 0 9 Entrada PIX Pix recebido de CLIENTE QUALQUER R$ 300,00
+1 0 / 0 9 1 0 / 0 9 Saldo do dia R$ 1.900,00`;
+  const p = montarPreviewExtratoC6(txt, { catalogo, existentes: [], hashes: [], contasProprias: CONTAS_G1 });
+  const [ouri, pj, cliente] = p.itens;
+  assert.deepEqual([ouri.computaResumo, ouri.categoriaOrg], [false, "Transferências"]);
+  assert.deepEqual([pj.computaResumo, pj.categoriaOrg], [false, "Transferências"]);
+  assert.equal(cliente.computaResumo, true);
+  // OURIBANK é literal (é banco): sai mesmo sem a lista
+  const semLista = montarPreviewExtratoC6(txt, { catalogo, existentes: [], hashes: [] });
+  assert.equal(semLista.itens[0].computaResumo, false);
+  assert.equal(semLista.itens[1].computaResumo, true);
+});
+
+test("G1 montarPreviewWise: conversões viram itens novo/jaTem pela linha_hash; nunca bloqueia aplicar", async () => {
+  const { montarPreviewWise } = await import("./importar.js");
+  const { hashWise } = await import("./wise.js");
+  const csv = [
+    '"TransferWise ID",Date,"Date Time",Amount,Currency,Description,"Payment Reference","Running Balance","Exchange From","Exchange To","Exchange Rate","Payer Name","Payee Name","Payee Account Number",Merchant,"Card Last Four Digits","Card Holder Full Name",Attachment,Note,"Total fees","Exchange To Amount","Transaction Type","Transaction Details Type"',
+    'BALANCE-1,04-08-2031,"04-08-2031 10:00:00.000",-8000.00,USD,"Converted USD to BRL",,0.00,USD,BRL,5.00000,,,,,,,,,1.00,40000.00,DEBIT,CONVERSION',
+    'BALANCE-2,14-08-2031,"14-08-2031 10:00:00.000",-5000.00,USD,"Converted USD to BRL",,0.00,USD,BRL,5.20000,,,,,,,,,1.00,26000.00,DEBIT,CONVERSION',
+  ].join("\n");
+  const p = montarPreviewWise(csv, { hashes: [hashWise("BALANCE-1")] });
+  assert.deepEqual(p.itens.map((i) => i.status), ["jaTem", "novo"]);
+  assert.equal(p.resumo.novos, 1);
+  assert.equal(p.resumo.jaTem, 1);
+  assert.equal(p.checksum.bloqueiaAplicar, false);
+});

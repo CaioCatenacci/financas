@@ -10,10 +10,11 @@ import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js"
 import { parseAprender } from "./teach.js";
 import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
-import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
+import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, montarPreviewWise, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
+import { alocarSalario, mesesAte } from "./salario.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 
@@ -323,14 +324,55 @@ export async function handleApi(request, env, url, dbOpt = null) {
       ate = url.searchParams.get("ate") || "2999-12-31";
       ateExcl = null; mesRef = (ate || "").slice(0, 7) || new Date().toISOString().slice(0, 7);
     }
+    const kpis = await db.resumoKPIs(de, ate);
+    // G1: o salário do mês vem de alocarSalario (FIFO das conversões), não de lançamento; entra
+    // em kpis.receita (string em reais, como sempre foi) somado às outras receitas que contam.
+    // Soma de dois inteiros em centavos — nada de float acumulado.
+    let salario = null;
+    if (mes === mesRef && ateExcl) {
+      const [params, conversoes] = await Promise.all([db.salarioParams(), db.conversoes()]);
+      salario = alocarSalario(conversoes, params, [mesRef])[0];
+      const receitaCents = Math.round(parseFloat(kpis.receita || 0) * 100) + (salario.brl_cents || 0);
+      kpis.receita = (receitaCents / 100).toFixed(2);
+    }
     return j({
-      kpis: await db.resumoKPIs(de, ate),
+      kpis,
+      salario,
       porCategoria: await db.resumoPorCategoria(de, ate),
       porPessoa: await db.resumoPorPessoa(de, ate),
       porPessoaCategoria: await db.resumoPorPessoaCategoria(de, ate),
       mesVsAnterior: await db.resumoMesVsAnterior(mesRef),
       diario: ateExcl ? await db.resumoDiario(de, ateExcl) : [],
     });
+  }
+
+  // ---- G1: saldo do mês — salário por competência ----
+  // 12 meses terminando em `ate` (padrão: mês corrente). Receita = salário alocado + outras
+  // receitas que contam; despesa = o que conta. Somas em SQL (db.saldoPorMes, conta_no_resumo);
+  // a alocação é JS puro (worker/salario.js). `estimado` vem do salário do mês.
+  if (url.pathname === "/api/saldo-mensal" && request.method === "GET") {
+    let ate = url.searchParams.get("ate");
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) ate = new Date().toISOString().slice(0, 7);
+    const meses = mesesAte(ate, 12);
+    const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+    const [params, conversoes, somas] = await Promise.all([db.salarioParams(), db.conversoes(), db.saldoPorMes(de, ateExcl)]);
+    const porMes = {};
+    for (const s of somas) porMes[s.mes] = s;
+    const salarios = alocarSalario(conversoes, params, meses);
+    return j(meses.map((mes, i) => {
+      const s = porMes[mes] || { receita_cents: 0, despesa_cents: 0 };
+      const receita_cents = s.receita_cents + (salarios[i].brl_cents || 0);
+      return { mes, receita_cents, despesa_cents: s.despesa_cents, saldo_cents: receita_cents - s.despesa_cents, estimado: salarios[i].estimado };
+    }));
+  }
+
+  if (url.pathname === "/api/salario" && request.method === "GET") return j(await db.salarioParams());
+  if (url.pathname === "/api/salario" && request.method === "PUT") {
+    const b = await body();
+    if (!/^\d{4}-(0[1-9]|1[0-2])(-\d{2})?$/.test(b.vigente_desde || "")) return erroJson("vigente_desde inválido (use YYYY-MM)", 400);
+    if (!Number.isInteger(b.usd_cents) || b.usd_cents < 0) return erroJson("usd_cents inválido (inteiro, centavos de dólar)", 400);
+    await db.setSalarioParam(primeiroDiaDoMes(b.vigente_desde), b.usd_cents);
+    return j({ ok: true });
   }
 
   // ---- Inc 4: planejamento (metas) ----
@@ -440,6 +482,13 @@ export async function handleApi(request, env, url, dbOpt = null) {
    try {
     const b = await body();
     if (!b.texto || !b.texto.trim()) return erroJson("Não foi possível extrair texto do PDF (arquivo vazio ou ilegível).", 400);
+    if (b.tipo === "wise") {
+      // G1: CSV da conta em USD da Wise → conversões (não transações). Dedup por linha_hash:
+      // primeiro parse só pra saber as chaves; segundo já com o que o banco tem.
+      const parcial = montarPreviewWise(b.texto, { hashes: [] });
+      const hashes = await db.conversoesHashes(parcial.itens.map((i) => i.linhaHash));
+      return j(montarPreviewWise(b.texto, { hashes }));
+    }
     const catalogo = await db.catalogo();
     const associacoes = await db.associacoesPorNome();
 
@@ -457,7 +506,9 @@ export async function handleApi(request, env, url, dbOpt = null) {
       const deJanela = deslocaDias(de, -3), ateJanela = deslocaDias(ate, 3);
       const existentes = await db.transacoesNaJanela(deJanela, ateJanela);
       const hashes = await db.hashesNaJanela(deJanela, ateJanela);
-      return j(montarPreviewExtrato(b.texto, b.conta, { catalogo, associacoes, existentes, hashes }));
+      // G1: a lista CONTAS_PROPRIAS também no Itaú — 'PIX TRANSF <prefixo de nome>' é a chegada da Wise
+      const contasProprias = lerContasProprias(env.CONTAS_PROPRIAS);
+      return j(montarPreviewExtrato(b.texto, b.conta, { catalogo, associacoes, existentes, hashes, contasProprias }));
     }
 
     if (b.tipo === "c6") {
@@ -499,6 +550,13 @@ export async function handleApi(request, env, url, dbOpt = null) {
   if (url.pathname === "/api/importar/aplicar" && request.method === "POST") {
    try {
     const b = await body();
+    if (b.tipo === "wise") {
+      // G1: grava as conversões novas (origem 'wise'); on conflict (linha_hash) do nothing no db
+      const lista = (b.conversoes || []).map((c) => ({
+        data: c.data, usd_cents: c.usd_cents, brl_cents: c.brl_cents, origem: "wise", linhaHash: c.linhaHash,
+      }));
+      return j(await db.inserirConversoes(lista));
+    }
     // F2: confere a prévia contra o banco ANTES de gravar (fora da sql.transaction do aplicar).
     // A janela entre esta leitura e a gravação é aceita: app de um usuário só.
     const casados = (b.decisao && b.decisao.casados) || [];

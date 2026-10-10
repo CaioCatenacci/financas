@@ -901,3 +901,27 @@ test("C1: erro do pdf.js que não é de senha sobe como está (não vira pedido 
   await assert.rejects(() => abrirPdf(lib, new Uint8Array([1]), { pedirSenha: async () => { pediu = true; return "x"; } }), /corrompido/);
   assert.equal(pediu, false);
 });
+
+// ---- G1: saldo do mês (salário por competência) e Wise na aba Importar ----
+import { leituraDoTipo, montarSaldoMes } from "../public/app.js";
+
+test("G1: a aba Importar oferece 'Wise (CSV da conta em USD)', lido como texto (sem pdf.js), e manda só {tipo, texto}", () => {
+  const w = TIPOS_IMPORT.find((t) => t.valor === "wise");
+  assert.equal(w.rotulo, "Wise (CSV da conta em USD)");
+  assert.equal(leituraDoTipo("wise"), "csv");
+  assert.equal(leituraDoTipo("extrato"), "pdf");
+  assert.equal(leituraDoTipo("c6"), "pdf");
+  assert.equal(leituraDoTipo("fatura"), "pdf");
+  assert.deepEqual(corpoPreview("wise", "id,x\n1,2", { conta: "itau" }), { tipo: "wise", texto: "id,x\n1,2" });
+});
+
+test("G1 montarSaldoMes: Exemplo do card — receita 40.600 (salário já somado em kpis.receita), despesa 38.000 → saldo +2.600 em centavos", () => {
+  const s = montarSaldoMes({ receita: "40600.00", despesa: "38000.00" }, { brl_cents: 4060000, estimado: false });
+  assert.deepEqual(s, { receita_cents: 4060000, despesa_cents: 3800000, saldo_cents: 260000, estimado: false });
+});
+
+test("G1 montarSaldoMes: o selo 'estimado' segue salario.estimado; sem salário (antes do parâmetro) não há selo", () => {
+  assert.equal(montarSaldoMes({ receita: "41600.00", despesa: "0.00" }, { brl_cents: 4160000, estimado: true }).estimado, true);
+  assert.equal(montarSaldoMes({ receita: "100.00", despesa: "0.00" }, null).estimado, false);
+  assert.equal(montarSaldoMes({}, { estimado: false }).saldo_cents, 0);
+});

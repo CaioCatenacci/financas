@@ -95,3 +95,23 @@ create table metas_excecao (
   criado_em    timestamptz not null default now(),
   primary key (categoria_id, mes)
 );
+
+-- G1: salário por competência. baseline com vigência: "a partir de vigente_desde, o salário
+-- mensal é usd_cents dólares" (mês anterior ao primeiro parâmetro não tem salário em dólar).
+create table salario_param (
+  vigente_desde date   not null primary key,   -- sempre dia 01 do mês
+  usd_cents     bigint not null check (usd_cents >= 0)
+);
+
+-- cada conversão USD → BRL (CSV da Wise ou carga única da Nomad); a alocação FIFO aos meses
+-- roda em worker/salario.js. linha_hash = sha256 do id da origem: reimportar não duplica.
+create table conversoes (
+  id         uuid   primary key default gen_random_uuid(),
+  data       date   not null,
+  usd_cents  bigint not null check (usd_cents > 0),
+  brl_cents  bigint not null check (brl_cents >= 0),
+  origem     text   not null check (origem in ('wise','nomad')),
+  linha_hash text   not null unique,
+  criado_em  timestamptz not null default now()
+);
+create index idx_conversoes_data on conversoes (data);
