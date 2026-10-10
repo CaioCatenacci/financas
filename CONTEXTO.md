@@ -532,6 +532,49 @@ repasse entre contas próprias sai do resumo **nas duas pontas**. A Wise não é
   de um repasse, dentro de ±3 dias, fica ambígua (ou é marcada, se for a única); e uma saída futura
   do Itaú `PIX TRANSF <Caio>` passaria a contar como despesa (hoje não há nenhuma).
 
+## 18. Saldo do mês: salário por competência, investimento fora do resumo (G1, 10/10/2026)
+
+Objetivo 1 do projeto: saber se o que entra cobre o que sai. O "saldo do mês" mentia por dois
+motivos: aplicação e resgate contavam como despesa e receita, e a receita chegava em blocos (a Wise
+converte dólar quando o Caio pede — um mês com o salário de três, o seguinte com quase nada).
+
+- **Receita do mês = salário em dólar convertido ao câmbio real** (opção B), não a chegada da Wise.
+  O salário é fixo em USD e varia só pelo câmbio. `salario_param(vigente_desde, usd_cents)` é
+  baseline com vigência (mesmo modelo de `metas`); `conversoes(data, usd_cents, brl_cents, origem
+  ∈ {wise, nomad}, linha_hash)` guarda cada conversão. Migração `0011`, **sem semente**: parâmetro
+  e carga histórica da Nomad entram por arquivo local em `dados/` (`tools/db.py aplicar`) — nenhum
+  valor real no repositório.
+- **Alocação FIFO** (`alocarSalario`, `worker/salario.js`, puro): cada dólar convertido paga o mês
+  mais antigo ainda não pago, a `usd_cents` do parâmetro vigente; conversão que cobre dois meses
+  divide os reais na proporção dos dólares (a última fatia leva a sobra: as partes fecham com o
+  total); mês parcial ou sem conversão → `estimado: true`, valendo o que falta × a última taxa
+  conhecida (da conversão mais recente); mês anterior ao primeiro parâmetro → salário nulo,
+  `estimado: false`. **O FIFO começa no mês da primeira conversão** (nunca antes do primeiro
+  parâmetro): é o que o Exemplo do card pede (salário desde janeiro, conversões só em agosto,
+  agosto é o primeiro mês pago) e o que o período Nomad precisa (maio e junho de 2025 estimados,
+  sem extrato que os pague). Meses entre o parâmetro e a primeira conversão vêm estimados.
+- **Wise entra como fonte do salário, não como extrato de gastos** (substitui o "não importar" do
+  C7): tipo `wise` na aba Importar lê o CSV da conta em **USD** como texto no navegador (sem
+  pdf.js); `parseWiseCsv` (`worker/wise.js`, puro) pega só `CONVERSION` USD→BRL (`usd_cents` =
+  |Amount|, `brl_cents` = Exchange To Amount, taxa = Exchange Rate), `linha_hash` = sha256 do
+  TransferWise ID — reimportar não duplica (unique). Os valores vêm no formato americano, por isso
+  o parser **não** usa `parseBRtoCents`. Nomad: carga única, sem importador.
+- **API:** `GET/PUT /api/salario`; `/api/resumo?mes=` devolve `salario {brl_cents, usd_cents, taxa,
+  estimado}` e `kpis.receita` (string em reais, como sempre) = salário do mês + outras receitas que
+  contam; `GET /api/saldo-mensal?ate=` = 12 meses de `{mes, receita_cents, despesa_cents,
+  saldo_cents, estimado}` (somas em SQL por `conta_no_resumo`, `db.saldoPorMes`). Resumo ganhou o
+  card "Saldo do mês" (selo "estimado") e as barras dos 12 meses; o resto não mudou.
+- **Fora do resumo por regra:** a chegada da Wise/Nomad é transferência (ver nota no §17), e
+  `APLICACAO`/`RESGATE`/`AG. RESGATE`/`INT RESGATE` viram não-gasto, categoria Investimentos
+  (`worker/classificar.js`). Migração de dados `0012` (critério no arquivo, sem nome): aplicação e
+  resgate de extrato, `Pix recebido de OURIBANK`, a TED da Caixa de 08/12/2025 (herança; as duas
+  TEDs viram Receita › Outros, a de 29/08/2025 — restituição/FGTS — continua contando), as 7 linhas
+  de Salário da planilha de abr–out/2025 e os 2 lançamentos manuais de salário de set/2026. As
+  linhas com nome próprio saem pelo arquivo local de `dados/`.
+- **Salário não se lança à mão** (Telegram): a receita de salário vem de `alocarSalario`. Um
+  lançamento manual de salário contaria em dobro; os importadores Python seguem no modelo antigo
+  (BACKLOG C6). A receita da Paola e as outras receitas (reembolso, restituição) seguem como estão.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
