@@ -172,7 +172,19 @@ function previewDeLinhas(linhas, saldos, conta, { existentes = [], hashes = [], 
     else if (status === "naoGasto") resumo.naoGasto++;
   }
 
-  return { checksum, itens, resumo };
+  return { checksum, itens, resumo, cobertura: coberturaDosSaldos(saldos) };
+}
+
+// G2: o período que o PDF cobre = do primeiro ao último "Saldo do dia", inclusive o saldo da data
+// de emissão (posterior ao último lançamento, que o conferirChecksum descarta). É o que vai para
+// `importacoes` no aplicar. Sem saldo nenhum → null: melhor não gravar do que inventar período.
+function coberturaDosSaldos(saldos) {
+  return periodoDeDatas((saldos || []).map((s) => s.data));
+}
+
+function periodoDeDatas(datas) {
+  const ds = datas.filter(Boolean).map((d) => String(d).slice(0, 10)).sort();
+  return ds.length ? { de: ds[0], ate: ds[ds.length - 1] } : null;
 }
 
 /**
@@ -269,7 +281,10 @@ export function montarPreviewWise(texto, { hashes = [] } = {}) {
   const itens = conversoes.map((c) => ({ ...c, status: hashesSet.has(c.linhaHash) ? "jaTem" : "novo" }));
   const resumo = { ...resumoVazio(), ignoradas };
   for (const i of itens) { if (i.status === "novo") resumo.novos++; else resumo.jaTem++; }
-  return { checksum: { ok: true, diferencaCents: 0, bloqueiaAplicar: false }, itens, resumo, avisos: erros };
+  // G2: cobertura = primeira e última conversão do CSV, inclusive as já importadas (o arquivo
+  // cobre o período todo, mesmo que só parte seja nova)
+  const cobertura = periodoDeDatas(conversoes.map((c) => c.data));
+  return { checksum: { ok: true, diferencaCents: 0, bloqueiaAplicar: false }, itens, resumo, avisos: erros, cobertura };
 }
 
 /**
