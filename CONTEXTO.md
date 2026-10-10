@@ -508,12 +508,19 @@ repasse entre contas próprias sai do resumo **nas duas pontas**. A Wise não é
   do token, `no-store`; sem secret → `null`). O pdf.js abre no navegador (`abrirPdf`,
   `public/pdf_extrair.js`); se faltar ou não abrir, o app pede num campo, sem guardar.
 - **Regra fixa no Itaú:** o nome do Caio saiu de `_NAO_GASTO` em `worker/classificar.js` — no Itaú
-  o `PIX TRANSF <Caio>…` é a chegada da Wise (nome cortado) e **conta como receita por padrão**. A
-  Paola fica no padrão fixo. Os importadores Python seguem com o padrão antigo (BACKLOG C6).
+  o `PIX TRANSF <Caio>…` é a chegada da Wise (nome cortado). A Paola fica no padrão fixo. Os
+  importadores Python seguem com o padrão antigo (BACKLOG C6). **Nota (G1, 10/10/2026):** a regra
+  "conta como receita por padrão" caiu — a chegada da Wise/Nomad é transferência entre contas
+  próprias (`computa_resumo=false`, Transferências) e a receita do mês passa a ser o salário alocado
+  (§18). O nome segue fora do código: `PIX TRANSF <prefixo de um nome em CONTAS_PROPRIAS>` no Itaú
+  (prefixo, porque o Itaú corta o nome), `Pix recebido de <nome da lista>` e `Pix recebido de
+  OURIBANK` (literal: é banco) no C6 — `ehChegadaPropriaItau`/`ehChegadaPropriaC6` em
+  `worker/importar.js`.
 - **Contas próprias:** nomes no secret `CONTAS_PROPRIAS` (separados por vírgula, `;` ou linha),
-  nunca no código (repositório público). Só o lado do C6 usa a lista: "Pix enviado para <nome da
-  lista>" é repasse e entra com `computa_resumo=false`. Sem o secret, nada é repasse e o preview
-  avisa (`avisos`).
+  nunca no código (repositório público). No C6, "Pix enviado para <nome da lista>" é repasse e
+  entra com `computa_resumo=false`; desde o G1 os dois extratos recebem a lista (`contasProprias`
+  em `montarPreviewExtrato` e `montarPreviewExtratoC6`) pra reconhecer também a chegada. Sem o
+  secret, nada é repasse nem chegada, e o preview avisa (`avisos`).
 - **Duas pontas:** `db.marcarRepassesEntreContas(de, ate)` roda depois de aplicar qualquer extrato
   (Itaú ou C6), na janela importada ±3 dias — serve às duas ordens. **Por que pelo formato da
   descrição e não por coluna de conta:** "Pix enviado para …" só existe no C6 e "PIX TRANSF …" só

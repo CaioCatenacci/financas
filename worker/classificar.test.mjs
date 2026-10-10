@@ -44,3 +44,14 @@ test("classificar gasto usa associação por normalizarNome(descritor)", () => {
 test("gasto sem associação → categoria null", () => {
   assert.equal(classificar("PIX QRS DESCONHECIDO01/01", {}).categoriaNome, null);
 });
+
+// G1: aplicação e resgate são movimento de investimento, não gasto nem receita — saem do resumo
+// com categoria Investimentos. Uma linha inventada de cada forma que o Itaú escreve.
+test("G1: RESGATE, AG. RESGATE e INT RESGATE são não-gasto (Investimentos), como APLICACAO", () => {
+  // sem CDB/PERSONDIF na linha, de propósito: esses já casavam antes; o que se prova é o RESGATE
+  assert.equal(reconhecerNaoGasto("RESGATE AUTOMATICO 12/03"), "Investimentos");
+  assert.equal(reconhecerNaoGasto("AG. RESGATE FUNDO X 12/03"), "Investimentos");
+  assert.equal(reconhecerNaoGasto("INT RESGATE FUNDO X 12/03"), "Investimentos");
+  assert.equal(reconhecerNaoGasto("APLICACAO FUNDO X 12/03"), "Investimentos");
+  assert.equal(classificar("INT RESGATE FUNDO X 12/03", {}).computaResumo, false);
+});
