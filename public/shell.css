@@ -196,3 +196,10 @@ svg{display:block;overflow:visible}
 .impcount{font-size:11px;font-weight:600;color:var(--mut);background:var(--sunk);border-radius:999px;padding:1px 8px}
 
 @media (max-width:860px){.kpis{grid-template-columns:repeat(2,1fr)}.two{grid-template-columns:1fr}}
+
+/* G1: card "Saldo do mês" */
+.saldolinha{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line)}
+.saldolinha .lbl{font-size:12px;color:var(--mut);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+.saldolinha .val{font-family:var(--mono);font-weight:600;font-size:18px}
+.saldototal{border-bottom:0}
+.saldototal .val{font-size:24px}
