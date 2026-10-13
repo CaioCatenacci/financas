@@ -36,6 +36,12 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 
 ## Ideias ainda sem card
 
+- **P2 · `/patrimonio`: data e pessoa do print.** No smoke de 13/10/2026 o print do C6 Invest
+  ("Atualizado em 07/10/26") foi gravado com o ano 2024 — o modelo leu o ano de 2 dígitos errado
+  (corrigido à mão). Regra proposta: data lida que fique a mais de 60 dias da data da mensagem é
+  descartada e vale a da mensagem. E prints sem nome (os do Itaú) não trazem a pessoa: só entram
+  com `/patrimonio caio itau` na legenda; avaliar se a conta implica a pessoa por padrão
+  (ex.: itau → Caio) para não depender da legenda. Origem: smoke do A2 (13/10/2026).
 - **P2 · Classificar o passado pendente com o JEV.** Usar o JEV (TypeSafe, modelo de decisão que
   devolve a probabilidade do "sim" sem gerar texto, a US$ 0,042 por milhão de tokens) para sugerir
   a categoria das ~1.260 transações em "Não Identificado", quase todas de faturas e extratos de
