@@ -5,9 +5,14 @@ import { normalizarNome } from "./contraparte.js";
 
 // Padrões de NÃO-GASTO (conservador; editável). Ordem importa.
 const _NAO_GASTO = [
+  // A2: "PERS BLACK" no extrato do Itaú é o pagamento da fatura do cartão, não aplicação. Vai para
+  // Banco — a categoria que o Caio escolheu à mão nas linhas de 2026 (a "Fatura de cartão" da regra
+  // lá embaixo não existe no catálogo). Vem antes de Investimentos e saiu da regex de lá: senão
+  // viraria aporte no rendimento do patrimônio. Não-gasto: o gasto já entrou pela fatura.
+  { rx: /PERS BLACK/i, cat: "Banco" },
   // G1: aplicação E resgate (RESGATE, AG. RESGATE, INT RESGATE) são movimento de investimento —
   // nem gasto nem receita. Antes só a aplicação saía e o resgate entrava como receita.
-  { rx: /\bAPLICACAO\b|RESGATE|PERSONDIF|COR COMP CDB|\bCDB\b|PERS BLACK/i, cat: "Investimentos" },
+  { rx: /\bAPLICACAO\b|RESGATE|PERSONDIF|COR COMP CDB|\bCDB\b/i, cat: "Investimentos" },
   // conta própria da Paola. O "PIX TRANSF <Caio>…" não mora aqui: no Itaú é a chegada da Wise, e
   // sai do resumo pela lista CONTAS_PROPRIAS (prefixo do nome), em montarPreviewExtrato (G1) — o
   // nome nunca vai no código. Os importadores Python seguem com o padrão antigo (BACKLOG C6).

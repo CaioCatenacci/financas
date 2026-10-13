@@ -446,6 +446,72 @@ export function criarDb(sql) {
       return rows.map(r => ({ mes: r.mes, n: Number(r.n) }));
     },
 
+    // ---- A2: patrimônio por print ----
+    // um registro por produto lido, tudo numa transação só (o print entra inteiro ou não entra)
+    async inserirPatrimonio(lista) {
+      if (!lista.length) return { gravados: 0 };
+      await sql.transaction(lista.map((p) => sql`
+        insert into patrimonio
+          (data, pessoa_id, conta, produto, familia, nivel, vencimento, taxa, saldo_cents,
+           rendimento_print_cents, periodo_rendimento, documento_id)
+        values
+          (${p.data}, ${p.pessoa_id}, ${p.conta}, ${p.produto}, ${p.familia}, ${p.nivel},
+           ${p.vencimento ?? null}, ${p.taxa ?? null}, ${p.saldo_cents},
+           ${p.rendimento_print_cents ?? null}, ${p.periodo_rendimento ?? null}, ${p.documento_id ?? null})`));
+      return { gravados: lista.length };
+    },
+
+    // saldos somados por (mês, data, conta, pessoa, família, nível) na janela [de, ateExcl), em
+    // centavos inteiros; o rendimento do print só entra o de período 'mes'. Qual soma conta (a
+    // última data da família, título no lugar do agregado) decide worker/patrimonio.js.
+    async patrimonioPorDia(de, ateExcl) {
+      const rows = await sql`
+        select to_char(p.data,'YYYY-MM') as mes, to_char(p.data,'YYYY-MM-DD') as data,
+               p.conta, pe.nome as pessoa, p.familia, p.nivel,
+               sum(p.saldo_cents)::bigint as saldo_cents,
+               (sum(p.rendimento_print_cents) filter (where p.periodo_rendimento = 'mes'))::bigint as rend_mes_cents,
+               count(p.rendimento_print_cents) filter (where p.periodo_rendimento = 'mes') as n_rend_mes
+        from patrimonio p
+        join pessoas pe on pe.id = p.pessoa_id
+        where p.data >= ${de} and p.data < ${ateExcl}
+        group by 1, 2, 3, 4, 5, 6
+        order by 2`;
+      return rows.map((r) => ({
+        mes: r.mes, data: r.data, conta: r.conta, pessoa: r.pessoa, familia: r.familia, nivel: r.nivel,
+        saldo_cents: Number(r.saldo_cents),
+        rend_mes_cents: r.rend_mes_cents == null ? null : Number(r.rend_mes_cents),
+        n_rend_mes: Number(r.n_rend_mes),
+      }));
+    },
+
+    // aportes (saída, despesa) e resgates (entrada, receita) por mês: linhas de extrato na categoria
+    // Investimentos. NÃO filtra por conta_no_resumo de propósito: aplicação e resgate estão fora do
+    // resumo por definição (G1) — isto não é leitura de gasto, é o movimento do investimento. Sem
+    // filtro de conta (não há coluna de conta na transação; hoje todas são do Itaú — Decisões do A2).
+    async aportesInvestimentoPorMes(de, ateExcl) {
+      const rows = await sql`
+        select to_char(t.data,'YYYY-MM') as mes,
+               (round(coalesce(sum(t.valor_total) filter (where t.natureza = 'despesa'), 0)*100))::bigint as aportes_cents,
+               (round(coalesce(sum(t.valor_total) filter (where t.natureza = 'receita'), 0)*100))::bigint as resgates_cents
+        from transacoes t
+        join categorias c on c.id = t.categoria_id
+        where c.nome = 'Investimentos' and t.fonte = 'extrato'
+          and t.data >= ${de} and t.data < ${ateExcl}
+        group by 1
+        order by 1`;
+      return rows.map((r) => ({ mes: r.mes, aportes_cents: Number(r.aportes_cents), resgates_cents: Number(r.resgates_cents) }));
+    },
+
+    // os períodos de cada import de uma fonte (não só o max(ate)): o rendimento calculado exige o
+    // mês inteiro coberto, do dia 01 ao último
+    async periodosImportacao(conta, tipo) {
+      return await sql`
+        select to_char(de,'YYYY-MM-DD') as de, to_char(ate,'YYYY-MM-DD') as ate
+        from importacoes
+        where conta = ${conta} and tipo = ${tipo}
+        order by de`;
+    },
+
     // ---- G3: diagnóstico mensal (texto markdown escrito pelo assistente; o app só guarda) ----
     async diagnosticoDoMes(mes) {
       const rows = await sql`

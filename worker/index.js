@@ -18,6 +18,7 @@ import { alocarSalario, mesesAte } from "./salario.js";
 import { montarFechamento, ultimoDiaDoMes } from "./fechamento.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
+import { parsePatrimonio, dataDaMensagem, caminhoPatrimonio, textoConfirmacao, montarPatrimonio } from "./patrimonio.js";
 
 // vocabulário fechado de associacoes.tipo_chave (o check do schema diz o mesmo)
 const TIPOS_CHAVE = ["pix_cpf", "nome"];
@@ -109,9 +110,14 @@ export async function tratarUpdate(update, env, deps) {
     return;
   }
 
+  // A2: foto com legenda "/patrimonio [pessoa] [conta]" é print de investimentos, não comprovante.
+  // Passa pelo mesmo dedup de documento: o mesmo print duas vezes não grava de novo.
+  const pat = parsePatrimonio(ev.caption);
+
   const hash = await deps.hashBytes(bytes);
   const jaTem = await deps.db.documentoPorHash(hash);
-  if (jaTem) { await deps.responderImpl(ev.chatId, "Esse comprovante eu já registrei antes.", env); return; }
+  if (jaTem) { await deps.responderImpl(ev.chatId, pat ? "Esse print eu já registrei antes." : "Esse comprovante eu já registrei antes.", env); return; }
+  if (pat) { await tratarPatrimonio(ev, env, deps, { bytes, mime, hash, legenda: pat }); return; }
 
   const ex = await deps.extrairImpl(bytes, mime, catalogoParaLista(catalogo));
   if (!ex.ok) { console.error("extração falhou:", (ex.erros || []).join(" | ")); await deps.responderImpl(ev.chatId, "Não consegui ler esse comprovante. Pode reenviar mais nítido?", env); return; }
@@ -148,6 +154,38 @@ export async function tratarUpdate(update, env, deps) {
   await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat}${selo} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id);
 }
 
+// A2: lê o print (modo patrimonio), completa conta/pessoa/data, sobe pro Dropbox e grava um
+// registro por produto. A legenda vence o que o modelo leu; sem data no print, vale a da mensagem.
+async function tratarPatrimonio(ev, env, deps, { bytes, mime, hash, legenda }) {
+  const ex = await deps.extrairImpl(bytes, mime, null, "patrimonio");
+  if (!ex.ok) {
+    console.error("extração de patrimônio falhou:", (ex.erros || []).join(" | "));
+    await deps.responderImpl(ev.chatId, "Não consegui ler esse print de patrimônio. Pode reenviar mais nítido?", env);
+    return;
+  }
+  const n = ex.normalizado;
+  const conta = legenda.conta ?? n.conta;
+  const nomePessoa = legenda.pessoa ?? n.pessoa;
+  if (!conta || !nomePessoa) {
+    const falta = [!conta && "a conta", !nomePessoa && "a pessoa"].filter(Boolean).join(" e ");
+    await deps.responderImpl(ev.chatId, `Não reconheci ${falta} no print. Reenvie com a legenda: /patrimonio <pessoa> <itau|c6|nubank|mercadopago>`, env);
+    return;
+  }
+  const pessoa = await deps.db.pessoaPorNome(nomePessoa);
+  if (!pessoa) { await deps.responderImpl(ev.chatId, `Pessoa "${nomePessoa}" não existe. Reenvie com a legenda: /patrimonio <pessoa> <conta>`, env); return; }
+
+  const dataISO = n.dataISO ?? dataDaMensagem(ev.date);
+  const ext = ev.tipo === "pdf" ? "pdf" : (mime === "image/png" ? "png" : "jpg");
+  const caminho = caminhoPatrimonio({ dataISO, conta, pessoa: pessoa.nome, ext });
+  const dropboxPath = await deps.subir(env, caminho, bytes);
+  const doc = await deps.db.inserirDocumento({
+    dropbox_path: dropboxPath, nome_arquivo: caminho.split("/").pop(),
+    tipo_arquivo: mime, hash, telegram_file_id: ev.fileId,
+  });
+  await deps.db.inserirPatrimonio(n.produtos.map((p) => ({ ...p, data: dataISO, conta, pessoa_id: pessoa.id, documento_id: doc.id })));
+  await deps.responderImpl(ev.chatId, textoConfirmacao({ conta, pessoa: pessoa.nome, dataISO, produtos: n.produtos }), env);
+}
+
 // depsOpt: injeção p/ teste (mesmo padrão do dbOpt em handleApi).
 export async function handleTelegram(request, env, depsOpt = null) {
   if (!segredoTelegramValido(request, env.TELEGRAM_SECRET)) return new Response("no", { status: 401 });
@@ -174,11 +212,11 @@ function montarDepsTelegram(env) {
     db,
     baixar: (fileId) => downloadArquivo(env.TELEGRAM_TOKEN, fileId),
     hashBytes: sha256hex,
-    extrairImpl: (bytes, mime, categorias) => extrair(bytes, mime, categorias, {
+    extrairImpl: (bytes, mime, categorias, modo = "comprovante") => extrair(bytes, mime, categorias, {
       limiar: 0.6,
-      callGemini: (b, mm, c) => callGeminiHTTP(b, mm, c, env.GEMINI_KEY),
-      callClaude: (b, mm, c) => callClaudeHTTP(b, mm, c, env.CLAUDE_KEY),
-    }),
+      callGemini: (b, mm, c, md) => callGeminiHTTP(b, mm, c, env.GEMINI_KEY, md),
+      callClaude: (b, mm, c, md) => callClaudeHTTP(b, mm, c, env.CLAUDE_KEY, md),
+    }, modo),
     subir: (e, caminho, bytes) => subirDropbox(e, caminho, bytes),
     confirmar: (chat, texto, id) => enviarConfirmacao(env.TELEGRAM_TOKEN, chat, texto, id),
     responderImpl: (chat, texto) => responder(env.TELEGRAM_TOKEN, chat, texto),
@@ -408,6 +446,21 @@ export async function handleApi(request, env, url, dbOpt = null) {
     const salarios = alocarSalario(conversoes, params, meses);
     const mesCorrente = new Date().toISOString().slice(0, 7);
     return j({ ate, mes_corrente: mesCorrente, meses: montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao }) });
+  }
+
+  // ---- A2: patrimônio por print ----
+  // 12 meses terminando em `ate`, mais o mês anterior ao primeiro (o rendimento do 1º mês precisa
+  // da foto dele). Somas em SQL (db.patrimonioPorDia, db.aportesInvestimentoPorMes); a regra de
+  // quais somas contam (foto do mês, título × agregado, rendimento) é pura (worker/patrimonio.js).
+  if (url.pathname === "/api/patrimonio" && request.method === "GET") {
+    const ate = url.searchParams.get("ate");
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
+    const meses = mesesAte(ate, 12);
+    const de = primeiroDiaDoMes(mesAnterior(meses[0])), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+    const [linhas, aportes, periodosItau] = await Promise.all([
+      db.patrimonioPorDia(de, ateExcl), db.aportesInvestimentoPorMes(de, ateExcl), db.periodosImportacao("itau", "extrato"),
+    ]);
+    return j({ ate, ...montarPatrimonio(meses, { linhas, aportes, periodosItau }) });
   }
 
   if (url.pathname === "/api/salario" && request.method === "GET") return j(await db.salarioParams());

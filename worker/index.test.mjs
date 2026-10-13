@@ -1498,3 +1498,151 @@ test("G3 /api/diagnostico sem token → 401, sem ler nem gravar", async () => {
   assert.deepEqual(db.estado.lidos, []);
   assert.deepEqual(db.estado.gravados, []);
 });
+
+// ---------- A2: patrimônio por print ----------
+// Tudo inventado: valores, nomes de produto. Deps injetados como na captura de comprovante.
+function depsPatrimonio({ leitura, jaTem = null, pessoas = { caio: { id: "pCaio", nome: "Caio" }, paola: { id: "pPaola", nome: "Paola" } } } = {}) {
+  const estado = { hashes: [], extracoes: [], subidos: [], docs: [], patrimonio: [], respostas: [], transacoes: [] };
+  const db = {
+    catalogo: async () => ({ categorias: [{ id: "cNI", nome: "Não Identificado", natureza: "despesa", padrao: true }], subcategorias: [] }),
+    documentoPorHash: async (h) => { estado.hashes.push(h); return jaTem; },
+    pessoaPorNome: async (nome) => pessoas[String(nome).toLowerCase()] || null,
+    inserirDocumento: async (d) => { estado.docs.push(d); return { id: "doc1" }; },
+    inserirPatrimonio: async (lista) => { estado.patrimonio.push(...lista); return { gravados: lista.length }; },
+    inserirTransacao: async (t) => { estado.transacoes.push(t); return { id: "tx1" }; },
+  };
+  return {
+    estado,
+    deps: {
+      db,
+      baixar: async () => ({ bytes: new Uint8Array([9, 9]), mime: "image/jpeg" }),
+      hashBytes: async () => "hP",
+      extrairImpl: async (b, m, c, modo) => { estado.extracoes.push(modo); return leitura; },
+      subir: async (env, caminho) => { estado.subidos.push(caminho); return caminho; },
+      confirmar: async () => { throw new Error("patrimônio não usa o botão de apagar transação"); },
+      responderImpl: async (chat, texto) => estado.respostas.push(texto),
+    },
+  };
+}
+const leituraItau = (mud = {}) => ({ ok: true, extraido_por: "gemini", confianca: 0.9, normalizado: {
+  dataISO: "2026-10-09", conta: "itau", pessoa: "Caio",
+  produtos: [
+    { produto: "Fundos", familia: "fundos", nivel: "agregado", saldo_cents: 50000000, vencimento: null, taxa: null, rendimento_print_cents: 5000000, periodo_rendimento: "ano" },
+    { produto: "CDB, Renda Fixa", familia: "renda_fixa", nivel: "agregado", saldo_cents: 25000000, vencimento: null, taxa: null, rendimento_print_cents: null, periodo_rendimento: null },
+    { produto: "Cofrinhos", familia: "caixa", nivel: "agregado", saldo_cents: 2000000, vencimento: null, taxa: null, rendimento_print_cents: null, periodo_rendimento: null },
+  ], ...mud } });
+const fotoPat = (caption) => ({ message: { chat: { id: 7 }, message_id: 1, date: Date.UTC(2026, 9, 11, 15) / 1000, caption, photo: [{ file_id: "fP", width: 800 }] } });
+
+test("A2: foto com /patrimonio passa pelo dedup (documentoPorHash) e extrai no modo patrimonio", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau() });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.deepEqual(estado.hashes, ["hP"]);
+  assert.deepEqual(estado.extracoes, ["patrimonio"]);
+  assert.equal(estado.patrimonio.length, 3);
+  assert.equal(estado.transacoes.length, 0); // não vira transação
+  const p = estado.patrimonio[0];
+  assert.equal(p.conta, "itau");
+  assert.equal(p.pessoa_id, "pCaio");
+  assert.equal(p.data, "2026-10-09");
+  assert.equal(p.documento_id, "doc1");
+  assert.equal(estado.docs[0].hash, "hP");
+});
+
+test("A2: print repetido (hash conhecido) recebe a resposta de duplicado e não grava nem extrai", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau(), jaTem: { id: "docVelho" } });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.deepEqual(estado.extracoes, []);
+  assert.equal(estado.patrimonio.length, 0);
+  assert.equal(estado.subidos.length, 0);
+  assert.ok(estado.respostas.some((t) => /já registrei/i.test(t)));
+});
+
+test("A2: conta e pessoa vêm do que o modelo leu; a confirmação traz o total e o número de produtos", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau() });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.deepEqual(estado.subidos, ["/Finanças/Patrimônio/2026/2026-10-09_itau_caio.jpg"]);
+  const r = estado.respostas.at(-1);
+  assert.match(r, /770\.000,00/); // 500k + 250k + 20k
+  assert.match(r, /3 produtos/);
+  assert.match(r, /itau/);
+  assert.match(r, /Caio/);
+});
+
+test("A2: a legenda /patrimonio paola c6 vence o que o modelo leu", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau() });
+  await tratarUpdate(fotoPat("/patrimonio paola c6"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.ok(estado.patrimonio.every((p) => p.conta === "c6" && p.pessoa_id === "pPaola"));
+  assert.deepEqual(estado.subidos, ["/Finanças/Patrimônio/2026/2026-10-09_c6_paola.jpg"]);
+});
+
+test("A2: sem data no print, vale a data da mensagem", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ dataISO: null }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(estado.patrimonio[0].data, "2026-10-11");
+  assert.deepEqual(estado.subidos, ["/Finanças/Patrimônio/2026/2026-10-11_itau_caio.jpg"]);
+});
+
+test("A2: sem conta nem na leitura nem na legenda, pede a legenda e não grava", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ conta: null }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(estado.patrimonio.length, 0);
+  assert.equal(estado.subidos.length, 0);
+  assert.match(estado.respostas.at(-1), /\/patrimonio <pessoa>/);
+});
+
+test("A2: leitura inválida do modelo responde sem gravar", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: { ok: false, erros: ["gemini: família inválida"] } });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(estado.patrimonio.length, 0);
+  assert.match(estado.respostas.at(-1), /Não consegui ler/);
+});
+
+test("A2: foto sem a legenda segue o fluxo do comprovante (modo padrão)", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: { ok: true, extraido_por: "gemini", confianca: 0.9,
+    normalizado: { dataISO: "2026-10-09", valorCents: 1000, natureza: "despesa", macro: null, sub: null, descricao: "x" } } });
+  deps.db.buscarAssociacao = async () => null;
+  deps.confirmar = async () => {};
+  await tratarUpdate(fotoPat(undefined), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.deepEqual(estado.extracoes, [undefined]);
+  assert.equal(estado.transacoes.length, 1);
+  assert.equal(estado.patrimonio.length, 0);
+});
+
+function dbPatrimonioFake() {
+  const estado = {};
+  return {
+    estado,
+    patrimonioPorDia: async (de, ateExcl) => { estado.janela = { de, ateExcl }; return [
+      { mes: "2026-10", data: "2026-10-09", conta: "itau", pessoa: "Caio", familia: "fundos", nivel: "agregado", saldo_cents: 77000000, rend_mes_cents: null, n_rend_mes: 0 },
+      { mes: "2026-10", data: "2026-10-09", conta: "c6", pessoa: "Paola", familia: "renda_fixa", nivel: "agregado", saldo_cents: 20000000, rend_mes_cents: null, n_rend_mes: 0 },
+    ]; },
+    aportesInvestimentoPorMes: async (de, ateExcl) => { estado.aportes = { de, ateExcl }; return []; },
+    periodosImportacao: async (conta, tipo) => { estado.periodos = { conta, tipo }; return [{ de: "2025-07-01", ate: "2026-09-02" }]; },
+  };
+}
+
+test("A2 GET /api/patrimonio?ate= devolve 12 meses com a foto por conta, total por pessoa e da família, e o rendimento com a origem", async () => {
+  const db = dbPatrimonioFake();
+  const req = reqApi("/api/patrimonio?ate=2026-10", "GET");
+  const data = await (await handleApi(req, envApi, new URL(req.url), db)).json();
+  assert.equal(data.meses.length, 12);
+  assert.equal(data.meses[0].mes, "2025-11");
+  assert.equal(data.meses[11].mes, "2026-10");
+  // a janela começa um mês antes: o rendimento do 1º mês precisa da foto do anterior
+  assert.deepEqual(db.estado.janela, { de: "2025-10-01", ateExcl: "2026-11-01" });
+  assert.deepEqual(db.estado.periodos, { conta: "itau", tipo: "extrato" });
+  const out = data.meses[11];
+  assert.equal(out.total_cents, 97000000);
+  assert.deepEqual(out.porPessoa.map((p) => [p.pessoa, p.total_cents]).sort(), [["Caio", 77000000], ["Paola", 20000000]]);
+  const itau = out.porConta.find((c) => c.conta === "itau");
+  assert.equal(itau.rendimento_cents, null);
+  assert.equal(itau.origem, "sem");
+  assert.equal(itau.motivo, "extrato pendente");
+});
+
+test("A2 GET /api/patrimonio com ate inválido ou ausente → 400, sem ler o banco", async () => {
+  for (const q of ["", "?ate=2026-13", "?ate=x"]) {
+    const req = reqApi(`/api/patrimonio${q}`, "GET");
+    assert.equal((await handleApi(req, envApi, new URL(req.url), {})).status, 400, q);
+  }
+});
