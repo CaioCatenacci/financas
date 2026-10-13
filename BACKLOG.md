@@ -66,3 +66,11 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   (`PUT/GET /api/diagnostico`, roteiro no CONTEXTO §20); falta a skill/rotina que lê as rotas e
   escreve o texto. É regra de agente (`.claude/`), vai em PR à parte, não pelo degrau 2.
   Origem: G3 (10/10/2026).
+- **P3 · Conta sem print no mês some do total do patrimônio.** A foto do mês (`/api/patrimonio`)
+  só usa prints do próprio mês: se o Caio manda o Itaú em outubro e o C6 da Paola só em setembro,
+  o total de outubro sai sem o C6. Levar a última foto adiante (com selo "foto de set") seria uma
+  escolha nova; hoje o mês sem print fica null. Origem: A2 (12/10/2026).
+- **P3 · Rendimento calculado depende do nome da categoria "Investimentos".** Os aportes/resgates
+  do A2 somam a categoria pelo nome (como a regra do classificador e a migração `0012`); renomear
+  a categoria na aba Ajustes zera os aportes sem aviso. Uma flag na categoria (como `padrao`)
+  resolveria. Origem: A2 (12/10/2026).

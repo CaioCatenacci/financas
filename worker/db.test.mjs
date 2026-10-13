@@ -1112,3 +1112,55 @@ test("gravarDiagnostico faz upsert por mes e renova atualizado_em (reescrever tr
   assert.match(text, /atualizado_em\s*=\s*now\(\)/i);
   assert.deepEqual(values, ["2026-09", "texto novo"]);
 });
+
+// ---------- A2: patrimônio ----------
+test("A2: inserirPatrimonio grava todos os produtos do print numa única transação", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  const r = await db.inserirPatrimonio([
+    { data: "2026-10-09", pessoa_id: "p1", conta: "itau", produto: "Fundos", familia: "fundos", nivel: "agregado", saldo_cents: 100, rendimento_print_cents: 5, periodo_rendimento: "mes", documento_id: "d1" },
+    { data: "2026-10-09", pessoa_id: "p1", conta: "itau", produto: "CDB X", familia: "renda_fixa", nivel: "titulo", vencimento: "2028-01-03", taxa: "100% CDI", saldo_cents: 200, documento_id: "d1" },
+  ]);
+  assert.equal(r.gravados, 2);
+  assert.equal(sql.transacao.length, 2);
+  assert.match(sql.chamadas[0].text, /insert into patrimonio/i);
+  assert.ok(sql.chamadas[1].values.includes(200));
+  assert.ok(sql.chamadas[1].values.includes("renda_fixa"));
+});
+
+test("A2: inserirPatrimonio sem produto não abre transação", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  assert.deepEqual(await db.inserirPatrimonio([]), { gravados: 0 });
+  assert.equal(sql.transacao, undefined);
+});
+
+test("A2: patrimonioPorDia soma em SQL por mês/data/conta/pessoa/família/nível e converte para número", async () => {
+  const sql = fakeSql([{ mes: "2026-10", data: "2026-10-09", conta: "itau", pessoa: "Caio", familia: "fundos", nivel: "agregado", saldo_cents: "100", rend_mes_cents: null, n_rend_mes: "0" }]);
+  const db = criarDb(sql);
+  const r = await db.patrimonioPorDia("2026-09-01", "2026-11-01");
+  assert.match(sql.chamadas[0].text, /sum\(p\.saldo_cents\)/i);
+  assert.match(sql.chamadas[0].text, /periodo_rendimento = 'mes'/i);
+  assert.deepEqual(sql.chamadas[0].values, ["2026-09-01", "2026-11-01"]);
+  assert.deepEqual(r[0], { mes: "2026-10", data: "2026-10-09", conta: "itau", pessoa: "Caio", familia: "fundos", nivel: "agregado", saldo_cents: 100, rend_mes_cents: null, n_rend_mes: 0 });
+});
+
+test("A2: aportesInvestimentoPorMes soma em SQL a categoria Investimentos de extrato, despesa = aporte e receita = resgate", async () => {
+  const sql = fakeSql([{ mes: "2026-11", aportes_cents: "1000000", resgates_cents: "0" }]);
+  const db = criarDb(sql);
+  const r = await db.aportesInvestimentoPorMes("2026-10-01", "2026-12-01");
+  const q = sql.chamadas[0].text;
+  assert.match(q, /c\.nome = 'Investimentos'/);
+  assert.match(q, /t\.fonte = 'extrato'/);
+  assert.match(q, /natureza = 'despesa'\), 0\)\*100\)\)::bigint as aportes_cents/);
+  assert.match(q, /natureza = 'receita'\), 0\)\*100\)\)::bigint as resgates_cents/);
+  assert.deepEqual(r, [{ mes: "2026-11", aportes_cents: 1000000, resgates_cents: 0 }]);
+});
+
+test("A2: periodosImportacao devolve cada período da fonte (não só o max)", async () => {
+  const sql = fakeSql([{ de: "2025-07-01", ate: "2026-09-02" }]);
+  const db = criarDb(sql);
+  const r = await db.periodosImportacao("itau", "extrato");
+  assert.deepEqual(sql.chamadas[0].values, ["itau", "extrato"]);
+  assert.deepEqual(r, [{ de: "2025-07-01", ate: "2026-09-02" }]);
+});

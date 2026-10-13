@@ -134,3 +134,23 @@ create table diagnosticos (
   texto         text        not null,
   atualizado_em timestamptz not null default now()
 );
+
+-- A2: patrimônio por print — um registro por produto lido, no menor grão que o print mostrar.
+-- Dentro de uma conta e data, títulos substituem o agregado da mesma família (worker/patrimonio.js).
+create table patrimonio (
+  id                     uuid        primary key default gen_random_uuid(),
+  data                   date        not null,
+  pessoa_id              uuid        not null references pessoas(id),
+  conta                  text        not null,          -- 'itau' | 'c6' | 'nubank' | 'mercadopago'
+  produto                text        not null,
+  familia                text        not null check (familia in ('fundos','renda_fixa','caixa','outros')),
+  nivel                  text        not null check (nivel in ('titulo','agregado')),
+  vencimento             date,
+  taxa                   text,
+  saldo_cents            bigint      not null check (saldo_cents >= 0),
+  rendimento_print_cents bigint,
+  periodo_rendimento     text        check (periodo_rendimento in ('mes','ano','12m','desde_inicio')),
+  documento_id           uuid        references documentos(id),
+  criado_em              timestamptz not null default now()
+);
+create index idx_patrimonio_data on patrimonio (data, conta);

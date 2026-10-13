@@ -8,6 +8,7 @@ import {
   TIPOS_IMPORT, fonteDoTipo, corpoPreview,
   rotuloEstadoFechamento, linhasFechamento, gradeFechamento, mesDoFechamento,
   markdownSimples, avisoMesParcial, htmlDiagnostico, AVISO_MES_PARCIAL, SEM_DIAGNOSTICO,
+  montarTelaPatrimonio, htmlPatrimonio, reaisDeCents, rotuloRendimentoApp, SEM_PATRIMONIO,
 } from "../public/app.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto, abrirPdf } from "../public/pdf_extrair.js";
@@ -1056,4 +1057,61 @@ test("htmlDiagnostico: sem texto mostra a frase exata do vazio, e o aviso vem ac
   const ago = htmlDiagnostico({ mes: "2026-08", texto: "texto" }, fech, "2026-08");
   assert.ok(!ago.includes(AVISO_MES_PARCIAL));
   assert.ok(ago.includes("<p>texto</p>"));
+});
+
+// ---------- A2: aba Patrimônio ----------
+// resposta inventada de /api/patrimonio (forma de montarPatrimonio): Exemplo do card em outubro
+const mesVazio = (mes) => ({ mes, total_cents: null, porPessoa: [], porConta: [] });
+const respPatrimonio = {
+  ate: "2026-10",
+  meses: [
+    ...["2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08"].map(mesVazio),
+    { mes: "2026-09", total_cents: 95000000, porPessoa: [{ pessoa: "Caio", total_cents: 75000000 }, { pessoa: "Paola", total_cents: 20000000 }],
+      porConta: [] },
+    { mes: "2026-10", total_cents: 97000000,
+      porPessoa: [{ pessoa: "Paola", total_cents: 20000000 }, { pessoa: "Caio", total_cents: 77000000 }],
+      porConta: [
+        { conta: "c6", pessoa: "Paola", data: "2026-10-09", total_cents: 20000000, rendimento_cents: 150000, origem: "print", motivo: null },
+        { conta: "itau", pessoa: "Caio", data: "2026-10-09", total_cents: 77000000, rendimento_cents: null, origem: "sem", motivo: "extrato pendente" },
+      ] },
+  ],
+};
+
+test("A2 montarTelaPatrimonio: total da família, por pessoa e por conta do último mês, mais a série de 12 meses", () => {
+  const t = montarTelaPatrimonio(respPatrimonio);
+  assert.equal(t.mes, "2026-10");
+  assert.equal(t.total_cents, 97000000);
+  assert.deepEqual(t.porPessoa.map((p) => p.pessoa), ["Caio", "Paola"]); // maior primeiro
+  assert.deepEqual(t.porConta.map((c) => [c.conta, c.total_cents, c.rendimento]), [
+    ["itau", 77000000, "sem rendimento (extrato pendente)"],
+    ["c6", 20000000, "print"],
+  ]);
+  assert.equal(t.serie.length, 12);
+  assert.equal(t.serie[0].total_cents, null); // mês sem print: null, não zero
+  assert.equal(t.serie[10].total_cents, 95000000);
+  assert.equal(t.vazio, false);
+});
+
+test("A2 htmlPatrimonio: mostra os totais formatados e a origem do rendimento; escapa o que vem da API", () => {
+  const h = htmlPatrimonio(respPatrimonio);
+  assert.match(h, /R\$ 970\.000,00/);
+  assert.match(h, /R\$ 770\.000,00/);
+  assert.match(h, /R\$ 200\.000,00/);
+  assert.match(h, /sem rendimento \(extrato pendente\)/);
+  assert.match(h, /R\$ 1\.500,00/);
+  const sujo = { ...respPatrimonio, meses: [{ ...respPatrimonio.meses[11], porPessoa: [{ pessoa: "<b>x</b>", total_cents: 1 }] }] };
+  assert.doesNotMatch(htmlPatrimonio(sujo), /<b>x<\/b>/);
+});
+
+test("A2 htmlPatrimonio: 12 meses sem print mostram o vazio", () => {
+  const h = htmlPatrimonio({ ate: "2026-10", meses: [mesVazio("2026-10")] });
+  assert.match(h, new RegExp(SEM_PATRIMONIO));
+});
+
+test("A2 reaisDeCents e rotuloRendimentoApp: null é traço/sem rendimento, nunca zero", () => {
+  assert.equal(reaisDeCents(null), "—");
+  assert.equal(reaisDeCents(12345), "R$ 123,45");
+  assert.equal(reaisDeCents(-500), "-R$ 5,00");
+  assert.equal(rotuloRendimentoApp({ origem: "calculado" }), "calculado");
+  assert.equal(rotuloRendimentoApp({ origem: "sem", motivo: "sem print anterior" }), "sem rendimento (sem print anterior)");
 });

@@ -633,6 +633,44 @@ para depois de o roteiro se provar; editar pelo app, não).
 
 A rotina do assistente para escrever o texto é regra de agente (`.claude/`) e vai numa PR à parte.
 
+## 21. Patrimônio por print: saldo e rendimento por conta (A2, 12/10/2026)
+
+Investimentos não entram pelo extrato (só o aporte) e os apps das corretoras não exportam: o saldo
+entra por **print da tela**, mandado pelo Telegram como um comprovante. É a base do plano da casa (G4).
+
+- **`patrimonio(data, pessoa_id, conta, produto, familia, nivel, vencimento, taxa, saldo_cents,
+  rendimento_print_cents, periodo_rendimento, documento_id)`** (migração `0015`, sem semente).
+  Vocabulário fechado: `familia ∈ {fundos, renda_fixa, caixa, outros}`, `nivel ∈ {titulo,
+  agregado}`, `periodo_rendimento ∈ {mes, ano, 12m, desde_inicio}` ou null; `conta ∈ {itau, c6,
+  nubank, mercadopago}` (validado no Worker). Um registro por produto, **no menor grão que o print
+  mostrar**; `data` = a do print, sem ela a da mensagem (horário de Brasília).
+- **Sem contar duas vezes** (`worker/patrimonio.js`, puro): numa conta e data, os títulos de uma
+  família substituem o agregado dela. **Foto do mês** de uma conta: para cada família, a última
+  data do mês em que ela apareceu (um detalhe no dia 05 e um agregado no dia 20 não duplicam; um
+  print só de Fundos não apaga as outras). Conta sem print no mês fica fora do total (null, não
+  zero; BACKLOG).
+- **Telegram:** foto com legenda `/patrimonio [pessoa] [conta]` → dedup por hash do documento →
+  `extrair(..., "patrimonio")` (prompt e validador próprios, `validarPatrimonio`; família, nível ou
+  período fora do vocabulário recusam) → a legenda vence o que o modelo leu (sem conta ou pessoa, o
+  bot pede a legenda) → Dropbox em `/Finanças/Patrimônio/AAAA/AAAA-MM-DD_<conta>_<pessoa>.<ext>`
+  → confirma o total e o número de produtos.
+- **Rendimento do mês** (`rendimentoDoMes`, puro; null quando não há dado, nunca zero): no **Itaú
+  do Caio** é calculado — saldo − (saldo do mês anterior + aportes − resgates), com aportes e
+  resgates = transações da categoria Investimentos com `fonte='extrato'` (despesa = aporte, receita
+  = resgate; **não** filtra por `conta_no_resumo`: aplicação e resgate estão fora do resumo por
+  definição, e isto não é leitura de gasto). Só sai com `importacoes` (itau, extrato) cobrindo o mês
+  do dia 01 ao último (`cobreMes`, união dos períodos); senão "sem rendimento (extrato pendente)".
+  Nas outras contas vale o rendimento do print com período `mes`; outro período fica sem. Mês sem
+  print anterior fica sem rendimento.
+- **PERS BLACK** no extrato do Itaú é o pagamento da fatura do cartão: regra própria `PERS BLACK →
+  Banco` (não-gasto) no `worker/classificar.js`, fora da regex de Investimentos (senão viraria
+  aporte); a migração de dados `0016` leva as linhas antigas de Investimentos para Banco. O
+  classificador Python segue com a regra antiga (BACKLOG C6).
+- **API/UI:** `GET /api/patrimonio?ate=YYYY-MM` (12 meses; `ate` inválido → 400): por mês, o total
+  da família, `porPessoa` e `porConta` (foto, `rendimento_cents`, `origem ∈ {calculado, print,
+  sem}` e o `motivo`). Somas em SQL (`db.patrimonioPorDia`, `db.aportesInvestimentoPorMes`). Aba
+  **"Patrimônio"**: total da família, por pessoa, por conta e a série dos 12 meses; segue `#mesSel`.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
@@ -640,6 +678,6 @@ A rotina do assistente para escrever o texto é regra de agente (`.claude/`) e v
 | Extrato + fatura | PDF parsing é complexo; v1 é imagem. | Incremento 3 |
 | Conciliação | Depende de Incremento 3 (extrato/fatura). | Incremento 3 |
 | PJ em cascata | Estrutura simples pro Caio pessoa física primeiro. | Incremento 5 |
-| Investimentos | Escopo separado; dados ainda a coletar. | Incremento 6 |
+| Investimentos (além do saldo por print) | O A2 trouxe saldo e rendimento por print (§21); carteira, ativos e corretora por export seguem fora. | Incremento 6 |
 
 Cada incremento entrega valor E2E. Nada é plumbing que ficaria inútil sozinho.

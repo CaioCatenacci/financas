@@ -55,3 +55,33 @@ test("G1: RESGATE, AG. RESGATE e INT RESGATE são não-gasto (Investimentos), co
   assert.equal(reconhecerNaoGasto("APLICACAO FUNDO X 12/03"), "Investimentos");
   assert.equal(classificar("INT RESGATE FUNDO X 12/03", {}).computaResumo, false);
 });
+
+// ---------- A2: PERS BLACK e o padrão de aporte/resgate do Itaú ----------
+// O rendimento calculado do patrimônio (worker/patrimonio.js) soma como aporte/resgate as linhas
+// de extrato na categoria Investimentos; a categoria sai destes padrões. Descrições inventadas, na
+// forma que o Itaú escreve.
+import { movimentoInvestimento } from "./patrimonio.js";
+
+test("A2: PERS BLACK é pagamento da fatura → Banco, fora do resumo (não é mais Investimentos)", () => {
+  assert.equal(reconhecerNaoGasto("PERS BLACK 1234"), "Banco");
+  const r = classificar("PERS BLACK 1234", {});
+  assert.equal(r.computaResumo, false);
+  assert.equal(r.categoriaOrg, "Banco");
+});
+
+test("A2: APLICACAO COFRINHOS, APLICACAO e COR COMP CDB são aporte (saída do extrato)", () => {
+  // COR COMP CDB: compra de CDB — as linhas reais de Investimentos que não são APLICACAO nem RESGATE
+  for (const d of ["APLICACAO COFRINHOS", "APLICACAO FUNDO X 12/03", "COR COMP CDB 0000001"]) {
+    assert.equal(reconhecerNaoGasto(d), "Investimentos", d);
+    assert.equal(movimentoInvestimento(d, "despesa"), "aporte", d);
+  }
+});
+
+test("A2: um resgate de Cofrinhos é resgate (entrada do extrato)", () => {
+  assert.equal(movimentoInvestimento("RESGATE COFRINHOS", "receita"), "resgate");
+});
+
+test("A2: PERS BLACK não é aporte, nem gasto comum vira movimento de investimento", () => {
+  assert.equal(movimentoInvestimento("PERS BLACK 1234", "despesa"), null);
+  assert.equal(movimentoInvestimento("PIX QRS PADARIA 10/12", "despesa"), null);
+});

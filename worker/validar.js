@@ -14,7 +14,7 @@ export function ehUuid(v) {
  * Rejeita datas impossíveis (ex: 32/13).
  * Retorna string ISO "AAAA-MM-DD" ou null se inválida.
  */
-function normalizarData(v) {
+export function normalizarData(v) {
   if (typeof v !== "string") return null;
   const s = v.trim();
   let ano, mes, dia;
