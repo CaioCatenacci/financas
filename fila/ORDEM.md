@@ -5,10 +5,10 @@ que sai; (2) para onde o dinheiro vai; (3) a casa. A faixa Agora fica com o Caio
 
 ## Agora
 - H1
+- G5
 
 ## Próximo
 - H2
-- G5
 - A1
 - A3
 
