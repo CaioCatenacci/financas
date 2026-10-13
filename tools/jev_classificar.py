@@ -8,10 +8,16 @@ spike mede, contra um gabarito feito à mão pelo Caio, quanto ele acerta e a pa
 de qual confiança daria para aplicar sem revisão.
 
 É só o experimento: NÃO grava no banco (a conexão abre em modo só-leitura e só há
-SELECT). Gravar a classificação é o H2, depois do relatório e do limiar escolhido.
+SELECT). Gravar a classificação é o H3, depois do relatório e do limiar escolhido.
 
     python tools/jev_classificar.py amostra [--n 60]   # pergunta ao JEV e grava a planilha
+    python tools/jev_classificar.py amostra --gabarito dados/jev/amostra.csv --csv <nova>
+                                                       # H2: mesmos ids, gabarito copiado
     python tools/jev_classificar.py relatorio          # lê a planilha com o gabarito
+
+H2 (segunda rodada): o estado explica a fonte, categorias e subs podem ter descrição
+escrita à mão, a sub genérica substitui "sem subcategoria" e "IFD*" vira iFood por
+regra, sem chamar o JEV (a planilha marca a `origem`: `regra` ou `jev`).
 
 A planilha (`dados/jev/amostra.csv`, fora do git: tem descrição e contraparte reais)
 sai com separador `;` e vírgula decimal, que é o que o Excel brasileiro abre sem
@@ -61,6 +67,37 @@ NENHUMA = "nenhuma serve"
 SEM_SUB = "sem subcategoria"
 
 FONTES = ("extrato", "fatura", "imagem", "importacao", "manual")
+
+# O que a fonte quer dizer, para o JEV. No H1 o estado mandava só "fatura", e o
+# modelo puxava qualquer compra de cartão para "Banco → Fatura de cartão" (11 erros
+# em 11): o nome da fonte parecia o nome da sub.
+FONTE_EXPLICADA = {
+    "extrato": "movimento da conta corrente (linha do extrato bancário)",
+    "fatura": "compra feita no cartão de crédito (linha da fatura)",
+    "imagem": "comprovante fotografado (Pix, boleto ou recibo)",
+    "importacao": "lançamento trazido da planilha antiga de controle",
+    "manual": "lançamento digitado à mão",
+}
+
+# Descrição escrita à mão por categoria; tem precedência sobre o "inclui: <subs>".
+DESCRICAO_CATEGORIA = {
+    "Banco": "tarifas, juros, IOF, anuidade e o pagamento da fatura em si — "
+             "nunca uma compra feita no cartão",
+}
+
+# Descrição escrita à mão por (categoria, sub). Sem ela, a sub vai sem critério (ou
+# com o critério da genérica).
+DESCRICAO_SUB = {
+    ("Alimentação", "Restaurante"): "comer ou beber no local: restaurante, bar, café",
+    ("Alimentação", "Outros"): "delivery fora do iFood, padaria, sorveteria e o resto",
+}
+
+CRITERIO_GENERICA = "quando nenhuma outra subcategoria se aplica"
+
+# Regra fixa antes do modelo: "IFD*" na fatura é sempre iFood (no H1 o JEV escolhia
+# Restaurante/Mercado). Não gasta chamada.
+PREFIXO_IFOOD = "IFD*"
+REGRA_IFOOD = ("Alimentação", "Ifood")
 # Crédito/estorno de extrato e fatura é receita sob categoria de despesa (ver
 # naturezaAoReclassificar em worker/categorias.js): por isso essas receitas
 # escolhem entre TODAS as categorias.
@@ -71,7 +108,7 @@ LIMIARES = (0.5, 0.6, 0.7, 0.8, 0.85, 0.9, 0.95)
 COLUNAS = [
     "id", "data", "descricao", "contraparte", "valor", "natureza", "fonte",
     "categoria", "prob_categoria", "subcategoria", "prob_subcategoria",
-    "tempo_ms", "custo_usd",
+    "tempo_ms", "custo_usd", "origem",
     "gabarito_categoria", "gabarito_subcategoria",
 ]
 
@@ -103,7 +140,10 @@ def pergunta_categoria(transacao: dict, catalogo: dict) -> dict:
     modelo o que a categoria cobre melhor que o nome sozinho."""
     criterios = {}
     for c in opcoes_categoria(transacao["natureza"], transacao["fonte"], catalogo):
-        subs = [s["nome"] for s in subs_ativas(c["id"], catalogo)]
+        if c["nome"] in DESCRICAO_CATEGORIA:
+            criterios[c["nome"]] = DESCRICAO_CATEGORIA[c["nome"]]
+            continue
+        subs =[s["nome"] for s in subs_ativas(c["id"], catalogo)]
         criterios[c["nome"]] = f"inclui: {', '.join(subs)}" if subs else None
     criterios[NENHUMA] = "Nenhuma das outras categorias serve para esta transação."
     instrucoes = "Em qual categoria do orçamento doméstico esta transação se encaixa?"
@@ -113,14 +153,37 @@ def pergunta_categoria(transacao: dict, catalogo: dict) -> dict:
     return {"type": "choice", "instructions": instrucoes, "criteria": criterios}
 
 
+def sub_generica(categoria: dict, catalogo: dict) -> str | None:
+    """A sub "quando nada mais se aplica" da categoria: a de mesmo nome da categoria
+    (Compras → Compras) ou, sem ela, "Outros". Com as duas, a de mesmo nome vence e
+    "Outros" fica como opção comum. None se não há nenhuma."""
+    nomes = [s["nome"] for s in subs_ativas(categoria["id"], catalogo)]
+    for alvo in (categoria["nome"], "Outros"):
+        achada = next((n for n in nomes if _norm(n) == _norm(alvo)), None)
+        if achada is not None:
+            return achada
+    return None
+
+
 def pergunta_subcategoria(categoria: dict, catalogo: dict) -> dict | None:
     """Choice da sub entre as subs ativas da categoria escolhida; None se ela não tem
-    sub ativa (a pergunta não seria pergunta: só "sem subcategoria")."""
+    sub ativa (a pergunta não seria pergunta: só "sem subcategoria").
+
+    Com sub genérica, "sem subcategoria" sai: no H1 o JEV fugia para ela quando não
+    sabia, e o Caio usa a genérica. Descrição à mão vale mais que o critério da
+    genérica (Alimentação → Outros diz o que cobre)."""
     subs = subs_ativas(categoria["id"], catalogo)
     if not subs:
         return None
-    criterios = {s["nome"]: None for s in subs}
-    criterios[SEM_SUB] = "A transação é desta categoria, mas nenhuma subcategoria se aplica."
+    generica = sub_generica(categoria, catalogo)
+    criterios = {}
+    for s in subs:
+        criterio = DESCRICAO_SUB.get((categoria["nome"], s["nome"]))
+        if criterio is None and s["nome"] == generica:
+            criterio = CRITERIO_GENERICA
+        criterios[s["nome"]] = criterio
+    if generica is None:
+        criterios[SEM_SUB] = "A transação é desta categoria, mas nenhuma subcategoria se aplica."
     return {"type": "choice",
             "instructions": f"Dentro da categoria {categoria['nome']}, qual subcategoria?",
             "criteria": criterios}
@@ -142,8 +205,38 @@ def estado(transacao: dict) -> dict:
         "contraparte": transacao.get("contraparte"),
         "valor": formatar_valor(transacao["valor_cents"]),
         "natureza": transacao["natureza"],
-        "fonte": transacao["fonte"],
+        "fonte": FONTE_EXPLICADA[transacao["fonte"]],
     }
+
+
+def regra_fixa(transacao: dict) -> dict | None:
+    """A resposta da regra fixa, ou None se nenhuma regra se aplica."""
+    if (transacao.get("descricao") or "").strip().upper().startswith(PREFIXO_IFOOD):
+        cat, sub = REGRA_IFOOD
+        return {"categoria": cat, "prob_categoria": 1.0, "subcategoria": sub,
+                "prob_subcategoria": 1.0, "tempo_ms": 0, "custo_usd": Decimal("0"),
+                "origem": "regra"}
+    return None
+
+
+def amostra_do_gabarito(pendentes: list[dict], gabarito: list[dict]):
+    """A amostra da rodada nova são os ids da planilha anterior (não se sorteia de
+    novo: import novo muda a população e, com ela, o sorteio). Devolve as transações
+    na ordem da planilha, o gabarito por id e quantos ids saíram por não estarem mais
+    pendentes."""
+    por_id = {str(t["id"]): t for t in pendentes}
+    transacoes, gab, saidos = [], {}, 0
+    for l in gabarito:
+        i = str(l.get("id") or "").strip()
+        if not i:
+            continue
+        if i not in por_id:
+            saidos += 1
+            continue
+        transacoes.append(por_id[i])
+        gab[i] = {"gabarito_categoria": l.get("gabarito_categoria") or "",
+                  "gabarito_subcategoria": l.get("gabarito_subcategoria") or ""}
+    return transacoes, gab, saidos
 
 
 def sortear(ids: list, n: int, semente: int = SEMENTE) -> list:
@@ -179,6 +272,8 @@ def estimar(transacoes: list[dict], catalogo: dict) -> Decimal:
     total = 0
     for t in transacoes:
         est = estado(t)
+        if regra_fixa(t) is not None:
+            continue  # a regra responde sem chamada
         total += tokens_estimados(est, pergunta_categoria(t, catalogo))
         subs = [pergunta_subcategoria(c, catalogo)
                 for c in opcoes_categoria(t["natureza"], t["fonte"], catalogo)]
@@ -203,8 +298,11 @@ def _perguntar(cliente, est: dict, nome: str, pergunta: dict, relogio):
 
 def classificar(transacao: dict, catalogo: dict, cliente, relogio=time.perf_counter) -> dict:
     """Uma chamada por pergunta. A segunda só existe se a categoria escolhida tem sub
-    ativa; "nenhuma serve" encerra ali."""
+    ativa; "nenhuma serve" encerra ali. Regra fixa responde antes, sem chamada."""
     est = estado(transacao)
+    regra = regra_fixa(transacao)
+    if regra is not None:
+        return regra
     cat, p_cat, ms, usd = _perguntar(cliente, est, "categoria",
                                      pergunta_categoria(transacao, catalogo), relogio)
     sub, p_sub = "", None
@@ -217,7 +315,8 @@ def classificar(transacao: dict, catalogo: dict, cliente, relogio=time.perf_coun
             if sub == SEM_SUB:
                 sub = ""
     return {"categoria": cat, "prob_categoria": p_cat, "subcategoria": sub,
-            "prob_subcategoria": p_sub, "tempo_ms": round(ms), "custo_usd": usd}
+            "prob_subcategoria": p_sub, "tempo_ms": round(ms), "custo_usd": usd,
+            "origem": "jev"}
 
 
 def _num(v) -> str:
@@ -229,7 +328,8 @@ def _num(v) -> str:
     return str(v).replace(".", ",")
 
 
-def linha_csv(t: dict, r: dict) -> dict:
+def linha_csv(t: dict, r: dict, gabarito: dict | None = None) -> dict:
+    gab = gabarito or {}
     return {
         "id": str(t["id"]), "data": str(t["data"]), "descricao": t.get("descricao") or "",
         "contraparte": t.get("contraparte") or "", "valor": formatar_valor(t["valor_cents"]),
@@ -237,7 +337,9 @@ def linha_csv(t: dict, r: dict) -> dict:
         "categoria": r["categoria"], "prob_categoria": _num(r["prob_categoria"]),
         "subcategoria": r["subcategoria"], "prob_subcategoria": _num(r["prob_subcategoria"]),
         "tempo_ms": str(r["tempo_ms"]), "custo_usd": _num(r["custo_usd"]),
-        "gabarito_categoria": "", "gabarito_subcategoria": "",
+        "origem": r.get("origem", "jev"),
+        "gabarito_categoria": gab.get("gabarito_categoria", ""),
+        "gabarito_subcategoria": gab.get("gabarito_subcategoria", ""),
     }
 
 
@@ -255,10 +357,12 @@ def ler_csv(caminho: pathlib.Path) -> list[dict]:
 
 
 def amostra(transacoes: list[dict], catalogo: dict, cliente, *, csv_saida=CSV_PADRAO,
-            teto: Decimal = TETO_USD, saida=print, relogio=time.perf_counter):
+            teto: Decimal = TETO_USD, saida=print, relogio=time.perf_counter,
+            gabarito: dict | None = None):
     """Orça e só então pergunta. Devolve as linhas gravadas, ou None se a estimativa
     passou do teto (nenhuma chamada feita). `cliente` pode ser uma fábrica (callable
-    sem argumentos): assim o SDK só é importado se o orçamento passar."""
+    sem argumentos): assim o SDK só é importado se o orçamento passar. `gabarito`
+    (id → gabarito_categoria/gabarito_subcategoria) é copiado para a planilha."""
     est = estimar(transacoes, catalogo)
     saida(f"estimativa ({len(transacoes)} transações × até 2 perguntas): US$ {est:.6f}")
     if est > teto:
@@ -266,9 +370,11 @@ def amostra(transacoes: list[dict], catalogo: dict, cliente, *, csv_saida=CSV_PA
         return None
     if callable(cliente) and not hasattr(cliente, "system_one"):
         cliente = cliente()
+    gabarito = gabarito or {}
     linhas = []
     for i, t in enumerate(transacoes, 1):
-        linhas.append(linha_csv(t, classificar(t, catalogo, cliente, relogio)))
+        linhas.append(linha_csv(t, classificar(t, catalogo, cliente, relogio),
+                                gabarito.get(str(t["id"]))))
         saida(f"{i:3d}/{len(transacoes)}")
     gravar_csv(csv_saida, linhas)
     gasto = sum((_dec(l["custo_usd"]) for l in linhas), Decimal("0"))
@@ -423,7 +529,9 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     a = sub.add_parser("amostra", help="pergunta ao JEV e grava a planilha")
-    a.add_argument("--n", type=int, default=60)
+    a.add_argument("--n", type=int, default=60, help="tamanho do sorteio (ignorado com --gabarito)")
+    a.add_argument("--gabarito", type=pathlib.Path, default=None,
+                   help="planilha anterior: usa os ids dela (sem sortear) e copia o gabarito por id")
     a.add_argument("--csv", type=pathlib.Path, default=CSV_PADRAO)
     r = sub.add_parser("relatorio", help="lê a planilha com o gabarito e imprime o relatório")
     r.add_argument("--csv", type=pathlib.Path, default=CSV_PADRAO)
@@ -443,9 +551,18 @@ def main(argv=None):
     with conectar() as conn, conn.cursor() as cur:
         todas = ler_pendentes(cur)
         catalogo = ler_catalogo(cur)
-    transacoes = selecionar(todas, args.n)
+    gab = None
+    if args.gabarito is not None:
+        if args.gabarito.resolve() == args.csv.resolve():
+            # a planilha nova sobrescreveria o gabarito do Caio antes de copiá-lo
+            raise SystemExit("--csv não pode ser a planilha do --gabarito; escolha outro --csv")
+        transacoes, gab, saidos = amostra_do_gabarito(todas, ler_csv(args.gabarito))
+        print(f"gabarito: {len(transacoes)} ids ainda pendentes; "
+              f"{saidos} saíram por não estarem mais pendentes")
+    else:
+        transacoes = selecionar(todas, args.n)
     print(f"pendentes: {len(todas)}; amostra: {len(transacoes)}")
-    amostra(transacoes, catalogo, cliente_jev_real, csv_saida=args.csv)
+    amostra(transacoes, catalogo, cliente_jev_real, csv_saida=args.csv, gabarito=gab)
 
 
 if __name__ == "__main__":

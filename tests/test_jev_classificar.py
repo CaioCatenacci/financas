@@ -125,7 +125,8 @@ def test_estado_tem_descricao_contraparte_valor_natureza_e_fonte():
     jev.classificar(tx(contraparte="FULANO TESTE", valor_cents=123456), CATALOGO, cli)
     estado, _ = cli.chamadas[0]
     assert estado == {"descricao": "PADARIA X", "contraparte": "FULANO TESTE",
-                      "valor": "1.234,56", "natureza": "despesa", "fonte": "fatura"}
+                      "valor": "1.234,56", "natureza": "despesa",
+                      "fonte": "compra feita no cartão de crédito (linha da fatura)"}
 
 
 def test_estado_aceita_contraparte_nula_e_todas_as_fontes():
@@ -133,7 +134,17 @@ def test_estado_aceita_contraparte_nula_e_todas_as_fontes():
         cli = ClienteFalso({"categoria": (NENHUMA, 0.5)})
         jev.classificar(tx(fonte=fonte), CATALOGO, cli)
         estado, _ = cli.chamadas[0]
-        assert estado["contraparte"] is None and estado["fonte"] == fonte
+        assert estado["contraparte"] is None and estado["fonte"] == jev.FONTE_EXPLICADA[fonte]
+
+
+def test_estado_explica_a_fonte_em_vez_de_so_nomea_la():
+    # H2: "fonte: fatura" sozinho puxava compra de cartão para "Banco → Fatura de cartão"
+    assert "compra feita no cartão de crédito (linha da fatura)" in jev.estado(tx(fonte="fatura"))["fonte"]
+    assert "movimento da conta corrente" in jev.estado(tx(fonte="extrato"))["fonte"]
+    textos = [jev.estado(tx(fonte=f))["fonte"] for f in jev.FONTES]
+    assert set(jev.FONTE_EXPLICADA) == set(jev.FONTES)
+    assert len(set(textos)) == len(jev.FONTES)  # cada fonte com o seu texto
+    assert all(texto != fonte for texto, fonte in zip(textos, jev.FONTES))
 
 
 def test_fonte_fora_do_vocabulario_e_recusada():
@@ -233,3 +244,158 @@ def test_relatorio_a_partir_da_planilha_com_gabarito(tmp_path):
     texto = jev.montar_relatorio(jev.ler_csv(caminho), 1000)
     assert "4/5 (80%)" in texto and "3/5 (60%)" in texto
     assert "1000 pendentes" in texto
+
+
+# --- H2: perguntas corrigidas -----------------------------------------------
+# Catálogo inventado com os nomes que as descrições à mão usam (Banco, Alimentação →
+# Restaurante/Outros/Ifood, Compras → Compras) e uma categoria com as duas genéricas.
+
+CATALOGO_H2 = {
+    "categorias": [
+        {"id": "kB", "nome": "Banco", "natureza": "despesa", "padrao": False, "ativa": True},
+        {"id": "kA", "nome": "Alimentação", "natureza": "despesa", "padrao": False, "ativa": True},
+        {"id": "kC", "nome": "Compras", "natureza": "despesa", "padrao": False, "ativa": True},
+        {"id": "kL", "nome": "Lazer", "natureza": "despesa", "padrao": False, "ativa": True},
+        {"id": "kS", "nome": "Saúde", "natureza": "despesa", "padrao": False, "ativa": True},
+        {"id": "kN", "nome": "Não Identificado", "natureza": "despesa", "padrao": True, "ativa": True},
+    ],
+    "subcategorias": [
+        {"id": "b1", "categoria_id": "kB", "nome": "Fatura de cartão", "ativa": True},
+        {"id": "b2", "categoria_id": "kB", "nome": "Outros", "ativa": True},
+        {"id": "a1", "categoria_id": "kA", "nome": "Ifood", "ativa": True},
+        {"id": "a2", "categoria_id": "kA", "nome": "Mercado", "ativa": True},
+        {"id": "a3", "categoria_id": "kA", "nome": "Outros", "ativa": True},
+        {"id": "a4", "categoria_id": "kA", "nome": "Restaurante", "ativa": True},
+        {"id": "c1", "categoria_id": "kC", "nome": "Amazon", "ativa": True},
+        {"id": "c2", "categoria_id": "kC", "nome": "Compras", "ativa": True},
+        {"id": "c3", "categoria_id": "kC", "nome": "Outros", "ativa": False},  # mesclada
+        # Lazer tem as duas candidatas a genérica: a de mesmo nome vence
+        {"id": "l1", "categoria_id": "kL", "nome": "Cinema", "ativa": True},
+        {"id": "l2", "categoria_id": "kL", "nome": "Outros", "ativa": True},
+        {"id": "l3", "categoria_id": "kL", "nome": "Lazer", "ativa": True},
+        # Saúde não tem genérica
+        {"id": "s1", "categoria_id": "kS", "nome": "Farmácia", "ativa": True},
+        {"id": "s2", "categoria_id": "kS", "nome": "Consulta", "ativa": True},
+    ],
+}
+
+
+def _cat(nome):
+    return next(c for c in CATALOGO_H2["categorias"] if c["nome"] == nome)
+
+
+def _crit_sub(nome):
+    return jev.pergunta_subcategoria(_cat(nome), CATALOGO_H2)["criteria"]
+
+
+def test_descricao_a_mao_da_categoria_sobrepoe_o_inclui():
+    # no H1, "inclui: Fatura de cartão" puxava toda compra de cartão para Banco
+    crit = jev.pergunta_categoria(tx(descricao="LOJA EXEMPLO LTDA"), CATALOGO_H2)["criteria"]
+    assert crit["Banco"] == ("tarifas, juros, IOF, anuidade e o pagamento da fatura em si — "
+                             "nunca uma compra feita no cartão")
+    # categoria fora do dict segue listando as subs
+    assert crit["Saúde"] == "inclui: Farmácia, Consulta"
+    assert crit["Compras"] == "inclui: Amazon, Compras"
+
+
+def test_descricao_a_mao_da_sub_restaurante_e_outros_de_alimentacao():
+    crit = _crit_sub("Alimentação")
+    assert crit["Restaurante"] == "comer ou beber no local: restaurante, bar, café"
+    # a descrição à mão vale mais que o critério genérico
+    assert crit["Outros"] == "delivery fora do iFood, padaria, sorveteria e o resto"
+    assert crit["Ifood"] is None and crit["Mercado"] is None
+    assert SEM_SUB not in crit
+
+
+def test_sub_generica_substitui_sem_subcategoria():
+    # o JEV fugia para "sem subcategoria"; o Caio usa a genérica
+    assert jev.CRITERIO_GENERICA == "quando nenhuma outra subcategoria se aplica"
+    assert _crit_sub("Compras") == {"Amazon": None, "Compras": jev.CRITERIO_GENERICA}
+    assert _crit_sub("Banco") == {"Fatura de cartão": None, "Outros": jev.CRITERIO_GENERICA}
+
+
+def test_com_duas_candidatas_a_de_mesmo_nome_da_categoria_vence():
+    crit = _crit_sub("Lazer")
+    assert crit["Lazer"] == jev.CRITERIO_GENERICA
+    assert crit["Outros"] is None  # fica como opção comum
+    assert SEM_SUB not in crit
+    assert jev.sub_generica(_cat("Lazer"), CATALOGO_H2) == "Lazer"
+
+
+def test_categoria_sem_generica_segue_com_sem_subcategoria():
+    assert list(_crit_sub("Saúde")) == ["Farmácia", "Consulta", SEM_SUB]
+    assert jev.sub_generica(_cat("Saúde"), CATALOGO_H2) is None
+
+
+def test_ifd_vai_para_ifood_pela_regra_sem_chamar_o_jev():
+    cli = ClienteFalso({})
+    r = jev.classificar(tx(descricao="IFD*LANCHONETE EXEMPLO"), CATALOGO_H2, cli)
+    assert cli.chamadas == []
+    assert (r["categoria"], r["subcategoria"], r["prob_categoria"], r["custo_usd"], r["origem"]) == (
+        "Alimentação", "Ifood", 1, 0, "regra")
+
+
+def test_o_resto_sai_com_origem_jev():
+    cli = ClienteFalso({"categoria": ("Compras", 0.7), "subcategoria": ("Compras", 0.6)})
+    r = jev.classificar(tx(descricao="LOJA EXEMPLO LTDA", valor_cents=8000), CATALOGO_H2, cli)
+    assert r["origem"] == "jev" and len(cli.chamadas) == 2
+    # o Exemplo do card: o estado explica a fatura e a sub genérica está no lugar
+    estado, _ = cli.chamadas[0]
+    assert estado["fonte"] == "compra feita no cartão de crédito (linha da fatura)"
+    (q,) = cli.perguntas("subcategoria")
+    assert q["criteria"]["Compras"] == jev.CRITERIO_GENERICA and SEM_SUB not in q["criteria"]
+
+
+def test_planilha_marca_a_origem_e_regra_nao_entra_na_estimativa(tmp_path):
+    cli = ClienteFalso({"categoria": (NENHUMA, 0.5)})
+    saida = tmp_path / "amostra.csv"
+    jev.amostra([tx(id="t1", descricao="IFD*LANCHONETE EXEMPLO"), tx(id="t2", descricao="LOJA X")],
+                CATALOGO_H2, cli, csv_saida=saida, saida=lambda *_: None)
+    linhas = jev.ler_csv(saida)
+    assert [l["origem"] for l in linhas] == ["regra", "jev"]
+    assert linhas[0]["custo_usd"] == "0"
+    assert jev.estimar([tx(descricao="IFD*X")], CATALOGO_H2) == 0
+
+
+def test_relatorio_le_planilha_antiga_sem_coluna_origem(tmp_path):
+    # o amostra.csv do H1 não tem "origem"
+    antigas = [c for c in jev.COLUNAS if c != "origem"]
+    linha = {c: "" for c in antigas}
+    linha.update(id="x", descricao="LOJA TESTE", categoria="Compras", prob_categoria="0,9000",
+                 custo_usd="0,0001", gabarito_categoria="Compras")
+    caminho = tmp_path / "h1.csv"
+    caminho.write_text(";".join(antigas) + "\n" + ";".join(linha[c] for c in antigas) + "\n",
+                       encoding="utf-8-sig")
+    assert "1/1 (100%)" in jev.montar_relatorio(jev.ler_csv(caminho), 10)
+
+
+# --- H2: amostra --gabarito -------------------------------------------------
+
+def test_gabarito_casa_por_id_e_ignora_id_que_nao_esta_mais_pendente():
+    pend = [tx(id="p1", descricao="A"), tx(id="p2", descricao="B"), tx(id="p3", descricao="C")]
+    gab = [
+        {"id": "p2", "gabarito_categoria": "Compras", "gabarito_subcategoria": "Amazon"},
+        {"id": "sumiu", "gabarito_categoria": "Lazer", "gabarito_subcategoria": ""},
+        {"id": "p1", "gabarito_categoria": "Banco", "gabarito_subcategoria": ""},
+    ]
+    transacoes, por_id, saidos = jev.amostra_do_gabarito(pend, gab)
+    # sem sortear: os ids da planilha, na ordem dela; p3 não estava lá e não entra
+    assert [t["id"] for t in transacoes] == ["p2", "p1"]
+    assert saidos == 1
+    assert por_id == {"p2": {"gabarito_categoria": "Compras", "gabarito_subcategoria": "Amazon"},
+                      "p1": {"gabarito_categoria": "Banco", "gabarito_subcategoria": ""}}
+
+
+def test_gabarito_e_copiado_para_a_planilha_nova(tmp_path):
+    pend = [tx(id="p1", descricao="IFD*X"), tx(id="p2", descricao="LOJA")]
+    gab = [{"id": "p1", "gabarito_categoria": "Alimentação", "gabarito_subcategoria": "Ifood"},
+           {"id": "p2", "gabarito_categoria": "Compras", "gabarito_subcategoria": "Compras"}]
+    transacoes, por_id, _ = jev.amostra_do_gabarito(pend, gab)
+    cli = ClienteFalso({"categoria": ("Compras", 0.8), "subcategoria": ("Compras", 0.7)})
+    saida = tmp_path / "rodada2.csv"
+    jev.amostra(transacoes, CATALOGO_H2, cli, csv_saida=saida, saida=lambda *_: None,
+                gabarito=por_id)
+    linhas = jev.ler_csv(saida)
+    assert [(l["id"], l["gabarito_categoria"], l["gabarito_subcategoria"]) for l in linhas] == [
+        ("p1", "Alimentação", "Ifood"), ("p2", "Compras", "Compras")]
+    assert jev.medir(linhas, 10)["acerto_ambas"] == 2
