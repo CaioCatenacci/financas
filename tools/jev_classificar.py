@@ -7,13 +7,21 @@ escolhas (Choice) com probabilidade a uma fração do custo de um modelo gerativ
 spike mede, contra um gabarito feito à mão pelo Caio, quanto ele acerta e a partir
 de qual confiança daria para aplicar sem revisão.
 
-É só o experimento: NÃO grava no banco (a conexão abre em modo só-leitura e só há
-SELECT). Gravar a classificação é o H3, depois do relatório e do limiar escolhido.
+A ferramenta NUNCA grava no banco (a conexão abre em modo só-leitura e só há
+SELECT). No H3 ela gera o SQL; quem aplica é o `tools/db.py aplicar`, com permissão.
 
     python tools/jev_classificar.py amostra [--n 60]   # pergunta ao JEV e grava a planilha
     python tools/jev_classificar.py amostra --gabarito dados/jev/amostra.csv --csv <nova>
                                                        # H2: mesmos ids, gabarito copiado
     python tools/jev_classificar.py relatorio          # lê a planilha com o gabarito
+    python tools/jev_classificar.py classificar        # H3: todas as pendentes → todas.csv
+    python tools/jev_classificar.py gerar-sql [--limiar 0.90]
+                                                       # H3: todas.csv → aplicar.sql e desfazer.sql
+
+H3: o aplicar.sql só leva linha com confiança da categoria >= limiar (a regra IFD*
+tem 1,0) e categoria diferente de "nenhuma serve"; cada update tem a guarda
+`and categoria_id = <padrão>`. O desfazer.sql devolve à padrão, sub null e a
+origem_categoria lida do banco na geração. Nenhuma regra em `associacoes` nasce daqui.
 
 H2 (segunda rodada): o estado explica a fonte, categorias e subs podem ter descrição
 escrita à mão, a sub genérica substitui "sem subcategoria" e "IFD*" vira iFood por
@@ -41,6 +49,7 @@ import pathlib
 import random
 import sys
 import time
+import uuid
 from decimal import ROUND_HALF_UP, Decimal
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -48,6 +57,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 CSV_PADRAO = ROOT / "dados" / "jev" / "amostra.csv"
+# H3: todas as pendentes e o SQL gerado (fora do git: `dados/` está no .gitignore).
+CSV_TODAS = ROOT / "dados" / "jev" / "todas.csv"
+SQL_APLICAR = ROOT / "dados" / "jev" / "aplicar.sql"
+SQL_DESFAZER = ROOT / "dados" / "jev" / "desfazer.sql"
+# Decisão do Caio (13/10/2026): ~60% das pendentes com ~92% de acerto em cat+sub.
+LIMIAR_PADRAO = 0.90
 
 # O spike inteiro não pode passar disto (decisão do card).
 TETO_USD = Decimal("2")
@@ -456,6 +471,143 @@ def montar_relatorio(linhas: list[dict], pendentes: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# H3: classificar todas as pendentes e gerar o SQL (puro)
+# ---------------------------------------------------------------------------
+
+def classificar_todas(pendentes: list[dict], catalogo: dict, cliente, *, csv_saida=CSV_TODAS,
+                      teto: Decimal = TETO_USD, saida=print, relogio=time.perf_counter):
+    """Todas as pendentes, com as mesmas perguntas e a mesma regra do H2. É a amostra
+    sem sorteio e sem gabarito: o orçamento vem antes e aborta sem chamada."""
+    return amostra(pendentes, catalogo, cliente, csv_saida=csv_saida, teto=teto,
+                   saida=saida, relogio=relogio)
+
+
+def _literal(v) -> str:
+    """Literal SQL entre aspas simples (aspas internas dobradas); None vira null."""
+    if v is None:
+        return "null"
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def _uuid_valido(v: str) -> bool:
+    try:
+        uuid.UUID(v)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
+def gerar_sql(linhas: list[dict], catalogo: dict, id_padrao, origens: dict,
+              limiar: float = LIMIAR_PADRAO) -> dict:
+    """Os updates do aplicar e do desfazer a partir da planilha, sem banco.
+
+    `origens` é id → origem_categoria lida do banco na hora de gerar (o desfazer
+    devolve exatamente essa; as pendentes 'manual' não podem voltar 'modelo').
+
+    Levanta ValueError se alguma despesa tem categoria de receita: a natureza não
+    muda nesta rodada, e uma despesa sob "Receita" bagunçaria o resumo. Receita sob
+    categoria de despesa é estorno e passa. Nome fora do catálogo ativo (categoria
+    renomeada, sub mesclada) não aborta: a linha é pulada e listada."""
+    cats = {_norm(c["nome"]): c for c in catalogo["categorias"]
+            if c.get("ativa", True) and not c.get("padrao")}
+    subs = {(s["categoria_id"], _norm(s["nome"])): s for s in catalogo["subcategorias"]
+            if s.get("ativa", True)}
+    corte = Decimal(str(limiar))
+
+    recusadas = [l["id"] for l in linhas
+                 if l.get("natureza") == "despesa"
+                 and cats.get(_norm(l.get("categoria")), {}).get("natureza") == "receita"]
+    if recusadas:
+        raise ValueError("despesa com categoria de receita (a natureza não muda nesta "
+                         f"rodada); planilha recusada. ids: {', '.join(recusadas)}")
+
+    r = {"limiar": corte, "aplicar": [], "desfazer": [], "abaixo": 0, "nenhuma": 0,
+         "pulados": [], "por_categoria": {}}
+    for l in linhas:
+        i = (l.get("id") or "").strip()
+        if _norm(l.get("categoria")) == NENHUMA:
+            r["nenhuma"] += 1
+            continue
+        if _dec(l.get("prob_categoria")) < corte:
+            r["abaixo"] += 1
+            continue
+        if not _uuid_valido(i):
+            r["pulados"].append({"id": i, "motivo": "id não é uuid"})
+            continue
+        cat = cats.get(_norm(l.get("categoria")))
+        if cat is None:
+            r["pulados"].append({"id": i, "motivo": f"categoria fora do catálogo: {l.get('categoria')!r}"})
+            continue
+        sub_nome = _sub(l.get("subcategoria"))
+        sub = None
+        if sub_nome:
+            sub = subs.get((cat["id"], sub_nome))
+            if sub is None:
+                r["pulados"].append({"id": i, "motivo": f"sub fora do catálogo: "
+                                     f"{cat['nome']} › {l.get('subcategoria')!r}"})
+                continue
+        if i not in origens:
+            r["pulados"].append({"id": i, "motivo": "não está mais no banco"})
+            continue
+        sub_id = sub["id"] if sub else None
+        r["aplicar"].append({"id": i, "sql": (
+            f"update transacoes set categoria_id = {_literal(cat['id'])}, "
+            f"subcategoria_id = {_literal(sub_id)}, origem_categoria = 'modelo' "
+            f"where id = {_literal(i)} and categoria_id = {_literal(id_padrao)};")})
+        r["desfazer"].append({"id": i, "sql": (
+            f"update transacoes set categoria_id = {_literal(id_padrao)}, "
+            f"subcategoria_id = null, origem_categoria = {_literal(origens[i])} "
+            f"where id = {_literal(i)} and categoria_id = {_literal(cat['id'])};")})
+        r["por_categoria"][cat["nome"]] = r["por_categoria"].get(cat["nome"], 0) + 1
+    return r
+
+
+def texto_resumo(r: dict) -> str:
+    aplicadas = len(r["aplicar"])
+    pendentes = r["abaixo"] + r["nenhuma"] + len(r["pulados"])
+    out = [f"{aplicadas} aplicadas, {pendentes} seguem pendentes "
+           f"(limiar {r['limiar']}: {r['abaixo']} abaixo, {r['nenhuma']} \"{NENHUMA}\", "
+           f"{len(r['pulados'])} puladas)"]
+    if r["por_categoria"]:
+        out.append("Por categoria:")
+        for nome, n in sorted(r["por_categoria"].items(), key=lambda kv: (-kv[1], kv[0])):
+            out.append(f"  {nome}: {n}")
+    if r["pulados"]:
+        out.append("Puladas (seguem pendentes):")
+        for p in r["pulados"]:
+            out.append(f"  {p['id']}: {p['motivo']}")
+    return "\n".join(out)
+
+
+def gravar_sql(r: dict, aplicar: pathlib.Path, desfazer: pathlib.Path) -> None:
+    """Sem begin/commit: tools/db.py ensaiar/aplicar abrem a transação e recusam
+    arquivo que a controla."""
+    for caminho, chave, titulo in ((aplicar, "aplicar", "aplica a classificação do JEV"),
+                                   (desfazer, "desfazer", "devolve à categoria padrão")):
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        corpo = [f"-- H3: {titulo} ({len(r[chave])} linhas, limiar {r['limiar']})"]
+        corpo += [u["sql"] for u in r[chave]]
+        caminho.write_text("\n".join(corpo) + "\n", encoding="utf-8")
+
+
+def cmd_gerar_sql(csv_entrada: pathlib.Path, limiar: float, aplicar: pathlib.Path,
+                  desfazer: pathlib.Path, *, ler_banco, saida=print):
+    """`ler_banco(ids)` → (catálogo ativo, id da padrão, id → origem_categoria). Só
+    leitura; quem grava é o `tools/db.py aplicar`, com permissão."""
+    linhas = ler_csv(csv_entrada)
+    ids = [(l.get("id") or "").strip() for l in linhas]
+    catalogo, id_padrao, origens = ler_banco([i for i in ids if _uuid_valido(i)])
+    try:
+        r = gerar_sql(linhas, catalogo, id_padrao, origens, limiar)
+    except ValueError as e:
+        raise SystemExit(f"RECUSADO: {e}. Nada foi gravado.")
+    gravar_sql(r, aplicar, desfazer)
+    saida(texto_resumo(r))
+    saida(f"gravados: {aplicar} e {desfazer}")
+    return r
+
+
+# ---------------------------------------------------------------------------
 # Banco (só leitura) e credenciais
 # ---------------------------------------------------------------------------
 
@@ -487,6 +639,18 @@ def ler_catalogo(cur) -> dict:
     cur.execute("select id, categoria_id, nome, ativa from subcategorias where ativa")
     subs = [{"id": r[0], "categoria_id": r[1], "nome": r[2], "ativa": r[3]} for r in cur.fetchall()]
     return {"categorias": cats, "subcategorias": subs}
+
+
+def ler_banco_gerar_sql(ids: list[str]):
+    """O que o gerar-sql precisa do banco, numa conexão só-leitura: catálogo ativo,
+    id da padrão e a origem_categoria atual de cada id (o desfazer devolve essa)."""
+    with conectar() as conn, conn.cursor() as cur:
+        catalogo = ler_catalogo(cur)
+        cur.execute("select id from categorias where padrao")
+        (id_padrao,) = cur.fetchone()
+        cur.execute("select id, origem_categoria from transacoes where id = any(%s::uuid[])", (ids,))
+        origens = {str(r[0]): r[1] for r in cur.fetchall()}
+    return catalogo, id_padrao, origens
 
 
 def conectar():
@@ -537,7 +701,27 @@ def main(argv=None):
     r.add_argument("--csv", type=pathlib.Path, default=CSV_PADRAO)
     r.add_argument("--pendentes", type=int, default=None,
                    help="contagem para o custo estimado (sem ela, lê do banco)")
+    c = sub.add_parser("classificar", help="H3: pergunta ao JEV sobre todas as pendentes")
+    c.add_argument("--csv", type=pathlib.Path, default=CSV_TODAS)
+    g = sub.add_parser("gerar-sql", help="H3: escreve aplicar.sql e desfazer.sql (não grava no banco)")
+    g.add_argument("--limiar", type=float, default=LIMIAR_PADRAO)
+    g.add_argument("--csv", type=pathlib.Path, default=CSV_TODAS)
+    g.add_argument("--aplicar", type=pathlib.Path, default=SQL_APLICAR)
+    g.add_argument("--desfazer", type=pathlib.Path, default=SQL_DESFAZER)
     args = ap.parse_args(argv)
+
+    if args.cmd == "gerar-sql":
+        cmd_gerar_sql(args.csv, args.limiar, args.aplicar, args.desfazer,
+                      ler_banco=ler_banco_gerar_sql)
+        return
+
+    if args.cmd == "classificar":
+        with conectar() as conn, conn.cursor() as cur:
+            todas = ler_pendentes(cur)
+            catalogo = ler_catalogo(cur)
+        print(f"pendentes: {len(todas)}")
+        classificar_todas(todas, catalogo, cliente_jev_real, csv_saida=args.csv)
+        return
 
     if args.cmd == "relatorio":
         pendentes = args.pendentes

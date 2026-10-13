@@ -399,3 +399,209 @@ def test_gabarito_e_copiado_para_a_planilha_nova(tmp_path):
     assert [(l["id"], l["gabarito_categoria"], l["gabarito_subcategoria"]) for l in linhas] == [
         ("p1", "Alimentação", "Ifood"), ("p2", "Compras", "Compras")]
     assert jev.medir(linhas, 10)["acerto_ambas"] == 2
+
+
+# --- H3: classificar todas as pendentes e gerar o SQL ----------------------
+# Planilha inventada (ids, descrições e valores fictícios): o gerar-sql só lê o que
+# o classificar gravou, então o teste monta as linhas direto, como sairiam do CSV.
+
+CATALOGO_H3 = {
+    "categorias": CATALOGO_H2["categorias"] + [
+        {"id": "kR", "nome": "Receita", "natureza": "receita", "padrao": False, "ativa": True}],
+    "subcategorias": CATALOGO_H2["subcategorias"],
+}
+PADRAO = "kN"
+
+
+def _uid(n):
+    return f"00000000-0000-4000-8000-{n:012d}"
+
+
+def _l(n, cat, p, sub="", natureza="despesa", origem="jev"):
+    linha = {c: "" for c in jev.COLUNAS}
+    linha.update(id=_uid(n), descricao=f"LOJA TESTE {n}", valor="10,00", natureza=natureza,
+                 fonte="fatura", categoria=cat, prob_categoria=p, subcategoria=sub,
+                 origem=origem)
+    return linha
+
+
+def _gerar(linhas, limiar=0.90, origens=None):
+    origens = origens if origens is not None else {l["id"]: "modelo" for l in linhas}
+    return jev.gerar_sql(linhas, CATALOGO_H3, PADRAO, origens, limiar)
+
+
+def _exemplo():
+    # o Exemplo do card: regra IFD*, 0,95, 0,70 e "nenhuma serve" a 0,99
+    return [_l(1, "Alimentação", "1,0000", "Ifood", origem="regra"),
+            _l(2, "Compras", "0,9500", "Compras"),
+            _l(3, "Saúde", "0,7000", "Farmácia"),
+            _l(4, NENHUMA, "0,9900")]
+
+
+def test_exemplo_do_card_duas_aplicadas_duas_seguem_pendentes():
+    r = _gerar(_exemplo())
+    assert [u["id"] for u in r["aplicar"]] == [_uid(1), _uid(2)]
+    assert len(r["desfazer"]) == 2
+    texto = jev.texto_resumo(r)
+    assert "2 aplicadas, 2 seguem pendentes" in texto
+    assert "Alimentação: 1" in texto and "Compras: 1" in texto
+
+
+def test_regra_ifd_com_prob_1_gravada_pelo_classificar_entra():
+    # a planilha grava a regra como "1,0" (float formatado): conta como 1
+    linha = jev.linha_csv(tx(id=_uid(9), descricao="IFD*X"), jev.regra_fixa(tx(descricao="IFD*X")))
+    assert len(_gerar([linha], limiar=0.99)["aplicar"]) == 1
+
+
+def test_limiar_corta_certo_090_entra_089_nao():
+    r = _gerar([_l(1, "Compras", "0,9000", "Compras"), _l(2, "Compras", "0,8900", "Compras")])
+    assert [u["id"] for u in r["aplicar"]] == [_uid(1)]
+    assert r["abaixo"] == 1
+    # e o limiar é parâmetro: a 0,85 as duas entram
+    assert len(_gerar([_l(1, "Compras", "0,9000"), _l(2, "Compras", "0,8900")], 0.85)["aplicar"]) == 2
+
+
+def test_nenhuma_serve_nao_entra_nem_com_confianca_alta():
+    r = _gerar([_l(1, NENHUMA, "0,9900")])
+    assert r["aplicar"] == [] and r["nenhuma"] == 1
+
+
+def test_todo_update_tem_a_guarda_pela_padrao():
+    # sem a guarda, o que o Caio reclassificou depois da rodada seria sobrescrito
+    r = _gerar(_exemplo())
+    for u in r["aplicar"]:
+        assert u["sql"].endswith(f"and categoria_id = '{PADRAO}';")
+        assert "origem_categoria = 'modelo'" in u["sql"]
+    assert r["aplicar"][0]["sql"] == (
+        f"update transacoes set categoria_id = 'kA', subcategoria_id = 'a1', "
+        f"origem_categoria = 'modelo' where id = '{_uid(1)}' and categoria_id = '{PADRAO}';")
+
+
+def test_sub_vazia_ou_sem_subcategoria_vira_null():
+    r = _gerar([_l(1, "Saúde", "0,9500", ""), _l(2, "Saúde", "0,9500", SEM_SUB)])
+    assert all("subcategoria_id = null" in u["sql"] for u in r["aplicar"])
+    assert len(r["aplicar"]) == 2
+
+
+def test_desfazer_espelha_o_aplicar_e_devolve_a_origem_lida_do_banco():
+    linhas = _exemplo()
+    # uma das pendentes era 'manual' antes: tem que voltar 'manual', não 'modelo'
+    origens = {_uid(1): "manual", _uid(2): "modelo", _uid(3): "modelo", _uid(4): "modelo"}
+    r = _gerar(linhas, origens=origens)
+    assert [u["id"] for u in r["desfazer"]] == [u["id"] for u in r["aplicar"]]
+    assert r["desfazer"][0]["sql"] == (
+        f"update transacoes set categoria_id = '{PADRAO}', subcategoria_id = null, "
+        f"origem_categoria = 'manual' where id = '{_uid(1)}' and categoria_id = 'kA';")
+    # a guarda é a categoria aplicada: se o Caio mexeu depois, o desfazer não pisa
+    assert r["desfazer"][1]["sql"].endswith(f"where id = '{_uid(2)}' and categoria_id = 'kC';")
+    assert "origem_categoria = 'modelo'" in r["desfazer"][1]["sql"]
+
+
+def test_nome_fora_do_catalogo_e_pulado_e_listado_sem_abortar():
+    linhas = [_l(1, "Categoria Que Sumiu", "0,9900"),
+              _l(2, "Compras", "0,9900", "Sub Que Sumiu"),
+              _l(3, "Compras", "0,9900", "Amazon"),
+              _l(4, "Compras", "0,9900", "Outros")]  # sub inativa (mesclada)
+    r = _gerar(linhas)
+    assert [u["id"] for u in r["aplicar"]] == [_uid(3)]
+    assert [p["id"] for p in r["pulados"]] == [_uid(1), _uid(2), _uid(4)]
+    texto = jev.texto_resumo(r)
+    assert "1 aplicadas, 3 seguem pendentes" in texto
+    for n in (1, 2, 4):
+        assert _uid(n) in texto
+
+
+def test_linha_que_nao_esta_mais_no_banco_e_pulada():
+    # o desfazer precisa da origem de antes; sem ela, a linha não entra
+    r = _gerar([_l(1, "Compras", "0,9900", "Amazon")], origens={})
+    assert r["aplicar"] == [] and [p["id"] for p in r["pulados"]] == [_uid(1)]
+
+
+def test_despesa_com_categoria_de_receita_recusa_a_planilha_inteira():
+    linhas = [_l(1, "Compras", "0,9900", "Amazon"), _l(2, "Receita", "0,5000")]
+    with pytest.raises(ValueError) as e:
+        _gerar(linhas)
+    assert _uid(2) in str(e.value)
+
+
+def test_receita_com_categoria_de_despesa_passa_e_natureza_nao_e_tocada():
+    # estorno de extrato/fatura: receita sob categoria de despesa
+    r = _gerar([_l(1, "Compras", "0,9900", "Amazon", natureza="receita")])
+    assert len(r["aplicar"]) == 1
+    assert all("natureza" not in u["sql"] for u in r["aplicar"] + r["desfazer"])
+
+
+def test_sql_nao_toca_associacoes_nem_controla_a_transacao(tmp_path):
+    from tools.db import controla_transacao
+
+    r = _gerar(_exemplo())
+    aplicar, desfazer = tmp_path / "aplicar.sql", tmp_path / "desfazer.sql"
+    jev.gravar_sql(r, aplicar, desfazer)
+    for arq in (aplicar, desfazer):
+        texto = arq.read_text(encoding="utf-8")
+        assert "associacoes" not in texto.lower()
+        # tools/db.py ensaiar/aplicar recusam arquivo com begin/commit/rollback
+        assert not controla_transacao(texto)
+        assert texto.lower().count("update transacoes") == 2
+
+
+def test_gerar_sql_recusado_nao_grava_os_arquivos(tmp_path):
+    csv_ = tmp_path / "todas.csv"
+    jev.gravar_csv(csv_, [_l(1, "Receita", "0,9900")])
+    aplicar, desfazer = tmp_path / "aplicar.sql", tmp_path / "desfazer.sql"
+    with pytest.raises(SystemExit):
+        jev.cmd_gerar_sql(csv_, 0.90, aplicar, desfazer, ler_banco=lambda ids: (
+            CATALOGO_H3, PADRAO, {i: "modelo" for i in ids}), saida=lambda *_: None)
+    assert not aplicar.exists() and not desfazer.exists()
+
+
+def test_gerar_sql_le_a_planilha_e_grava_os_dois_arquivos(tmp_path):
+    csv_ = tmp_path / "todas.csv"
+    jev.gravar_csv(csv_, _exemplo())
+    aplicar, desfazer = tmp_path / "aplicar.sql", tmp_path / "desfazer.sql"
+    pedidos = []
+
+    def ler_banco(ids):
+        pedidos.append(sorted(ids))
+        return CATALOGO_H3, PADRAO, {i: "modelo" for i in ids}
+
+    impresso = []
+    jev.cmd_gerar_sql(csv_, 0.90, aplicar, desfazer, ler_banco=ler_banco, saida=impresso.append)
+    assert aplicar.read_text(encoding="utf-8").count("update transacoes") == 2
+    assert desfazer.read_text(encoding="utf-8").count("update transacoes") == 2
+    assert pedidos == [sorted(_uid(n) for n in (1, 2, 3, 4))]
+    assert any("2 aplicadas, 2 seguem pendentes" in s for s in impresso)
+
+
+def test_id_que_nao_e_uuid_e_pulado():
+    # o id vai literal no SQL: só uuid válido passa (a planilha é editável)
+    linha = _l(1, "Compras", "0,9900", "Amazon")
+    linha["id"] = "x'; drop table transacoes; --"
+    r = _gerar([linha], origens={linha["id"]: "modelo"})
+    assert r["aplicar"] == [] and len(r["pulados"]) == 1
+
+
+def test_classificar_todas_acima_do_teto_nao_chama_o_jev(tmp_path):
+    cli = ClienteFalso({})
+    saida = tmp_path / "todas.csv"
+    r = jev.classificar_todas([tx(id=f"t{i}") for i in range(5)], CATALOGO_H3, cli,
+                              csv_saida=saida, teto=Decimal("0"), saida=lambda *_: None)
+    assert r is None and cli.chamadas == [] and not saida.exists()
+
+
+def test_classificar_todas_grava_a_planilha_com_as_colunas_da_amostra(tmp_path):
+    cli = ClienteFalso({"categoria": ("Compras", 0.95), "subcategoria": ("Amazon", 0.8)})
+    saida = tmp_path / "todas.csv"
+    jev.classificar_todas([tx(id="t1", descricao="IFD*X"), tx(id="t2", descricao="LOJA")],
+                          CATALOGO_H3, cli, csv_saida=saida, saida=lambda *_: None)
+    linhas = jev.ler_csv(saida)
+    assert list(linhas[0]) == jev.COLUNAS
+    assert [(l["categoria"], l["origem"]) for l in linhas] == [("Alimentação", "regra"),
+                                                               ("Compras", "jev")]
+    assert all(l["gabarito_categoria"] == "" for l in linhas)
+
+
+def test_planilhas_e_sql_do_h3_ficam_fora_do_git():
+    for arq in ("dados/jev/todas.csv", "dados/jev/aplicar.sql", "dados/jev/desfazer.sql"):
+        r = subprocess.run(["git", "check-ignore", "-q", arq], cwd=jev.ROOT, capture_output=True)
+        assert r.returncode == 0, arq
