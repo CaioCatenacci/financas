@@ -20,6 +20,7 @@ import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 import { parsePatrimonio, dataDaMensagem, caminhoPatrimonio, textoConfirmacao, montarPatrimonio } from "./patrimonio.js";
 import { montarCasa, validarParamCasa, paramVigente } from "./casa.js";
+import { montarLembrete, contasSemFotoDoMes, momentoDoLembrete, idsDaAllowlist, enviarLembrete } from "./lembrete.js";
 
 // vocabulário fechado de associacoes.tipo_chave (o check do schema diz o mesmo)
 const TIPOS_CHAVE = ["pix_cpf", "nome"];
@@ -248,6 +249,57 @@ function importacaoDoAplicar(b) {
   return null;
 }
 
+// G2: fechamento do mês — 12 meses terminando em `ate`. Coberturas e contagens em SQL
+// (importacoes, categoria padrão por flag); a regra do estado é pura (worker/fechamento.js) e
+// recebe o mês corrente de quem chama (rota /api/fechamento, Projeto Casa e o cron do G5).
+async function lerFechamentoDb(db, ate, mesCorrente) {
+  const meses = mesesAte(ate, 12);
+  const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+  const [coberturas, faturas, semCategoria, params, conversoes] = await Promise.all([
+    db.coberturaImportacoes(), db.faturasImportadas(de, ateExcl), db.semCategoriaPorMes(de, ateExcl),
+    db.salarioParams(), db.conversoes(),
+  ]);
+  // salário: cobertura = a última conversão, de qualquer origem (wise ou nomad)
+  const ultimaConversao = conversoes.reduce((m, c) => (!m || String(c.data) > m ? String(c.data).slice(0, 10) : m), null);
+  const salarios = alocarSalario(conversoes, params, meses);
+  return montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao });
+}
+
+// A2: patrimônio — 12 meses terminando em `ate`, mais o mês anterior ao primeiro (o rendimento do
+// 1º mês precisa da foto dele). Usado pela rota /api/patrimonio e pelo cron do G5 (mesma janela).
+async function lerPatrimonioDb(db, ate) {
+  const meses = mesesAte(ate, 12);
+  const de = primeiroDiaDoMes(mesAnterior(meses[0])), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+  const [linhas, aportes, periodosItau] = await Promise.all([
+    db.patrimonioPorDia(de, ateExcl), db.aportesInvestimentoPorMes(de, ateExcl), db.periodosImportacao("itau", "extrato"),
+  ]);
+  return montarPatrimonio(meses, { linhas, aportes, periodosItau });
+}
+
+// G5: lembrete do fechamento (cron dos dias 5 e 15). ALLOWLIST vazio → não lê nem manda nada
+// (falha fechada, como o webhook). Erro de banco ou de rede vai pro console.error: nunca lança
+// (o cron não tem a quem devolver o erro). O "mês fechado" para quando o diagnóstico é salvo.
+export async function executarLembrete(env, { agora = Date.now(), db = null, fetchImpl = (...a) => fetch(...a) } = {}) {
+  if (!idsDaAllowlist(env.ALLOWLIST).length) return;
+  try {
+    const { dia, mesCorrente, mesAnterior: mesAnt } = momentoDoLembrete(agora);
+    const banco = db || criarDb(neon(env.DATABASE_URL));
+    const [fechamento, patrimonio, diagnostico] = await Promise.all([
+      lerFechamentoDb(banco, mesAnt, mesCorrente), lerPatrimonioDb(banco, mesCorrente), banco.diagnosticoDoMes(mesAnt),
+    ]);
+    const texto = montarLembrete({
+      dia, mesCorrente,
+      mesAnterior: fechamento.find((m) => m.mes === mesAnt),
+      contasSemFoto: contasSemFotoDoMes(patrimonio, mesCorrente),
+      temDiagnostico: diagnostico != null,
+    });
+    if (!texto) return;
+    await enviarLembrete(texto, env.ALLOWLIST, env.TELEGRAM_TOKEN, fetchImpl, responder);
+  } catch (err) {
+    console.error("lembrete: falhou", err && err.message ? err.message : String(err));
+  }
+}
+
 export async function handleApi(request, env, url, dbOpt = null) {
   if (!tokenValido(request, env.APP_TOKEN)) return new Response("no", { status: 401 });
   const sql = dbOpt ? null : neon(env.DATABASE_URL);
@@ -438,18 +490,8 @@ export async function handleApi(request, env, url, dbOpt = null) {
   // 12 meses terminando em `ate`. Coberturas e contagens em SQL (importacoes, categoria padrão por
   // flag); a regra do estado é pura (worker/fechamento.js) e recebe o mês corrente daqui.
   // (lerFechamento também escolhe a janela do ritmo do Projeto Casa, G4)
-  const lerFechamento = async (ate, mesCorrente) => {
-    const meses = mesesAte(ate, 12);
-    const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
-    const [coberturas, faturas, semCategoria, params, conversoes] = await Promise.all([
-      db.coberturaImportacoes(), db.faturasImportadas(de, ateExcl), db.semCategoriaPorMes(de, ateExcl),
-      db.salarioParams(), db.conversoes(),
-    ]);
-    // salário: cobertura = a última conversão, de qualquer origem (wise ou nomad)
-    const ultimaConversao = conversoes.reduce((m, c) => (!m || String(c.data) > m ? String(c.data).slice(0, 10) : m), null);
-    const salarios = alocarSalario(conversoes, params, meses);
-    return montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao });
-  };
+  // (a leitura mora fora do handleApi porque o cron do lembrete, G5, usa a mesma regra)
+  const lerFechamento = (ate, mesCorrente) => lerFechamentoDb(db, ate, mesCorrente);
   if (url.pathname === "/api/fechamento" && request.method === "GET") {
     const ate = url.searchParams.get("ate");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
@@ -464,12 +506,7 @@ export async function handleApi(request, env, url, dbOpt = null) {
   if (url.pathname === "/api/patrimonio" && request.method === "GET") {
     const ate = url.searchParams.get("ate");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
-    const meses = mesesAte(ate, 12);
-    const de = primeiroDiaDoMes(mesAnterior(meses[0])), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
-    const [linhas, aportes, periodosItau] = await Promise.all([
-      db.patrimonioPorDia(de, ateExcl), db.aportesInvestimentoPorMes(de, ateExcl), db.periodosImportacao("itau", "extrato"),
-    ]);
-    return j({ ate, ...montarPatrimonio(meses, { linhas, aportes, periodosItau }) });
+    return j({ ate, ...(await lerPatrimonioDb(db, ate)) });
   }
 
   // ---- G4: Projeto Casa — quanto já temos e quando pagamos à vista ----
@@ -768,6 +805,10 @@ export async function handleApi(request, env, url, dbOpt = null) {
 }
 
 export default {
+  // G5: Cron Trigger do wrangler.toml (dias 5 e 15, 12h UTC); executarLembrete nunca lança
+  async scheduled(event, env, ctx) {
+    await executarLembrete(env, { agora: event.scheduledTime });
+  },
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (url.pathname === "/telegram") return handleTelegram(request, env);

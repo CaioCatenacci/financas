@@ -706,6 +706,28 @@ patrimônio já cobre sem cair abaixo da reserva, e em quanto tempo chegamos lá
   a foto mais antiga usada e a série de 12 meses do disponível; o formulário dos parâmetros fica no
   fim (e é a aba inteira enquanto não há parâmetro). Segue `#mesSel`.
 
+## 23. Lembrete do fechamento pelo Telegram (G5, 13/10/2026)
+
+O fechamento deixa de depender de o Caio abrir a aba: um **Cron Trigger** (`wrangler.toml`,
+`crons = ["0 12 5,15 * *"]`, 9h de Brasília) chama o `scheduled` de `worker/index.js`, que lê o mês
+anterior com a **mesma regra do `/api/fechamento`** (sem regra nova de "o que falta") e o patrimônio
+do mês corrente com a mesma janela do `/api/patrimonio`. Dia e meses saem de `event.scheduledTime`.
+
+- **Montagem pura** (`worker/lembrete.js`, `montarLembrete`): mês anterior faltando/parcial → lista
+  as fontes que não estão cheias (Itaú/C6 "extrato depois de DD/MM", fatura ausente, salário
+  estimado) e as sem categoria; fechado sem diagnóstico → "<Mês> fechado (N sem categoria, salário
+  estimado) — pode pedir o diagnóstico" (os dois só como **informação**); mais as contas sem print
+  do patrimônio no mês corrente.
+- **Conta sem print = `total_cents == null`** no mês corrente, nunca `origem = 'sem'` (que é "sem
+  rendimento" e vale para o Itaú calculado enquanto o extrato não cobre o mês, mesmo com foto).
+- **Pendência** = mês anterior não fechado, conta sem print, ou fechado sem diagnóstico. Sem
+  categoria e salário estimado de mês fechado **não** são pendência (senão o bot reclamaria todo dia
+  15). Sem pendência → `null`, silêncio, no dia 5 e no 15.
+- **"Uma vez" sem estado novo:** o aviso de mês fechado para quando `diagnosticos` tem o mês (G3);
+  nada de tabela nem migração.
+- **Envio:** `responder()` para cada id do `ALLOWLIST`; lista vazia → não lê nem manda (falha
+  fechada). Erro de banco ou de rede vai pro `console.error` (Workers Logs) e o cron nunca lança.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
