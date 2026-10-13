@@ -36,6 +36,16 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 
 ## Ideias ainda sem card
 
+- **P2 · Classificar o passado pendente com o JEV.** Usar o JEV (TypeSafe, modelo de decisão que
+  devolve a probabilidade do "sim" sem gerar texto, a US$ 0,042 por milhão de tokens) para sugerir
+  a categoria das ~1.260 transações em "Não Identificado", quase todas de faturas e extratos de
+  2025 e início de 2026. No LM Ateliê o spike B81 (03/10/2026, `docs/spikes/2026-10-jev.md` de lá)
+  deu ao JEV acerto parecido com o do Claude em classificação por título, a uma fração do custo.
+  Ideia: um lote que pergunta ao JEV, por transação, a probabilidade de cada categoria do catálogo
+  (ou um funil: categoria → subcategoria), aplica só acima de um limiar e deixa o resto para
+  triagem; o que for aplicado vira regra aprendida (`associacoes`) para os próximos imports. Precisa
+  de spike antes (acerto contra um gabarito do Caio numa amostra) — mesmo formato do B81. Ajuda o
+  G3 (diagnóstico) e o G2 (pendências do fechamento). Origem: conversa de 12/10/2026.
 - **P3 · Entrada malformada fora das rotas de grupo ainda vira 500.** `DELETE /api/transacoes/:id`
   (e o `del:` do Telegram), `PATCH /api/transacoes/:id` e as rotas por id de categorias,
   subcategorias e pessoas passam o id cru pro `::uuid`; corpo que não é JSON faz `request.json()`
