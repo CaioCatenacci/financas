@@ -429,6 +429,61 @@ export function gradeFechamento(resp) {
   return { colunas, linhas };
 }
 
+// ---- A2: patrimônio por print ----
+// O servidor decide o que conta (worker/patrimonio.js: foto do mês, títulos × agregado,
+// rendimento); aqui só a montagem da tela a partir de /api/patrimonio. Centavos inteiros na API.
+export const SEM_PATRIMONIO = "ainda não há print de patrimônio nestes 12 meses";
+
+// centavos inteiros → "R$ 1.234,56"; sem valor → "—" (null não é zero)
+export function reaisDeCents(c) {
+  if (c == null) return "—";
+  const neg = c < 0 ? "-" : "", abs = Math.abs(c);
+  return `${neg}R$ ${Math.floor(abs / 100).toLocaleString("pt-BR")},${String(abs % 100).padStart(2, "0")}`;
+}
+
+// mesmo rótulo do worker (rotuloRendimento): "calculado", "print", "sem rendimento (extrato pendente)"
+export function rotuloRendimentoApp(c) {
+  if (!c || c.origem === "sem" || !c.origem) return c && c.motivo ? `sem rendimento (${c.motivo})` : "sem rendimento";
+  return c.origem;
+}
+
+/**
+ * A tela do mês mais recente (`ate`) com a série dos 12 meses.
+ * @returns {{mes, total_cents, porPessoa, porConta, serie: Array<{mes, total_cents}>, vazio: boolean}}
+ */
+export function montarTelaPatrimonio(resp) {
+  const meses = (resp && resp.meses) || [];
+  const atual = meses[meses.length - 1] || { mes: resp && resp.ate, total_cents: null, porPessoa: [], porConta: [] };
+  const porPessoa = [...(atual.porPessoa || [])].sort((a, b) => b.total_cents - a.total_cents);
+  const porConta = (atual.porConta || [])
+    .map((c) => ({ conta: c.conta, pessoa: c.pessoa, data: c.data, total_cents: c.total_cents,
+      rendimento_cents: c.rendimento_cents ?? null, rendimento: rotuloRendimentoApp(c) }))
+    .sort((a, b) => (b.total_cents ?? -1) - (a.total_cents ?? -1));
+  const serie = meses.map((m) => ({ mes: m.mes, total_cents: m.total_cents ?? null }));
+  return { mes: atual.mes, total_cents: atual.total_cents ?? null, porPessoa, porConta, serie, vazio: serie.every((s) => s.total_cents == null) };
+}
+
+// HTML da aba: total da família, por pessoa, por conta (com o rendimento e a origem) e a série
+export function htmlPatrimonio(resp) {
+  const t = montarTelaPatrimonio(resp);
+  if (t.vazio) return `<div class="card"><p class="diag-vazio">${esc(SEM_PATRIMONIO)}</p></div>`;
+  const max = Math.max(1, ...t.serie.map((s) => s.total_cents || 0));
+  const ddmm = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}` : "");
+  return [
+    `<div class="card"><h2>Patrimônio da família</h2><p class="sub">foto de ${esc(t.mes)}</p>`,
+    `<p class="pat-total">${esc(reaisDeCents(t.total_cents))}</p>`,
+    `<ul class="pat-pessoas">${t.porPessoa.map((p) => `<li><span>${esc(p.pessoa)}</span> <strong>${esc(reaisDeCents(p.total_cents))}</strong></li>`).join("")}</ul></div>`,
+    `<div class="card"><h2>Por conta</h2><table class="pat-contas"><thead><tr><th>Conta</th><th>Pessoa</th><th>Print</th><th style="text-align:right">Saldo</th><th style="text-align:right">Rendimento do mês</th></tr></thead><tbody>`,
+    t.porConta.map((c) => `<tr><td>${esc(c.conta)}</td><td>${esc(c.pessoa)}</td><td>${esc(ddmm(c.data))}</td>`
+      + `<td style="text-align:right">${esc(reaisDeCents(c.total_cents))}</td>`
+      + `<td style="text-align:right">${c.rendimento_cents == null ? "" : esc(reaisDeCents(c.rendimento_cents)) + " "}<span class="pat-origem">${esc(c.rendimento)}</span></td></tr>`).join(""),
+    `</tbody></table></div>`,
+    `<div class="card"><h2>12 meses</h2><div class="pat-serie">`,
+    t.serie.map((s) => `<div class="pat-mes" title="${esc(reaisDeCents(s.total_cents))}"><div class="pat-barra" style="height:${s.total_cents == null ? 0 : Math.round((s.total_cents / max) * 100)}%"></div><span>${esc(s.mes.slice(5, 7))}/${esc(s.mes.slice(2, 4))}</span></div>`).join(""),
+    `</div></div>`,
+  ].join("");
+}
+
 // fonte gravada na transação: só 'extrato' ou 'fatura' (o C6 é extrato).
 export function fonteDoTipo(tipo) {
   return tipo === "fatura" ? "fatura" : "extrato";
@@ -1802,6 +1857,16 @@ if (typeof document !== "undefined") {
     } catch (e) { alert("Falha ao carregar diagnóstico: " + e.message); }
   }
 
+  // A2: 12 meses terminando no mês de #mesSel; a resposta velha não sobrescreve a nova
+  async function carregarPatrimonio() {
+    const mes = estado.mes;
+    try {
+      const resp = await apiGet(`/api/patrimonio?ate=${mes}`);
+      if (mes !== estado.mes) return;
+      $("#patrimonio").innerHTML = htmlPatrimonio(resp);
+    } catch (e) { alert("Falha ao carregar patrimônio: " + e.message); }
+  }
+
   // Recarrega só as transações (aba Lançamentos) com o range corrente — usado pela troca de
   // mês/"Todos os meses" p/ não refazer o fetch do Resumo (agora em carregarResumo()).
   async function carregarLancamentos() {
@@ -1827,12 +1892,14 @@ if (typeof document !== "undefined") {
     $("#ajustes").classList.toggle("hidden", v !== "ajustes");
     $("#planejamento").classList.toggle("hidden", v !== "planejamento");
     $("#diagnostico").classList.toggle("hidden", v !== "diagnostico");
+    $("#patrimonio").classList.toggle("hidden", v !== "patrimonio");
     if (v === "ajustes") drawAjustes();
     if (v === "importar") drawImportar();
     if (v === "lanc") carregarLancamentos();
     if (v === "planejamento") renderPlanejamento();
     if (v === "resumo") carregarResumo();
     if (v === "diagnostico") carregarDiagnostico();
+    if (v === "patrimonio") carregarPatrimonio();
   }));
 
   // Inc 4.5 Tarefa 7: mês global — agora governa Lançamentos, Planejamento E Resumo (os
@@ -1845,6 +1912,7 @@ if (typeof document !== "undefined") {
     else if (v === "planejamento") renderPlanejamento();
     else if (v === "resumo") carregarResumo();
     else if (v === "diagnostico") carregarDiagnostico();
+    else if (v === "patrimonio") carregarPatrimonio();
   });
   // G2: fonte que falta → aba Importar com o tipo daquela fonte; "ver 12 meses" abre/fecha a grade
   $("#fechamento").addEventListener("click", e => {
