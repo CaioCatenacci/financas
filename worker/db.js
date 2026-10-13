@@ -512,6 +512,53 @@ export function criarDb(sql) {
         order by de`;
     },
 
+    // ---- G4: Projeto Casa ----
+    // parâmetros com vigência (o vigente num mês é escolhido em worker/casa.js, paramVigente)
+    async casaParams() {
+      const rows = await sql`
+        select to_char(vigente_desde,'YYYY-MM-DD') as vigente_desde, custo_total_cents, reserva_cents,
+               to_char(data_alvo,'YYYY-MM-DD') as data_alvo
+        from projeto_casa_param
+        order by vigente_desde`;
+      return rows.map(r => ({ vigente_desde: r.vigente_desde, custo_total_cents: Number(r.custo_total_cents), reserva_cents: Number(r.reserva_cents), data_alvo: r.data_alvo ?? null }));
+    },
+
+    async setCasaParam({ vigente_desde, custo_total_cents, reserva_cents, data_alvo }) {
+      await sql`
+        insert into projeto_casa_param (vigente_desde, custo_total_cents, reserva_cents, data_alvo)
+        values (${vigente_desde}, ${custo_total_cents}, ${reserva_cents}, ${data_alvo ?? null})
+        on conflict (vigente_desde) do update
+          set custo_total_cents = excluded.custo_total_cents, reserva_cents = excluded.reserva_cents,
+              data_alvo = excluded.data_alvo`;
+    },
+
+    // despesa da categoria da obra por mês, na janela [de, ateExcl). A categoria é a da FLAG
+    // projeto_casa (nunca o nome: pode ser renomeada na aba Ajustes, até desativada). Mesmo
+    // critério de saldoPorMes (valor_final, despesa, conta_no_resumo): somada de volta ao saldo,
+    // cancela exatamente o que a obra tirou dele.
+    async despesaProjetoCasaPorMes(de, ateExcl) {
+      const rows = await sql`
+        select to_char(t.data,'YYYY-MM') as mes,
+               (round(coalesce(sum(t.valor_final), 0)*100))::bigint as despesa_cents
+        from transacoes t
+        join categorias c on c.id = t.categoria_id
+        where c.projeto_casa and t.natureza = 'despesa' and t.conta_no_resumo
+          and t.data >= ${de} and t.data < ${ateExcl}
+        group by 1
+        order by 1`;
+      return rows.map(r => ({ mes: r.mes, despesa_cents: Number(r.despesa_cents) }));
+    },
+
+    // já gasto na obra, desde sempre (sem filtro de data): abate do quanto falta
+    async jaGastoProjetoCasa() {
+      const rows = await sql`
+        select (round(coalesce(sum(t.valor_final), 0)*100))::bigint as cents
+        from transacoes t
+        join categorias c on c.id = t.categoria_id
+        where c.projeto_casa and t.natureza = 'despesa' and t.conta_no_resumo`;
+      return Number(rows[0]?.cents ?? 0);
+    },
+
     // ---- G3: diagnóstico mensal (texto markdown escrito pelo assistente; o app só guarda) ----
     async diagnosticoDoMes(mes) {
       const rows = await sql`

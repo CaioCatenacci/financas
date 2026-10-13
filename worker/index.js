@@ -19,6 +19,7 @@ import { montarFechamento, ultimoDiaDoMes } from "./fechamento.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 import { parsePatrimonio, dataDaMensagem, caminhoPatrimonio, textoConfirmacao, montarPatrimonio } from "./patrimonio.js";
+import { montarCasa, validarParamCasa, paramVigente } from "./casa.js";
 
 // vocabulário fechado de associacoes.tipo_chave (o check do schema diz o mesmo)
 const TIPOS_CHAVE = ["pix_cpf", "nome"];
@@ -413,28 +414,31 @@ export async function handleApi(request, env, url, dbOpt = null) {
   // 12 meses terminando em `ate` (padrão: mês corrente). Receita = salário alocado + outras
   // receitas que contam; despesa = o que conta. Somas em SQL (db.saldoPorMes, conta_no_resumo);
   // a alocação é JS puro (worker/salario.js). `estimado` vem do salário do mês.
-  if (url.pathname === "/api/saldo-mensal" && request.method === "GET") {
-    let ate = url.searchParams.get("ate");
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) ate = new Date().toISOString().slice(0, 7);
+  // (lerSaldoMensal também alimenta o ritmo do Projeto Casa, G4)
+  const lerSaldoMensal = async (ate) => {
     const meses = mesesAte(ate, 12);
     const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
     const [params, conversoes, somas] = await Promise.all([db.salarioParams(), db.conversoes(), db.saldoPorMes(de, ateExcl)]);
     const porMes = {};
     for (const s of somas) porMes[s.mes] = s;
     const salarios = alocarSalario(conversoes, params, meses);
-    return j(meses.map((mes, i) => {
+    return meses.map((mes, i) => {
       const s = porMes[mes] || { receita_cents: 0, despesa_cents: 0 };
       const receita_cents = s.receita_cents + (salarios[i].brl_cents || 0);
       return { mes, receita_cents, despesa_cents: s.despesa_cents, saldo_cents: receita_cents - s.despesa_cents, estimado: salarios[i].estimado };
-    }));
+    });
+  };
+  if (url.pathname === "/api/saldo-mensal" && request.method === "GET") {
+    let ate = url.searchParams.get("ate");
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) ate = new Date().toISOString().slice(0, 7);
+    return j(await lerSaldoMensal(ate));
   }
 
   // ---- G2: fechamento do mês — o que falta importar ----
   // 12 meses terminando em `ate`. Coberturas e contagens em SQL (importacoes, categoria padrão por
   // flag); a regra do estado é pura (worker/fechamento.js) e recebe o mês corrente daqui.
-  if (url.pathname === "/api/fechamento" && request.method === "GET") {
-    const ate = url.searchParams.get("ate");
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
+  // (lerFechamento também escolhe a janela do ritmo do Projeto Casa, G4)
+  const lerFechamento = async (ate, mesCorrente) => {
     const meses = mesesAte(ate, 12);
     const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
     const [coberturas, faturas, semCategoria, params, conversoes] = await Promise.all([
@@ -444,8 +448,13 @@ export async function handleApi(request, env, url, dbOpt = null) {
     // salário: cobertura = a última conversão, de qualquer origem (wise ou nomad)
     const ultimaConversao = conversoes.reduce((m, c) => (!m || String(c.data) > m ? String(c.data).slice(0, 10) : m), null);
     const salarios = alocarSalario(conversoes, params, meses);
+    return montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao });
+  };
+  if (url.pathname === "/api/fechamento" && request.method === "GET") {
+    const ate = url.searchParams.get("ate");
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
     const mesCorrente = new Date().toISOString().slice(0, 7);
-    return j({ ate, mes_corrente: mesCorrente, meses: montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao }) });
+    return j({ ate, mes_corrente: mesCorrente, meses: await lerFechamento(ate, mesCorrente) });
   }
 
   // ---- A2: patrimônio por print ----
@@ -461,6 +470,41 @@ export async function handleApi(request, env, url, dbOpt = null) {
       db.patrimonioPorDia(de, ateExcl), db.aportesInvestimentoPorMes(de, ateExcl), db.periodosImportacao("itau", "extrato"),
     ]);
     return j({ ate, ...montarPatrimonio(meses, { linhas, aportes, periodosItau }) });
+  }
+
+  // ---- G4: Projeto Casa — quanto já temos e quando pagamos à vista ----
+  // Parâmetros com vigência (custo, reserva, data alvo); sem nenhum, GET devolve null e a aba pede
+  // o formulário. /api/casa junta patrimônio (todo o histórico até `ate`: a foto carregada pode
+  // ser antiga), saldo do G1, fechamento do G2 e as somas da categoria da obra (pela flag
+  // projeto_casa, nunca o nome); a conta é pura (worker/casa.js).
+  if (url.pathname === "/api/casa/param" && request.method === "GET") {
+    let mes = url.searchParams.get("mes");
+    if (mes != null && !/^\d{4}-(0[1-9]|1[0-2])$/.test(mes)) return erroJson("mes inválido (use YYYY-MM)", 400);
+    mes = mes || new Date().toISOString().slice(0, 7);
+    return j(paramVigente(await db.casaParams(), mes));
+  }
+  if (url.pathname === "/api/casa/param" && request.method === "PUT") {
+    let b;
+    try { b = await body(); } catch { return erroJson("corpo inválido (JSON)", 400); }
+    const p = validarParamCasa(b);
+    if (p.erro) return erroJson(p.erro, 400);
+    await db.setCasaParam(p);
+    return j({ ok: true, param: p });
+  }
+  if (url.pathname === "/api/casa" && request.method === "GET") {
+    const ate = url.searchParams.get("ate");
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
+    const meses = mesesAte(ate, 12);
+    const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+    const mesCorrente = new Date().toISOString().slice(0, 7);
+    const [params, linhasPatrimonio, aportes, periodosItau, estados, saldos, despesaCasa, jaGastoCents] = await Promise.all([
+      db.casaParams(), db.patrimonioPorDia("1900-01-01", ateExcl),
+      db.aportesInvestimentoPorMes(primeiroDiaDoMes(mesAnterior(meses[0])), ateExcl), db.periodosImportacao("itau", "extrato"),
+      lerFechamento(ate, mesCorrente), lerSaldoMensal(ate), db.despesaProjetoCasaPorMes(de, ateExcl), db.jaGastoProjetoCasa(),
+    ]);
+    return j(montarCasa(meses, mesCorrente, {
+      param: paramVigente(params, ate), linhasPatrimonio, aportes, periodosItau, estados, saldos, despesaCasa, jaGastoCents,
+    }));
   }
 
   if (url.pathname === "/api/salario" && request.method === "GET") return j(await db.salarioParams());

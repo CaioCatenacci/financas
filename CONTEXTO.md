@@ -671,6 +671,41 @@ entra por **print da tela**, mandado pelo Telegram como um comprovante. É a bas
   sem}` e o `motivo`). Somas em SQL (`db.patrimonioPorDia`, `db.aportesInvestimentoPorMes`). Aba
   **"Patrimônio"**: total da família, por pessoa, por conta e a série dos 12 meses; segue `#mesSel`.
 
+## 22. Projeto Casa: quanto já temos e quando pagamos à vista (G4, 13/10/2026)
+
+A ideia é **pagar a casa à vista** e juntar mais antes para não descapitalizar; o financiamento é
+hipótese (simulador SAC/Price fica para um card próprio). A tela responde "quanto do custo o
+patrimônio já cobre sem cair abaixo da reserva, e em quanto tempo chegamos lá no ritmo atual".
+
+- **`projeto_casa_param(vigente_desde, custo_total_cents, reserva_cents, data_alvo)`** (migração
+  `0017`, sem semente: os valores entram pelo app). Vigência como o salário do G1: vale o mais
+  recente até o mês. `GET /api/casa/param[?mes=]` devolve o vigente ou `null`; `PUT` valida (400
+  legível) e grava no dia 01.
+- **Categoria `Projeto Casa` por flag** (`categorias.projeto_casa`, índice parcial único, como
+  `padrao`): o worker acha por `where projeto_casa`, nunca pelo nome (renomear ou desativar na aba
+  Ajustes não quebra). A migração cria a categoria só se nenhuma tiver a flag; **não** marca a
+  categoria doméstica que já tem "casa" no nome. A despesa **continua no resumo** (é gasto real) e
+  em `conta_no_resumo`; fica fora só do ritmo.
+- **Conta** (`worker/casa.js`, puro; `GET /api/casa?ate=YYYY-MM`, 12 meses):
+  - patrimônio do mês = soma das contas, com a **última foto de cada conta carregada para a
+    frente** (com a `data_foto` por conta). Antes da primeira foto: patrimônio, disponível, % e
+    falta **null**, nunca zero, e a aba pede "mande o primeiro print (/patrimonio …)";
+  - disponível = patrimônio − reserva; % = disponível ÷ custo; **falta = custo − disponível − já
+    gasto** (já gasto = despesa da Projeto Casa desde sempre, `conta_no_resumo`, soma em SQL);
+  - **ritmo**, uma vez só, ancorado em `ate`: média, nos **6 últimos meses `fechado`** do G2 (nunca
+    o corrente), de (saldo do G1 + despesa da Projeto Casa no mês: a obra é uso do dinheiro juntado,
+    não consumo) + **por conta**, a média do rendimento do A2 nos meses da janela em que existe (null
+    não vira zero; a resposta diz "N de 6" por conta);
+  - projeção = teto(falta ÷ ritmo) meses; ritmo ≤ 0 → sem projeção, com aviso; com `data_alvo`,
+    ritmo necessário = teto(falta ÷ meses de `ate` até a data), em centavos.
+  - Bordas (padrão do PM, **a confirmar pelo Caio**): menos de 6 fechados → média sobre os que houver
+    (`n_meses_ritmo`), 0 fechados → ritmo null; falta ≤ 0 → projeção 0 e ritmo necessário 0; data
+    alvo no mês de `ate` ou antes → ritmo necessário null, com aviso.
+- **Aba "Casa"**: barra disponível × custo, falta, ritmo (saldo + rendimento, "rendimento em N de 6
+  meses" por conta), projeção (meses e mês) ou o aviso, ritmo necessário só com data alvo, já gasto,
+  a foto mais antiga usada e a série de 12 meses do disponível; o formulário dos parâmetros fica no
+  fim (e é a aba inteira enquanto não há parâmetro). Segue `#mesSel`.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

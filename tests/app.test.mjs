@@ -9,7 +9,10 @@ import {
   rotuloEstadoFechamento, linhasFechamento, gradeFechamento, mesDoFechamento,
   markdownSimples, avisoMesParcial, htmlDiagnostico, AVISO_MES_PARCIAL, SEM_DIAGNOSTICO,
   montarTelaPatrimonio, htmlPatrimonio, reaisDeCents, rotuloRendimentoApp, SEM_PATRIMONIO,
+  parseBRtoCents, corpoParamCasa, montarTelaCasa, htmlCasa, SEM_FOTO_CASA,
 } from "../public/app.js";
+import { montarCasa } from "../worker/casa.js";
+import { mesesAte } from "../worker/salario.js";
 import { montarPreviewExtrato } from "../worker/importar.js";
 import { reconstruirTexto, abrirPdf } from "../public/pdf_extrair.js";
 import { parseExtrato } from "../worker/extrato.js";
@@ -1114,4 +1117,81 @@ test("A2 reaisDeCents e rotuloRendimentoApp: null é traço/sem rendimento, nunc
   assert.equal(reaisDeCents(-500), "-R$ 5,00");
   assert.equal(rotuloRendimentoApp({ origem: "calculado" }), "calculado");
   assert.equal(rotuloRendimentoApp({ origem: "sem", motivo: "sem print anterior" }), "sem rendimento (sem print anterior)");
+});
+
+// ---------- G4: aba Casa ----------
+// Respostas montadas pela própria função pura do worker (worker/casa.js), com números inventados:
+// o Exemplo do card (custo 1.000.000, reserva 300.000, patrimônio 900.000, ritmo 8.000, 20.000 já
+// gastos, data alvo em 36 meses).
+const casaMeses = mesesAte("2026-09", 12);
+const casaParam = { vigente_desde: "2026-01-01", custo_total_cents: 100000000, reserva_cents: 30000000, data_alvo: "2029-09-01" };
+const casaLinha = (mes) => ({ mes, data: `${mes}-28`, conta: "nubank", pessoa: "Paola", familia: "caixa", nivel: "agregado", saldo_cents: 90000000, rend_mes_cents: 600000, n_rend_mes: 1 });
+const casaResp = (extra = {}) => montarCasa(casaMeses, "2026-10", {
+  param: casaParam, linhasPatrimonio: ["2025-09", ...casaMeses].map(casaLinha),
+  estados: casaMeses.map((mes) => ({ mes, estado: "fechado" })),
+  saldos: casaMeses.map((mes) => ({ mes, saldo_cents: 200000 })), jaGastoCents: 2000000, ...extra,
+});
+
+test("G4 htmlCasa: barra disponível × custo, falta, ritmo com 'rendimento em N de 6 meses', projeção, ritmo necessário, já gasto, foto mais antiga e a série de 12 meses", () => {
+  const h = htmlCasa(casaResp(), casaParam);
+  assert.match(h, /casa-barra" style="width:60%"/);
+  assert.match(h, /R\$ 600\.000,00/);           // disponível
+  assert.match(h, /R\$ 1\.000\.000,00/);         // custo
+  assert.match(h, /Falta <strong>R\$ 380\.000,00/);
+  assert.match(h, /Ritmo mensal <strong>R\$ 8\.000,00/);
+  assert.match(h, /rendimento em 6 de 6 meses/);
+  assert.match(h, /48 meses \(set\/2030\)/);
+  assert.match(h, /Ritmo necessário <strong>R\$ 10\.555,56\/mês/);
+  assert.match(h, /Já gasto em Projeto Casa <strong>R\$ 20\.000,00/);
+  assert.match(h, /fotos desde 28\/09\/2026/);
+  assert.equal((h.match(/class="pat-mes"/g) || []).length, 12);
+});
+
+test("G4 htmlCasa: sem data alvo, a linha de ritmo necessário não aparece", () => {
+  const p = { ...casaParam, data_alvo: null };
+  assert.doesNotMatch(htmlCasa(casaResp({ param: p }), p), /Ritmo necessário/);
+});
+
+test("G4 htmlCasa: ritmo ≤ 0 mostra o aviso no lugar da projeção", () => {
+  const h = htmlCasa(casaResp({ saldos: casaMeses.map((mes) => ({ mes, saldo_cents: -5000000 })) }), casaParam);
+  assert.match(h, /Projeção <strong>ritmo ≤ 0/);
+});
+
+test("G4 htmlCasa: sem foto de patrimônio, mostra 'mande o primeiro print' no lugar dos números (null não vira R$ 0)", () => {
+  const resp = casaResp({ linhasPatrimonio: [] });
+  const t = montarTelaCasa(resp, casaParam);
+  assert.equal(t.estado, "sem_foto");
+  const h = htmlCasa(resp, casaParam);
+  assert.ok(h.includes(SEM_FOTO_CASA));
+  assert.ok(SEM_FOTO_CASA.includes("mande o primeiro print (/patrimonio …)"));
+  assert.doesNotMatch(h, /Falta|Ritmo mensal|casa-barra/);
+});
+
+test("G4 htmlCasa: com GET api/casa/param vazio (null), a aba é o formulário de custo, reserva e data alvo em vez dos números", () => {
+  const h = htmlCasa(casaResp({ param: null }), null);
+  assert.equal(montarTelaCasa(casaResp({ param: null }), null).estado, "param");
+  assert.doesNotMatch(h, /Falta|Ritmo mensal/);
+  // dinheiro em campo texto decimal (teclado BR), data alvo por mês
+  assert.match(h, /id="casaCusto" type="text" inputmode="decimal"/);
+  assert.match(h, /id="casaReserva" type="text" inputmode="decimal"/);
+  assert.match(h, /id="casaAlvo" type="month"/);
+  assert.match(h, /id="casaSalvar"/);
+});
+
+test("G4 corpoParamCasa: converte com parseBRtoCents (vírgula/ponto do teclado BR) e monta o PUT", () => {
+  assert.equal(parseBRtoCents("1.000.000,50"), 100000050);
+  assert.deepEqual(corpoParamCasa({ mes: "2026-10", custo: "1.000.000,00", reserva: "300.000", alvo: "2029-10" }).corpo,
+    { vigente_desde: "2026-10", custo_total_cents: 100000000, reserva_cents: 30000000, data_alvo: "2029-10-01" });
+  // reserva vazia é zero; data alvo vazia é sem data alvo
+  assert.deepEqual(corpoParamCasa({ mes: "2026-10", custo: "10", reserva: "", alvo: "" }).corpo,
+    { vigente_desde: "2026-10", custo_total_cents: 1000, reserva_cents: 0, data_alvo: null });
+  assert.match(corpoParamCasa({ mes: "2026-10", custo: "", reserva: "1", alvo: "" }).erro, /custo/);
+  assert.match(corpoParamCasa({ mes: "2026-10", custo: "0", reserva: "1", alvo: "" }).erro, /custo/);
+  assert.match(corpoParamCasa({ mes: "2026-10", custo: "10", reserva: "abc", alvo: "" }).erro, /reserva/);
+});
+
+test("G4 htmlCasa: o formulário vem preenchido com os parâmetros vigentes, em reais", () => {
+  const h = htmlCasa(casaResp(), casaParam);
+  assert.match(h, /id="casaCusto"[^>]*value="1\.000\.000,00"/);
+  assert.match(h, /id="casaAlvo"[^>]*value="2029-09"/);
 });

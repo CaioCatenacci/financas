@@ -80,3 +80,9 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   do A2 somam a categoria pelo nome (como a regra do classificador e a migração `0012`); renomear
   a categoria na aba Ajustes zera os aportes sem aviso. Uma flag na categoria (como `padrao`)
   resolveria. Origem: A2 (12/10/2026).
+- **P3 · Simulador de financiamento (SAC/Price) do Projeto Casa.** Ficou fora do G4 de propósito
+  (a prioridade é pagar à vista); quando vier, card próprio com valores de referência editáveis,
+  ao lado da aba Casa. Origem: G4 (13/10/2026).
+- **P3 · Bordas do ritmo da casa a confirmar.** Menos de 6 meses fechados (média sobre os que
+  houver), falta ≤ 0 (projeção 0) e data alvo vencida (ritmo necessário null) seguem o padrão do
+  PM (CONTEXTO §22); o Caio confirma ou corrige. Origem: G4 (13/10/2026).

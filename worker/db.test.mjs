@@ -1164,3 +1164,73 @@ test("A2: periodosImportacao devolve cada período da fonte (não só o max)", a
   assert.deepEqual(sql.chamadas[0].values, ["itau", "extrato"]);
   assert.deepEqual(r, [{ de: "2025-07-01", ate: "2026-09-02" }]);
 });
+
+// ---- G4: Projeto Casa ----
+// banco fake que responde às somas da obra como o Postgres responderia ao WHERE: acha a categoria
+// pela flag quando a query usa `c.projeto_casa`, pelo nome quando a query trouxer o nome. A
+// categoria foi RENOMEADA na aba Ajustes ("Obra"): quem procura pelo nome não acha mais nada.
+function sqlObraFake() {
+  const categorias = [
+    { id: "cObra", nome: "Obra", projeto_casa: true },        // era "Projeto Casa"
+    { id: "cCasaDom", nome: "Casa", projeto_casa: false },     // gasto doméstico: não é a obra
+  ];
+  const transacoes = [
+    { data: "2026-08-10", categoria_id: "cObra", natureza: "despesa", conta_no_resumo: true, valor_final: 1200.5 },
+    { data: "2025-01-10", categoria_id: "cObra", natureza: "despesa", conta_no_resumo: true, valor_final: 800 },
+    { data: "2026-08-11", categoria_id: "cObra", natureza: "despesa", conta_no_resumo: false, valor_final: 999 }, // membro de grupo
+    { data: "2026-08-12", categoria_id: "cCasaDom", natureza: "despesa", conta_no_resumo: true, valor_final: 300 },
+  ];
+  const chamadas = [];
+  const fn = (strings, ...values) => {
+    const text = strings.join("?");
+    chamadas.push({ text, values });
+    const daObra = (t) => {
+      const c = categorias.find((x) => x.id === t.categoria_id);
+      if (/c\.projeto_casa/.test(text)) return c.projeto_casa;
+      return values.includes(c.nome) || text.includes(`'${c.nome}'`);
+    };
+    const [de, ateExcl] = values;
+    const linhas = transacoes.filter((t) => daObra(t) && t.natureza === "despesa" && (!/conta_no_resumo/.test(text) || t.conta_no_resumo)
+      && (de === undefined || (t.data >= de && t.data < ateExcl)));
+    if (/group by/i.test(text)) {
+      const porMes = {};
+      for (const t of linhas) porMes[t.data.slice(0, 7)] = (porMes[t.data.slice(0, 7)] || 0) + Math.round(t.valor_final * 100);
+      return Promise.resolve(Object.entries(porMes).map(([mes, c]) => ({ mes, despesa_cents: String(c) })));
+    }
+    return Promise.resolve([{ cents: String(linhas.reduce((s, t) => s + Math.round(t.valor_final * 100), 0)) }]);
+  };
+  fn.chamadas = chamadas;
+  return fn;
+}
+
+test("G4 despesaProjetoCasaPorMes acha a categoria pela flag mesmo renomeada, soma em SQL só o que conta no resumo", async () => {
+  const sql = sqlObraFake();
+  const db = criarDb(sql);
+  const r = await db.despesaProjetoCasaPorMes("2026-01-01", "2026-10-01");
+  assert.deepEqual(r, [{ mes: "2026-08", despesa_cents: 120050 }]);
+  const q = sql.chamadas[0].text;
+  assert.match(q, /sum\(/i);
+  assert.match(q, /conta_no_resumo/);
+  assert.doesNotMatch(q, /computa_resumo/);
+  assert.doesNotMatch(q, /Projeto Casa/);
+});
+
+test("G4 jaGastoProjetoCasa soma a obra desde sempre (sem filtro de data), pela flag, com conta_no_resumo", async () => {
+  const sql = sqlObraFake();
+  const db = criarDb(sql);
+  assert.equal(await db.jaGastoProjetoCasa(), 200050);
+  const q = sql.chamadas[0].text;
+  assert.deepEqual(sql.chamadas[0].values, []); // sem janela de data
+  assert.match(q, /c\.projeto_casa/);
+  assert.match(q, /conta_no_resumo/);
+  assert.doesNotMatch(q, /Projeto Casa/);
+});
+
+test("G4 casaParams converte bigint e data_alvo; setCasaParam faz upsert por vigente_desde", async () => {
+  const sql = fakeSql([{ vigente_desde: "2026-10-01", custo_total_cents: "100000000", reserva_cents: "30000000", data_alvo: null }]);
+  const db = criarDb(sql);
+  assert.deepEqual(await db.casaParams(), [{ vigente_desde: "2026-10-01", custo_total_cents: 100000000, reserva_cents: 30000000, data_alvo: null }]);
+  await db.setCasaParam({ vigente_desde: "2026-10-01", custo_total_cents: 1, reserva_cents: 0, data_alvo: "2029-01-01" });
+  assert.match(sql.chamadas[1].text, /on conflict \(vigente_desde\) do update/i);
+  assert.deepEqual(sql.chamadas[1].values, ["2026-10-01", 1, 0, "2029-01-01"]);
+});
