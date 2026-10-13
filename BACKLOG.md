@@ -42,6 +42,11 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   descartada e vale a da mensagem. E prints sem nome (os do Itaú) não trazem a pessoa: só entram
   com `/patrimonio caio itau` na legenda; avaliar se a conta implica a pessoa por padrão
   (ex.: itau → Caio) para não depender da legenda. Origem: smoke do A2 (13/10/2026).
+  Mais dois do mesmo smoke, corrigidos à mão no banco: o print-resumo do Itaú ("meus
+  investimentos", só o total) entrou como produto da família `outros` e somaria por cima das
+  famílias; e o Tesouro ("TIT PUBLICO") veio como agregado e sumiria quando há títulos de renda
+  fixa. Proposta: o prompt marca print que só tem o total da carteira e ele não grava produto;
+  Tesouro é sempre `titulo`.
 - **P2 · Classificar o passado pendente com o JEV.** Usar o JEV (TypeSafe, modelo de decisão que
   devolve a probabilidade do "sim" sem gerar texto, a US$ 0,042 por milhão de tokens) para sugerir
   a categoria das ~1.260 transações em "Não Identificado", quase todas de faturas e extratos de
