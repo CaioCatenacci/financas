@@ -11,3 +11,8 @@ binding = "ASSETS"
 # sem precisar de `wrangler tail` aberto na hora (E6).
 [observability]
 enabled = true
+
+# G5: lembrete do fechamento pelo Telegram — dias 5 e 15, 12h UTC (9h de Brasília).
+# O Worker trata no `scheduled` de worker/index.js.
+[triggers]
+crons = ["0 12 5,15 * *"]
