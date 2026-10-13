@@ -1646,3 +1646,118 @@ test("A2 GET /api/patrimonio com ate inválido ou ausente → 400, sem ler o ban
     assert.equal((await handleApi(req, envApi, new URL(req.url), {})).status, 400, q);
   }
 });
+
+// ---------- G4: Projeto Casa ----------
+// Números inventados (repositório público). O fake grava o que o handler pediu ao banco.
+function dbCasaFake({ params = [], linhas = [] } = {}) {
+  const estado = { gravados: [], janelas: {} };
+  return {
+    estado,
+    casaParams: async () => params,
+    setCasaParam: async (p) => { estado.gravados.push(p); },
+    patrimonioPorDia: async (de, ateExcl) => { estado.janelas.patrimonio = { de, ateExcl }; return linhas; },
+    aportesInvestimentoPorMes: async () => [],
+    periodosImportacao: async () => [],
+    coberturaImportacoes: async () => [{ conta: "itau", tipo: "extrato", ate: "2026-09-30" }, { conta: "c6", tipo: "extrato", ate: "2026-09-30" }],
+    faturasImportadas: async () => ["2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"],
+    semCategoriaPorMes: async () => [],
+    salarioParams: async () => [],
+    conversoes: async () => [],
+    saldoPorMes: async (de, ateExcl) => {
+      estado.janelas.saldo = { de, ateExcl };
+      const out = [];
+      for (let m = 1; m <= 9; m++) out.push({ mes: `2026-0${m}`, receita_cents: 1000000, despesa_cents: m === 8 ? 900000 : 800000 });
+      return out;
+    },
+    despesaProjetoCasaPorMes: async (de, ateExcl) => { estado.janelas.casa = { de, ateExcl }; return [{ mes: "2026-08", despesa_cents: 100000 }]; },
+    jaGastoProjetoCasa: async () => 2000000,
+  };
+}
+const putCasa = (corpo) => new Request("http://localhost/api/casa/param", {
+  method: "PUT", headers: { "Cookie": "token=token123", "content-type": "application/json" },
+  body: typeof corpo === "string" ? corpo : JSON.stringify(corpo),
+});
+
+test("G4 /api/casa e /api/casa/param sem token → 401, sem tocar no banco", async () => {
+  for (const [path, method] of [["/api/casa?ate=2026-09", "GET"], ["/api/casa/param", "GET"], ["/api/casa/param", "PUT"]]) {
+    const req = new Request(`http://localhost${path}`, { method, body: method === "PUT" ? "{}" : undefined });
+    assert.equal((await handleApi(req, envApi, new URL(req.url), {})).status, 401, `${method} ${path}`);
+  }
+});
+
+test("G4 PUT /api/casa/param: cada valor inválido volta 400 com mensagem legível e nada chega ao banco", async () => {
+  const db = dbCasaFake();
+  const ok = { vigente_desde: "2026-10", custo_total_cents: 100000000, reserva_cents: 30000000, data_alvo: null };
+  const casos = [
+    [{ ...ok, vigente_desde: "outubro" }, /vigente_desde/],
+    [{ ...ok, vigente_desde: "2026-13" }, /vigente_desde/],
+    [{ ...ok, vigente_desde: "2026-02-30" }, /vigente_desde/],
+    [{ ...ok, custo_total_cents: 0 }, /custo_total_cents/],
+    [{ ...ok, custo_total_cents: 1000.5 }, /custo_total_cents/],
+    [{ ...ok, custo_total_cents: "1000" }, /custo_total_cents/],
+    [{ ...ok, reserva_cents: -1 }, /reserva_cents/],
+    [{ ...ok, reserva_cents: 1.5 }, /reserva_cents/],
+    [{ ...ok, data_alvo: "2029-13-01" }, /data_alvo/],
+    [{ ...ok, data_alvo: "amanhã" }, /data_alvo/],
+    ["não é json", /corpo/],
+  ];
+  for (const [corpo, msg] of casos) {
+    const r = await handleApi(putCasa(corpo), envApi, new URL("http://localhost/api/casa/param"), db);
+    assert.equal(r.status, 400, JSON.stringify(corpo));
+    assert.match((await r.json()).erro, msg);
+  }
+  assert.equal(db.estado.gravados.length, 0);
+});
+
+test("G4 PUT /api/casa/param grava o parâmetro (vigente no dia 01); GET devolve o vigente, ou null sem nenhum", async () => {
+  const db = dbCasaFake();
+  const r = await handleApi(putCasa({ vigente_desde: "2026-10-12", custo_total_cents: 100000000, reserva_cents: 30000000, data_alvo: "2029-10-01" }), envApi, new URL("http://localhost/api/casa/param"), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(db.estado.gravados, [{ vigente_desde: "2026-10-01", custo_total_cents: 100000000, reserva_cents: 30000000, data_alvo: "2029-10-01" }]);
+
+  const vazio = reqApi("/api/casa/param", "GET");
+  assert.equal(await (await handleApi(vazio, envApi, new URL(vazio.url), dbCasaFake())).json(), null);
+
+  const params = [{ vigente_desde: "2026-01-01", custo_total_cents: 1, reserva_cents: 0, data_alvo: null },
+    { vigente_desde: "2026-08-01", custo_total_cents: 2, reserva_cents: 0, data_alvo: null }];
+  const get = reqApi("/api/casa/param?mes=2026-09", "GET");
+  assert.equal((await (await handleApi(get, envApi, new URL(get.url), dbCasaFake({ params }))).json()).custo_total_cents, 2);
+  const ruim = reqApi("/api/casa/param?mes=2026-9", "GET");
+  assert.equal((await handleApi(ruim, envApi, new URL(ruim.url), dbCasaFake({ params }))).status, 400);
+});
+
+test("G4 GET /api/casa com ate inválido ou ausente → 400, sem ler o banco", async () => {
+  for (const q of ["", "?ate=2026-13", "?ate=2026-9", "?ate=x"]) {
+    const req = reqApi(`/api/casa${q}`, "GET");
+    assert.equal((await handleApi(req, envApi, new URL(req.url), {})).status, 400, q);
+  }
+});
+
+test("G4 GET /api/casa?ate= junta patrimônio (todo o histórico), saldo do G1, fechamento e a obra pela flag", async () => {
+  const linhas = [{ mes: "2025-03", data: "2025-03-05", conta: "c6", pessoa: "Caio", familia: "caixa", nivel: "agregado", saldo_cents: 90000000, rend_mes_cents: null, n_rend_mes: 0 }];
+  const params = [{ vigente_desde: "2026-01-01", custo_total_cents: 100000000, reserva_cents: 30000000, data_alvo: null }];
+  const db = dbCasaFake({ params, linhas });
+  const req = reqApi("/api/casa?ate=2026-09", "GET");
+  const r = await handleApi(req, envApi, new URL(req.url), db);
+  assert.equal(r.status, 200);
+  const data = await r.json();
+  assert.equal(data.meses.length, 12);
+  assert.equal(data.meses[0].mes, "2025-10");
+  // a foto de março/2025 (antes dos 12 meses) é carregada: o patrimônio lê desde o começo
+  assert.equal(db.estado.janelas.patrimonio.ateExcl, "2026-10-01");
+  assert.ok(db.estado.janelas.patrimonio.de <= "2025-03-01");
+  assert.deepEqual(db.estado.janelas.casa, { de: "2025-10-01", ateExcl: "2026-10-01" });
+  const set = data.meses[11];
+  assert.equal(set.patrimonio_cents, 90000000);
+  assert.equal(set.data_foto_mais_antiga, "2025-03-05");
+  assert.equal(set.disponivel_cents, 60000000);
+  assert.equal(set.falta_cents, 100000000 - 60000000 - 2000000);
+  assert.equal(data.ja_gasto_cents, 2000000);
+  // janela: 6 últimos fechados (2026-04..09 se o mês corrente for depois deles) — saldo 2.000 por mês;
+  // agosto teve 1.000 de obra, somada de volta (saldo 1.000 + 1.000)
+  if (new Date().toISOString().slice(0, 7) > "2026-09") {
+    assert.deepEqual(data.janela_ritmo, ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09"]);
+    assert.equal(data.ritmo_cents, 200000);
+    assert.equal(data.projecao_meses, Math.ceil(38000000 / 200000));
+  }
+});

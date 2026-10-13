@@ -9,8 +9,11 @@ create table categorias (
   id       uuid primary key default gen_random_uuid(),
   nome     text not null unique,
   natureza text not null default 'despesa' check (natureza in ('despesa','receita')),
-  ativa    boolean not null default true
+  ativa    boolean not null default true,
+  -- G4 (0017): a categoria da obra, achada pela flag (nunca pelo nome); só uma tem a flag
+  projeto_casa boolean not null default false
 );
+create unique index categorias_projeto_casa_unica on categorias (projeto_casa) where projeto_casa;
 create table subcategorias (
   id           uuid primary key default gen_random_uuid(),
   categoria_id uuid not null references categorias(id),
@@ -154,3 +157,11 @@ create table patrimonio (
   criado_em              timestamptz not null default now()
 );
 create index idx_patrimonio_data on patrimonio (data, conta);
+
+-- G4: Projeto Casa — parâmetros com vigência (como salario_param); sem semente, entram pelo app.
+create table projeto_casa_param (
+  vigente_desde     date   primary key,           -- sempre dia 01 do mês
+  custo_total_cents bigint not null check (custo_total_cents > 0),
+  reserva_cents     bigint not null check (reserva_cents >= 0),
+  data_alvo         date
+);
