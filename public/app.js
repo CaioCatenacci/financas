@@ -484,6 +484,120 @@ export function htmlPatrimonio(resp) {
   ].join("");
 }
 
+// ---- G4: Projeto Casa ----
+// O servidor faz a conta (worker/casa.js); aqui só a tela a partir de /api/casa e
+// /api/casa/param. Centavos inteiros na API; null é "sem dado", nunca zero.
+export const SEM_FOTO_CASA = "mande o primeiro print (/patrimonio …)";
+export const SEM_PARAM_CASA = "preencha custo, reserva e data alvo do Projeto Casa";
+
+// Espelha parseBRtoCents de worker/money.js (este arquivo não importa código do Worker): teclado
+// BR entrega vírgula e o campo é type="text" + inputmode="decimal". Serve ao Planejamento e à Casa.
+export function parseBRtoCents(str) {
+  if (typeof str !== "string") return null;
+  let s = str.replace(/R\$\s*/i, "").trim();
+  if (!s) return null;
+  if (s.startsWith("-")) return null;
+  s = s.replace(/\./g, "");
+  if (s.includes(",")) s = s.replace(",", ".");
+  if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
+  return Math.round(parseFloat(s) * 100);
+}
+
+/**
+ * Corpo do PUT /api/casa/param a partir do formulário (strings). Data alvo vem do
+ * <input type="month"> ('YYYY-MM' → dia 01); vazia = sem data alvo.
+ * @returns {{corpo: object} | {erro: string}}
+ */
+export function corpoParamCasa({ mes, custo, reserva, alvo }) {
+  const custo_total_cents = parseBRtoCents(String(custo ?? ""));
+  if (!custo_total_cents) return { erro: "custo inválido (ex.: 1.000.000,00)" };
+  const reserva_cents = String(reserva ?? "").trim() === "" ? 0 : parseBRtoCents(String(reserva));
+  if (reserva_cents == null) return { erro: "reserva inválida (ex.: 300.000,00)" };
+  const a = String(alvo ?? "").trim();
+  if (a && !/^\d{4}-(0[1-9]|1[0-2])$/.test(a)) return { erro: "data alvo inválida" };
+  return { corpo: { vigente_desde: mes, custo_total_cents, reserva_cents, data_alvo: a ? `${a}-01` : null } };
+}
+
+const MESES_CURTOS = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const mesExtenso = (ym) => (ym ? `${MESES_CURTOS[Number(ym.slice(5, 7)) - 1]}/${ym.slice(0, 4)}` : "");
+const dataBR = (iso) => (iso ? `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}` : "");
+
+/**
+ * A tela da aba Casa. `estado`: 'param' (sem parâmetros: só o formulário), 'sem_foto' (o aviso no
+ * lugar dos números) ou 'numeros'.
+ */
+export function montarTelaCasa(casa, param) {
+  if (!param) return { estado: "param" };
+  const meses = (casa && casa.meses) || [];
+  const atual = meses[meses.length - 1] || {};
+  if (atual.patrimonio_cents == null) return { estado: "sem_foto", param };
+  const avisos = (casa && casa.avisos) || [];
+  const ritmoAviso = avisos.find((a) => /^ritmo ≤ 0/.test(a)) || null;
+  let projecao;
+  if (casa.projecao_meses === 0) projecao = "o disponível já cobre o custo";
+  else if (casa.projecao_meses != null) projecao = `${casa.projecao_meses} ${casa.projecao_meses === 1 ? "mês" : "meses"} (${mesExtenso(casa.projecao_mes)})`;
+  else if (ritmoAviso) projecao = ritmoAviso;
+  else projecao = "sem projeção: nenhum mês fechado para medir o ritmo";
+  let ritmoNecessario = null;
+  if (param.data_alvo) {
+    ritmoNecessario = casa.ritmo_necessario_cents != null
+      ? `${reaisDeCents(casa.ritmo_necessario_cents)}/mês até ${mesExtenso(String(param.data_alvo).slice(0, 7))}`
+      : (avisos.find((a) => /^data alvo/.test(a)) || "sem ritmo necessário");
+  }
+  return {
+    estado: "numeros", param,
+    mes: atual.mes,
+    disponivel_cents: atual.disponivel_cents, custo_cents: param.custo_total_cents,
+    pct: atual.pct_coberto, barra: Math.max(0, Math.min(100, atual.pct_coberto ?? 0)),
+    falta_cents: atual.falta_cents,
+    ritmo_cents: casa.ritmo_cents, n_meses_ritmo: casa.n_meses_ritmo || 0,
+    saldo_medio_cents: casa.saldo_medio_cents, rendimento_medio_cents: casa.rendimento_medio_cents,
+    rendimentoPorConta: (casa.rendimento_meses_por_conta || []).map((c) => `${c.conta} (${c.pessoa}): rendimento em ${c.n_meses} de ${c.de_meses} meses`),
+    projecao, ritmoNecessario,
+    ja_gasto_cents: casa.ja_gasto_cents || 0,
+    foto_mais_antiga: atual.data_foto_mais_antiga,
+    serie: meses.map((m) => ({ mes: m.mes, disponivel_cents: m.disponivel_cents ?? null })),
+  };
+}
+
+// formulário dos parâmetros (custo, reserva, data alvo); dinheiro em campo de texto decimal
+export function htmlFormCasa(param) {
+  const v = (c) => (c == null ? "" : reaisDeCents(c).replace("R$ ", ""));
+  const alvo = param && param.data_alvo ? String(param.data_alvo).slice(0, 7) : "";
+  return `<div class="card"><h2>Parâmetros do Projeto Casa</h2>`
+    + (param ? "" : `<p class="diag-vazio">${esc(SEM_PARAM_CASA)}</p>`)
+    + `<div class="casa-form">`
+    + `<label>Custo total <input id="casaCusto" type="text" inputmode="decimal" value="${esc(v(param && param.custo_total_cents))}" placeholder="1.000.000,00"></label>`
+    + `<label>Reserva a preservar <input id="casaReserva" type="text" inputmode="decimal" value="${esc(v(param && param.reserva_cents))}" placeholder="300.000,00"></label>`
+    + `<label>Data alvo <input id="casaAlvo" type="month" value="${esc(alvo)}"></label>`
+    + `<button id="casaSalvar" class="chip" type="button">Salvar</button></div></div>`;
+}
+
+export function htmlCasa(casa, param) {
+  const t = montarTelaCasa(casa, param);
+  if (t.estado === "param") return htmlFormCasa(null);
+  if (t.estado === "sem_foto") return `<div class="card"><h2>Projeto Casa</h2><p class="diag-vazio">${esc(SEM_FOTO_CASA)}</p></div>` + htmlFormCasa(param);
+  const max = Math.max(1, ...t.serie.map((s) => s.disponivel_cents || 0));
+  const pct = t.pct == null ? "" : `${String(t.pct).replace(".", ",")}%`;
+  return [
+    `<div class="card"><h2>Projeto Casa</h2><p class="sub">${esc(mesExtenso(t.mes))} · patrimônio com fotos desde ${esc(dataBR(t.foto_mais_antiga))}</p>`,
+    `<div class="casa-progresso"><div class="casa-barra" style="width:${t.barra}%"></div></div>`,
+    `<p class="casa-linha">Disponível <strong>${esc(reaisDeCents(t.disponivel_cents))}</strong> de ${esc(reaisDeCents(t.custo_cents))} <span class="pat-origem">${esc(pct)}</span></p>`,
+    `<p class="casa-linha">Falta <strong>${esc(reaisDeCents(t.falta_cents))}</strong></p>`,
+    `<p class="casa-linha">Já gasto em Projeto Casa <strong>${esc(reaisDeCents(t.ja_gasto_cents))}</strong></p></div>`,
+    `<div class="card"><h2>Ritmo</h2>`,
+    `<p class="casa-linha">Ritmo mensal <strong>${esc(reaisDeCents(t.ritmo_cents))}</strong> <span class="pat-origem">saldo ${esc(reaisDeCents(t.saldo_medio_cents))} + rendimento ${esc(reaisDeCents(t.rendimento_medio_cents))} · média de ${t.n_meses_ritmo} ${t.n_meses_ritmo === 1 ? "mês fechado" : "meses fechados"}</span></p>`,
+    t.rendimentoPorConta.length ? `<ul class="casa-contas">${t.rendimentoPorConta.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : "",
+    `<p class="casa-linha">Projeção <strong>${esc(t.projecao)}</strong></p>`,
+    t.ritmoNecessario ? `<p class="casa-linha">Ritmo necessário <strong>${esc(t.ritmoNecessario)}</strong></p>` : "",
+    `</div>`,
+    `<div class="card"><h2>Disponível em 12 meses</h2><div class="pat-serie">`,
+    t.serie.map((s) => `<div class="pat-mes" title="${esc(reaisDeCents(s.disponivel_cents))}"><div class="pat-barra" style="height:${s.disponivel_cents == null || s.disponivel_cents <= 0 ? 0 : Math.round((s.disponivel_cents / max) * 100)}%"></div><span>${esc(s.mes.slice(5, 7))}/${esc(s.mes.slice(2, 4))}</span></div>`).join(""),
+    `</div></div>`,
+    htmlFormCasa(param),
+  ].join("");
+}
+
 // fonte gravada na transação: só 'extrato' ou 'fatura' (o C6 é extrato).
 export function fonteDoTipo(tipo) {
   return tipo === "fatura" ? "fatura" : "extrato";
@@ -1399,19 +1513,8 @@ if (typeof document !== "undefined") {
   });
 
   // ----- Inc 4: Planejamento (tela do mês — alvo vs realizado) -----
-  // Espelha parseBRtoCents de worker/money.js (vírgula/ponto → centavos): teclado BR entrega
-  // vírgula, e o campo é type="text"+inputmode="decimal" (regra do CLAUDE.md), então precisa
-  // de um parser aqui mesmo — este arquivo não importa código do Worker.
-  function parseBRtoCentsUI(str) {
-    if (typeof str !== "string") return null;
-    let s = str.replace(/R\$\s*/i, "").trim();
-    if (!s) return null;
-    if (s.startsWith("-")) return null; // valor de meta é sempre positivo
-    s = s.replace(/\./g, ""); // remove separador de milhar
-    if (s.includes(",")) s = s.replace(",", ".");
-    if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
-    return Math.round(parseFloat(s) * 100);
-  }
+  // o espelho de parseBRtoCents (worker/money.js) agora mora no topo do módulo (G4 também usa)
+  const parseBRtoCentsUI = parseBRtoCents;
 
   const apiPut = (p, body) => fetch(p, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(body) })
     .then(r => { if (!r.ok) throw new Error(`PUT ${p} ${r.status}`); return r; });
@@ -1867,6 +1970,27 @@ if (typeof document !== "undefined") {
     } catch (e) { alert("Falha ao carregar patrimônio: " + e.message); }
   }
 
+  // G4: Projeto Casa ancorado no mês de #mesSel (parâmetro vigente nesse mês); a resposta velha
+  // não sobrescreve a nova. Sem parâmetro, a aba é só o formulário.
+  async function carregarCasa() {
+    const mes = estado.mes;
+    try {
+      const [casa, param] = await Promise.all([apiGet(`/api/casa?ate=${mes}`), apiGet(`/api/casa/param?mes=${mes}`)]);
+      if (mes !== estado.mes) return;
+      $("#casa").innerHTML = htmlCasa(casa, param);
+    } catch (e) { alert("Falha ao carregar o Projeto Casa: " + e.message); }
+  }
+  $("#casa").addEventListener("click", async e => {
+    if (e.target.id !== "casaSalvar") return;
+    const r = corpoParamCasa({ mes: estado.mes, custo: $("#casaCusto").value, reserva: $("#casaReserva").value, alvo: $("#casaAlvo").value });
+    if (r.erro) { alert(r.erro); return; }
+    try {
+      const resp = await fetch("/api/casa/param", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(r.corpo) });
+      if (!resp.ok) { const b = await resp.json().catch(() => ({})); throw new Error(b.erro || `PUT ${resp.status}`); }
+      await carregarCasa();
+    } catch (err) { alert("Falha ao salvar: " + err.message); }
+  });
+
   // Recarrega só as transações (aba Lançamentos) com o range corrente — usado pela troca de
   // mês/"Todos os meses" p/ não refazer o fetch do Resumo (agora em carregarResumo()).
   async function carregarLancamentos() {
@@ -1893,6 +2017,7 @@ if (typeof document !== "undefined") {
     $("#planejamento").classList.toggle("hidden", v !== "planejamento");
     $("#diagnostico").classList.toggle("hidden", v !== "diagnostico");
     $("#patrimonio").classList.toggle("hidden", v !== "patrimonio");
+    $("#casa").classList.toggle("hidden", v !== "casa");
     if (v === "ajustes") drawAjustes();
     if (v === "importar") drawImportar();
     if (v === "lanc") carregarLancamentos();
@@ -1900,6 +2025,7 @@ if (typeof document !== "undefined") {
     if (v === "resumo") carregarResumo();
     if (v === "diagnostico") carregarDiagnostico();
     if (v === "patrimonio") carregarPatrimonio();
+    if (v === "casa") carregarCasa();
   }));
 
   // Inc 4.5 Tarefa 7: mês global — agora governa Lançamentos, Planejamento E Resumo (os
@@ -1913,6 +2039,7 @@ if (typeof document !== "undefined") {
     else if (v === "resumo") carregarResumo();
     else if (v === "diagnostico") carregarDiagnostico();
     else if (v === "patrimonio") carregarPatrimonio();
+    else if (v === "casa") carregarCasa();
   });
   // G2: fonte que falta → aba Importar com o tipo daquela fonte; "ver 12 meses" abre/fecha a grade
   $("#fechamento").addEventListener("click", e => {
