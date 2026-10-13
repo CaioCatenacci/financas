@@ -47,6 +47,9 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   famílias; e o Tesouro ("TIT PUBLICO") veio como agregado e sumiria quando há títulos de renda
   fixa. Proposta: o prompt marca print que só tem o total da carteira e ele não grava produto;
   Tesouro é sempre `titulo`.
+  E o FGTS (app da Caixa) não é uma conta que o leitor conhece (`itau|c6|nubank|mercadopago`):
+  o saldo de 13/10 entrou à mão como conta `fgts`, família `outros`. Para os próximos meses, o
+  leitor precisa aceitar `fgts` (e, se fizer sentido, uma família própria, por ser ilíquido).
 - **P2 · Classificar o passado pendente com o JEV.** Usar o JEV (TypeSafe, modelo de decisão que
   devolve a probabilidade do "sim" sem gerar texto, a US$ 0,042 por milhão de tokens) para sugerir
   a categoria das ~1.260 transações em "Não Identificado", quase todas de faturas e extratos de
