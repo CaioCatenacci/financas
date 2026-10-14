@@ -740,6 +740,38 @@ do mês corrente com a mesma janela do `/api/patrimonio`. Dia e meses saem de `e
 - **Envio:** `responder()` para cada id do `ALLOWLIST`; lista vazia → não lê nem manda (falha
   fechada). Erro de banco ou de rede vai pro `console.error` (Workers Logs) e o cron nunca lança.
 
+## 24. JEV no import: extrato e fatura já chegam classificados (H4, 14/10/2026)
+
+O H3 classificou o passado com o JEV (TypeSafe) por `tools/jev_classificar.py`; o H4 leva as
+mesmas perguntas para o import, para a linha nova sem regra aprendida não cair de novo em "Não
+Identificado".
+
+- **Ordem:** não-gasto (`categoriaOrg`) > regra aprendida (`associacoes`, `categoriaNome`) > JEV >
+  padrão. O JEV só vê a linha `status = 'novo'` que caiu na padrão; casada, repetida (hash),
+  ambígua (inclusive a que o Caio trata como novo depois) e repasse nunca vão.
+- **Prévia intacta:** `POST /api/importar/preview` não chama modelo. A tela, depois, pede
+  `POST /api/importar/sugestoes` em **lotes de até 20 linhas** (400 acima disso): 2 perguntas por
+  linha cabem no teto de 50 subrequests do Worker. A rota tem um orçamento de 40 chamadas por lote
+  (novas tentativas incluídas); passou disso, a linha fica sem sugestão.
+- **Perguntas** (`worker/jev.js`, puro, porte do H2/H3 — mexeu num, mexa no outro): estado com a
+  fonte explicada, padrão fora das opções e "nenhuma serve" no lugar dela, descrições à mão (Banco;
+  Alimentação → Restaurante/Outros), sub genérica no lugar de "sem subcategoria", `IFD*` →
+  Alimentação/Ifood com prob 1 e sem chamada. A sub só é perguntada quando a categoria vai
+  preencher.
+- **HTTP direto, sem SDK** (`worker/sugestoes.js`): `POST https://api.typesafe.ai/v1/systemone`,
+  `Authorization: Bearer <TYPESAFE_API_KEY>`, corpo `{model: "jev-latest", state, questions}`;
+  lê `answers.<id>.choice` e `answers.<id>.probabilities[choice]`. 429/529 → uma nova tentativa
+  após espera curta.
+- **Limiar 0,90** pela confiança da categoria (como o H3). Acima, a linha ganha `item.jev` (campo
+  próprio, nunca `categoriaNome`) e grava `origem_categoria = 'modelo'`; abaixo ou "nenhuma serve",
+  fica na padrão (também `'modelo'`: no banco, quem separa as duas é a categoria). A prévia mostra
+  o texto da categoria com o selo "JEV 0,97", **sem select**: a correção é na aba Lançamentos, onde
+  nascem as regras. Nenhuma regra em `associacoes` nasce do JEV.
+- **Nunca derruba o import:** sem a chave, erro de rede, 429/529 repetido ou resposta sem `answers`
+  válidos → linhas sem sugestão e `indisponivel`; a tela mostra "classificação automática
+  indisponível" e o gravar fica habilitado o tempo todo, mesmo com lotes pendentes.
+- **Secret novo:** `TYPESAFE_API_KEY` (`wrangler secret put TYPESAFE_API_KEY`), nunca no código.
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

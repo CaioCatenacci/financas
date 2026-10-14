@@ -249,6 +249,7 @@ implantação em `docs/superpowers/plans/2026-09-26-fila-autonoma.md`.
 10. `APP_TOKEN` — token único do acesso ao app web
 11. `C6_PDF_SENHA` — senha do PDF do extrato do C6 Bank (usada só no navegador, via `GET /api/importar/c6-senha`)
 12. `CONTAS_PROPRIAS` — nomes das contas do Caio, separados por vírgula, como aparecem no extrato do C6 (repasse entre contas próprias sai do resumo)
+13. `TYPESAFE_API_KEY` — chave da API da TypeSafe (JEV), usada pelo `POST /api/importar/sugestoes` (H4); sem ela, o import segue sem sugestão
 
 Configurar via `wrangler secret put NOME` (lê do stdin).
 
