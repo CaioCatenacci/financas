@@ -10,6 +10,7 @@ import {
   markdownSimples, avisoMesParcial, htmlDiagnostico, AVISO_MES_PARCIAL, SEM_DIAGNOSTICO,
   montarTelaPatrimonio, htmlPatrimonio, reaisDeCents, rotuloRendimentoApp, SEM_PATRIMONIO,
   parseBRtoCents, corpoParamCasa, montarTelaCasa, htmlCasa, SEM_FOTO_CASA,
+  lotesSugestao, aplicarSugestoes, jevPreenche, seloJev, celulaCategoriaImport, avisoJevHtml, AVISO_JEV,
 } from "../public/app.js";
 import { montarCasa } from "../worker/casa.js";
 import { mesesAte } from "../worker/salario.js";
@@ -1194,4 +1195,182 @@ test("G4 htmlCasa: o formulário vem preenchido com os parâmetros vigentes, em 
   const h = htmlCasa(casaResp(), casaParam);
   assert.match(h, /id="casaCusto"[^>]*value="1\.000\.000,00"/);
   assert.match(h, /id="casaAlvo"[^>]*value="2029-09"/);
+});
+
+// ---------- H4: JEV no import (sugestão depois da prévia) ----------
+// Catálogo e descrições inventados (repositório público). "Não Identificado" é a padrão.
+const CATALOGO_JEV_APP = {
+  categorias: [
+    { id: "kA", nome: "Alimentação", natureza: "despesa" },
+    { id: "kC", nome: "Compras", natureza: "despesa" },
+    { id: "kT", nome: "Transferências", natureza: "despesa" },
+    { id: "kN", nome: "Não Identificado", natureza: "despesa", padrao: true },
+  ],
+  subcategorias: [
+    { id: "a1", categoria_id: "kA", nome: "Ifood" },
+    { id: "c1", categoria_id: "kC", nome: "Amazon" },
+    { id: "c2", categoria_id: "kC", nome: "Compras" },
+  ],
+};
+const itemJev = (descricao, extra = {}) => ({
+  status: "novo", data: "2026-10-01", descricao, valorCents: 4990, natureza: "despesa",
+  linhaHash: "h-" + descricao, matchId: null, computaResumo: true,
+  categoriaNome: null, subNome: null, categoriaOrg: null, contraparteNome: null, ...extra,
+});
+function previewJev() {
+  return {
+    checksum: { ok: true },
+    itens: [
+      itemJev("IFD*LANCHONETE EXEMPLO"),                                          // 0 vai
+      itemJev("LOJA EXEMPLO LTDA", { descricaoFinal: "LOJA EXEMPLO LTDA (parc 01/02)" }), // 1 vai
+      itemJev("FULANO DE TAL"),                                                   // 2 vai
+      itemJev("LOJA COM REGRA", { categoriaNome: "Compras", subNome: "Amazon" }), // 3 regra
+      itemJev("PIX TRANSF CONTA PROPRIA", { status: "naoGasto", categoriaOrg: "Transferências", computaResumo: false }), // 4 repasse
+      itemJev("TALVEZ CASE", { status: "ambiguo" }),                              // 5
+      itemJev("JA CASADA", { status: "casado", matchId: "m1" }),                  // 6
+      itemJev("JA IMPORTADA", { status: "jaTem" }),                               // 7
+    ],
+  };
+}
+const respostaExemplo = {
+  indisponivel: false,
+  itens: [
+    { indice: 0, preenche: true, sugestao: { categoria: "Alimentação", subcategoria: "Ifood", prob_categoria: 1, prob_subcategoria: 1 } },
+    { indice: 1, preenche: true, sugestao: { categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.96, prob_subcategoria: 0.8 } },
+    { indice: 2, preenche: false, sugestao: { categoria: "Compras", subcategoria: null, prob_categoria: 0.46, prob_subcategoria: null } },
+  ],
+};
+
+test("H4: só a linha nova que caiu na padrão vai à rota de sugestões (casada, repetida, ambígua, repasse e regra não vão)", () => {
+  const lotes = lotesSugestao(previewJev(), "fatura");
+  assert.equal(lotes.length, 1);
+  assert.equal(lotes[0].fonte, "fatura");
+  assert.deepEqual(lotes[0].itens.map(i => i.indice), [0, 1, 2]);
+  // o estado do JEV usa a descrição gravada (descricaoFinal); a original vai para conferir a regra
+  assert.equal(lotes[0].itens[1].descricaoFinal, "LOJA EXEMPLO LTDA (parc 01/02)");
+  assert.equal(lotes[0].itens[1].descricao, "LOJA EXEMPLO LTDA");
+});
+
+test("H4: lotes de no máximo 20 linhas (teto de subrequests do Worker)", () => {
+  const p = { itens: Array.from({ length: 45 }, (_, i) => itemJev(`LOJA ${i}`)) };
+  const lotes = lotesSugestao(p, "extrato");
+  assert.deepEqual(lotes.map(l => l.itens.length), [20, 20, 5]);
+  assert.deepEqual(lotes[2].itens.map(i => i.indice), [40, 41, 42, 43, 44]);
+});
+
+test("H4: a ambígua que vira 'novo' por 'tratar como novo' depois da prévia não é enviada e grava como hoje", () => {
+  const p = previewJev();
+  const lotes = lotesSugestao(p, "extrato"); // pedido feito logo depois da prévia
+  p.itens[5].status = "novo"; p.itens[5].matchId = null; // o Caio trata como novo
+  assert.ok(lotes.every(l => l.itens.every(i => i.indice !== 5)));
+  aplicarSugestoes(p, respostaExemplo, CATALOGO_JEV_APP);
+  assert.equal(p.itens[5].jev, undefined);
+  const d = montarDecisao(p, CATALOGO_JEV_APP, "extrato");
+  const amb = d.novos.find(n => n.descricao === "TALVEZ CASE");
+  assert.equal(amb.categoria_id, "kN"); // padrão, porque a prévia não deu regra
+  assert.equal(amb.origem_categoria, "modelo");
+});
+
+test("H4: limiar 0,90 na tela — 0,90 preenche, 0,89 e 'nenhuma serve' não", () => {
+  assert.equal(jevPreenche({ categoria: "Compras", prob_categoria: 0.9 }), true);
+  assert.equal(jevPreenche({ categoria: "Compras", prob_categoria: 0.89 }), false);
+  assert.equal(jevPreenche({ categoria: "nenhuma serve", prob_categoria: 0.99 }), false);
+  assert.equal(jevPreenche(null), false);
+});
+
+test("H4: Exemplo do card — IFD* e 0,96 trocam categoria e sub; 0,46 fica na padrão", () => {
+  const p = previewJev();
+  aplicarSugestoes(p, respostaExemplo, CATALOGO_JEV_APP);
+  assert.deepEqual(p.itens[0].jev, { categoria: "Alimentação", subcategoria: "Ifood", prob: 1 });
+  assert.deepEqual(p.itens[1].jev, { categoria: "Compras", subcategoria: "Compras", prob: 0.96 });
+  assert.equal(p.itens[2].jev, undefined);
+  // a sugestão fica registrada mesmo abaixo do limiar, mas a categoria não muda
+  assert.equal(p.itens[2].sugestao.prob_categoria, 0.46);
+  // o campo próprio não mexe no categoriaNome, que marca regra aprendida
+  assert.equal(p.itens[1].categoriaNome, null);
+
+  const d = montarDecisao(p, CATALOGO_JEV_APP, "fatura");
+  const por = Object.fromEntries(d.novos.map(n => [n.descricao, n]));
+  assert.equal(por["IFD*LANCHONETE EXEMPLO"].categoria_id, "kA");
+  assert.equal(por["IFD*LANCHONETE EXEMPLO"].subcategoria_id, "a1");
+  assert.equal(por["LOJA EXEMPLO LTDA (parc 01/02)"].categoria_id, "kC");
+  assert.equal(por["LOJA EXEMPLO LTDA (parc 01/02)"].subcategoria_id, "c2");
+  assert.equal(por["FULANO DE TAL"].categoria_id, "kN");
+  assert.equal(por["FULANO DE TAL"].subcategoria_id, null);
+});
+
+test("H4: montarDecisao — a linha do JEV grava origem 'modelo'; a de regra aprendida segue 'regra'", () => {
+  const p = previewJev();
+  aplicarSugestoes(p, respostaExemplo, CATALOGO_JEV_APP);
+  const d = montarDecisao(p, CATALOGO_JEV_APP, "fatura");
+  const por = Object.fromEntries(d.novos.map(n => [n.descricao, n]));
+  assert.equal(por["LOJA EXEMPLO LTDA (parc 01/02)"].origem_categoria, "modelo");
+  assert.equal(por["IFD*LANCHONETE EXEMPLO"].origem_categoria, "modelo");
+  assert.equal(por["LOJA COM REGRA"].origem_categoria, "regra");
+  assert.equal(por["LOJA COM REGRA"].categoria_id, "kC");
+  assert.equal(por["LOJA COM REGRA"].subcategoria_id, "c1");
+});
+
+test("H4: sub respondida que não existe na categoria fica nula; categoria fora do catálogo não preenche", () => {
+  const p = previewJev();
+  aplicarSugestoes(p, { itens: [
+    { indice: 1, sugestao: { categoria: "Compras", subcategoria: "Inexistente", prob_categoria: 0.95, prob_subcategoria: 0.9 } },
+    { indice: 2, sugestao: { categoria: "Sumiu", subcategoria: null, prob_categoria: 0.99, prob_subcategoria: null } },
+  ] }, CATALOGO_JEV_APP);
+  assert.equal(p.itens[2].jev, undefined);
+  const d = montarDecisao(p, CATALOGO_JEV_APP, "fatura");
+  const loja = d.novos.find(n => n.descricao.startsWith("LOJA EXEMPLO"));
+  assert.equal(loja.categoria_id, "kC");
+  assert.equal(loja.subcategoria_id, null);
+});
+
+test("H4: sugestão para linha que não é mais nova ou que tem regra é ignorada", () => {
+  const p = previewJev();
+  aplicarSugestoes(p, { itens: [
+    { indice: 3, sugestao: { categoria: "Alimentação", subcategoria: "Ifood", prob_categoria: 0.99 } },
+    { indice: 6, sugestao: { categoria: "Alimentação", subcategoria: "Ifood", prob_categoria: 0.99 } },
+  ] }, CATALOGO_JEV_APP);
+  assert.equal(p.itens[3].jev, undefined);
+  assert.equal(p.itens[6].jev, undefined);
+});
+
+test("H4: na prévia, a linha preenchida mostra a categoria em texto seguida do selo 'JEV 0,97'; abaixo do limiar, sem selo", () => {
+  assert.equal(seloJev(0.97), "JEV 0,97");
+  assert.equal(seloJev(1), "JEV 1,00");
+  const p = previewJev();
+  aplicarSugestoes(p, { itens: [
+    { indice: 1, sugestao: { categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.97, prob_subcategoria: 0.8 } },
+    { indice: 2, sugestao: { categoria: "Compras", subcategoria: null, prob_categoria: 0.46, prob_subcategoria: null } },
+  ] }, CATALOGO_JEV_APP);
+  const cel = celulaCategoriaImport(p.itens[1], CATALOGO_JEV_APP);
+  assert.match(cel, /^Compras › Compras <span class="selo-jev"[^>]*>JEV 0,97<\/span>$/);
+  assert.doesNotMatch(cel, /<select/);
+  const baixa = celulaCategoriaImport(p.itens[2], CATALOGO_JEV_APP);
+  assert.equal(baixa, "Não Identificado");
+  assert.equal(celulaCategoriaImport(p.itens[3], CATALOGO_JEV_APP), "Compras › Amazon");
+});
+
+test("H4: a tabela da prévia não ganha <select> (correção é na aba Lançamentos)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const fonte = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const ini = fonte.indexOf("function tabelaItens(");
+  const fim = fonte.indexOf("function tabelaConversoes(");
+  assert.ok(ini > 0 && fim > ini);
+  assert.doesNotMatch(fonte.slice(ini, fim), /<select/);
+});
+
+test("H4: aviso de indisponibilidade e de lotes pendentes na prévia", () => {
+  assert.equal(AVISO_JEV, "classificação automática indisponível");
+  assert.match(avisoJevHtml({ indisponivel: true, pendentes: 0 }), /classificação automática indisponível/);
+  assert.match(avisoJevHtml({ indisponivel: false, pendentes: 2 }), /2 lote/);
+  assert.equal(avisoJevHtml({ indisponivel: false, pendentes: 0 }), "");
+});
+
+test("H4: nenhum caminho do JEV no app escreve em associações", async () => {
+  const { readFileSync } = await import("node:fs");
+  const fonte = readFileSync(new URL("../public/app.js", import.meta.url), "utf8");
+  const ini = fonte.indexOf("// ---------- H4: JEV no import");
+  const fim = fonte.indexOf("// ---------- fim H4");
+  assert.ok(ini > 0 && fim > ini);
+  assert.doesNotMatch(fonte.slice(ini, fim), /associac|aprender/i);
 });
