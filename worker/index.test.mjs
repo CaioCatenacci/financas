@@ -1825,3 +1825,131 @@ test("G4 GET /api/casa?ate= junta patrimônio (todo o histórico), saldo do G1, 
     assert.equal(data.projecao_meses, Math.ceil(38000000 / 200000));
   }
 });
+
+// ---- C4: POST /api/importar/arquivo (arquivo original do import → Dropbox) ----
+import { LIMITE_ARQUIVO_IMPORT } from "./index.js";
+
+// Dropbox falso: token + upload; guarda cada upload (Dropbox-API-Arg e bytes) p/ conferir
+function dropboxFalso() {
+  const uploads = [];
+  const fetchImpl = async (u, init) => {
+    if (String(u).includes("oauth2/token")) return { ok: true, json: async () => ({ access_token: "tok" }) };
+    uploads.push({ arg: JSON.parse(init.headers["Dropbox-API-Arg"]), body: init.body });
+    return { ok: true, json: async () => ({ path_display: JSON.parse(init.headers["Dropbox-API-Arg"]).path }) };
+  };
+  return { fetchImpl, uploads };
+}
+const reqArquivo = (query, bytes, { token = "token123", headers = {} } = {}) => new Request(
+  `http://localhost/api/importar/arquivo?${query}`,
+  { method: "POST", headers: { ...(token ? { Cookie: `token=${token}` } : {}), "content-type": "application/octet-stream", ...headers }, body: bytes },
+);
+const chamarArquivo = (req, dbx) => handleApi(req, envApi, new URL(req.url), {}, { fetchImpl: dbx.fetchImpl });
+
+test("C4: extrato Itaú sobe no caminho do período, com overwrite e sem autorename (reimportar substitui)", async () => {
+  const dbx = dropboxFalso();
+  const r = await chamarArquivo(reqArquivo("tipo=extrato&banco=itau&de=2026-09-03&ate=2026-10-13", new Uint8Array([1, 2, 3])), dbx);
+  assert.equal(r.status, 200);
+  assert.equal(dbx.uploads.length, 1);
+  assert.deepEqual(dbx.uploads[0].arg, { path: "/Finanças/Extratos/itau/2026-09-03_a_2026-10-13_itau_extrato.pdf", mode: "overwrite" });
+  assert.notEqual(dbx.uploads[0].arg.autorename, true);
+  assert.equal((await r.json()).path, "/Finanças/Extratos/itau/2026-09-03_a_2026-10-13_itau_extrato.pdf");
+});
+
+test("C4: fatura sobe em Faturas/<banco> pelo mês do vencimento", async () => {
+  const dbx = dropboxFalso();
+  const r = await chamarArquivo(reqArquivo("tipo=fatura&banco=itau&mes=2026-10", new Uint8Array([9])), dbx);
+  assert.equal(r.status, 200);
+  assert.equal(dbx.uploads[0].arg.path, "/Finanças/Faturas/itau/2026-10_itau_fatura.pdf");
+  assert.equal(dbx.uploads[0].arg.mode, "overwrite");
+});
+
+test("C4: o PDF do C6 chega ao Dropbox byte a byte como foi enviado (o Worker não abre nem decifra)", async () => {
+  const dbx = dropboxFalso();
+  // bytes arbitrários de mentira, inclusive os que um decodificador de texto estragaria
+  const enviados = new Uint8Array(512).map((_, i) => (i * 37 + 11) % 256);
+  const r = await chamarArquivo(reqArquivo("tipo=extrato&banco=c6&de=2026-08-01&ate=2026-08-31", enviados.slice()), dbx);
+  assert.equal(r.status, 200);
+  assert.equal(dbx.uploads[0].arg.path, "/Finanças/Extratos/c6/2026-08-01_a_2026-08-31_c6_extrato.pdf");
+  assert.deepEqual([...new Uint8Array(dbx.uploads[0].body)], [...enviados]);
+});
+
+test("C4: o CSV da Wise sobe como extrato .csv", async () => {
+  const dbx = dropboxFalso();
+  const r = await chamarArquivo(reqArquivo("tipo=extrato&banco=wise&de=2026-07-01&ate=2026-09-30", new Uint8Array([65])), dbx);
+  assert.equal(r.status, 200);
+  assert.equal(dbx.uploads[0].arg.path, "/Finanças/Extratos/wise/2026-07-01_a_2026-09-30_wise_extrato.csv");
+});
+
+test("C4: sem token a rota devolve 401 e não sobe nada (mesma checagem das outras /api/*)", async () => {
+  const dbx = dropboxFalso();
+  const r = await chamarArquivo(reqArquivo("tipo=extrato&banco=itau&de=2026-09-03&ate=2026-10-13", new Uint8Array([1]), { token: null }), dbx);
+  assert.equal(r.status, 401);
+  assert.equal(dbx.uploads.length, 0);
+});
+
+test("C4: tipo ou banco fora do vocabulário → 400, sem chamar o Dropbox", async () => {
+  for (const q of [
+    "tipo=wise&banco=wise&de=2026-07-01&ate=2026-09-30",
+    "tipo=comprovante&banco=itau&de=2026-09-03&ate=2026-10-13",
+    "tipo=extrato&banco=nubank&de=2026-09-03&ate=2026-10-13",
+    "banco=itau&de=2026-09-03&ate=2026-10-13",
+  ]) {
+    const dbx = dropboxFalso();
+    const r = await chamarArquivo(reqArquivo(q, new Uint8Array([1])), dbx);
+    assert.equal(r.status, 400, q);
+    assert.equal(dbx.uploads.length, 0, q);
+  }
+});
+
+test("C4: período inválido ou ausente para o tipo → 400, sem chamar o Dropbox", async () => {
+  for (const q of [
+    "tipo=extrato&banco=itau",
+    "tipo=extrato&banco=itau&de=2026-09-03",
+    "tipo=extrato&banco=itau&de=2026-10-13&ate=2026-09-03",
+    "tipo=extrato&banco=itau&mes=2026-10",
+    "tipo=fatura&banco=itau",
+    "tipo=fatura&banco=itau&mes=2026-13",
+    "tipo=fatura&banco=itau&de=2026-10-01&ate=2026-10-31",
+  ]) {
+    const dbx = dropboxFalso();
+    const r = await chamarArquivo(reqArquivo(q, new Uint8Array([1])), dbx);
+    assert.equal(r.status, 400, q);
+    assert.equal(dbx.uploads.length, 0, q);
+  }
+});
+
+test("C4: arquivo acima de 20 MB é recusado sem chamar o Dropbox", async () => {
+  const dbx = dropboxFalso();
+  const grande = new Uint8Array(LIMITE_ARQUIVO_IMPORT + 1);
+  const r = await chamarArquivo(reqArquivo("tipo=extrato&banco=itau&de=2026-09-03&ate=2026-10-13", grande), dbx);
+  assert.ok(r.status === 413 || r.status === 400, `status ${r.status}`);
+  assert.equal(dbx.uploads.length, 0);
+  assert.equal(LIMITE_ARQUIVO_IMPORT, 20 * 1024 * 1024);
+});
+
+test("C4: o cabeçalho content-length acima de 20 MB já recusa antes de ler o corpo", async () => {
+  const dbx = dropboxFalso();
+  const req = reqArquivo("tipo=extrato&banco=itau&de=2026-09-03&ate=2026-10-13", new Uint8Array([1]));
+  // Request não deixa forjar content-length; um objeto com a mesma interface serve à rota
+  const falso = { method: "POST", url: req.url, headers: new Headers({ Cookie: "token=token123", "content-length": String(LIMITE_ARQUIVO_IMPORT + 1) }),
+    arrayBuffer: async () => { throw new Error("não devia ler o corpo"); } };
+  const r = await handleApi(falso, envApi, new URL(req.url), {}, { fetchImpl: dbx.fetchImpl });
+  assert.equal(r.status, 413);
+  assert.equal(dbx.uploads.length, 0);
+});
+
+test("C4: corpo vazio → 400, sem chamar o Dropbox", async () => {
+  const dbx = dropboxFalso();
+  const r = await chamarArquivo(reqArquivo("tipo=extrato&banco=itau&de=2026-09-03&ate=2026-10-13", new Uint8Array(0)), dbx);
+  assert.equal(r.status, 400);
+  assert.equal(dbx.uploads.length, 0);
+});
+
+test("C4: falha do Dropbox vira erro (não 200), para o app avisar que o arquivo não foi guardado", async () => {
+  const fetchImpl = async (u) => String(u).includes("oauth2/token")
+    ? { ok: true, json: async () => ({ access_token: "tok" }) }
+    : { ok: false, status: 500, json: async () => ({}) };
+  const req = reqArquivo("tipo=fatura&banco=itau&mes=2026-10", new Uint8Array([1]));
+  const r = await handleApi(req, envApi, new URL(req.url), {}, { fetchImpl });
+  assert.ok(r.status >= 400);
+});

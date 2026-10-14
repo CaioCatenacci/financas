@@ -3,7 +3,7 @@ import { criarDb } from "./db.js";
 import { parseUpdate, downloadArquivo, responder, enviarConfirmacao } from "./telegram.js";
 import { extrair, callGeminiHTTP, callClaudeHTTP } from "./extrair.js";
 import { subirDropbox } from "./dropbox.js";
-import { caminhoDropbox, nomeArquivo } from "./dropbox_nome.js";
+import { caminhoDropbox, nomeArquivo, caminhoArquivoImport, TIPOS_ARQUIVO_IMPORT, BANCOS_ARQUIVO_IMPORT } from "./dropbox_nome.js";
 import { centsToBR } from "./money.js";
 import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
 import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
@@ -304,7 +304,11 @@ export async function executarLembrete(env, { agora = Date.now(), db = null, fet
   }
 }
 
-export async function handleApi(request, env, url, dbOpt = null) {
+// C4: teto do arquivo original de um import (extrato/fatura em PDF, CSV da Wise)
+export const LIMITE_ARQUIVO_IMPORT = 20 * 1024 * 1024;
+
+// depsOpt: injeção p/ teste — { fetchImpl } é o Dropbox falso da rota /api/importar/arquivo.
+export async function handleApi(request, env, url, dbOpt = null, depsOpt = null) {
   if (!tokenValido(request, env.APP_TOKEN)) return new Response("no", { status: 401 });
   const sql = dbOpt ? null : neon(env.DATABASE_URL);
   const db = dbOpt || criarDb(sql);
@@ -677,6 +681,29 @@ export async function handleApi(request, env, url, dbOpt = null) {
   if (url.pathname === "/api/importar/c6-senha" && request.method === "GET") {
     const senha = typeof env.C6_PDF_SENHA === "string" && env.C6_PDF_SENHA ? env.C6_PDF_SENHA : null;
     return new Response(JSON.stringify({ senha }), { headers: { "content-type": "application/json", "cache-control": "no-store" } });
+  }
+  // C4: o arquivo original do import, depois do aplicar. Corpo = bytes do arquivo como veio (o PDF
+  // do C6 segue com senha: aqui nada abre nem decifra), tipo/banco/período na query. Sobe com
+  // overwrite: reimportar o mesmo período substitui o arquivo, sem "(1)".
+  if (url.pathname === "/api/importar/arquivo" && request.method === "POST") {
+    const p = url.searchParams;
+    const tipo = p.get("tipo"), banco = p.get("banco");
+    if (!TIPOS_ARQUIVO_IMPORT.includes(tipo)) return erroJson(`tipo inválido: ${tipo}`, 400);
+    if (!BANCOS_ARQUIVO_IMPORT.includes(banco)) return erroJson(`banco inválido: ${banco}`, 400);
+    const caminho = caminhoArquivoImport({ tipo, banco, de: p.get("de"), ate: p.get("ate"), mes: p.get("mes") });
+    if (!caminho) return erroJson("período inválido ou ausente para o arquivo do import", 400);
+    // recusa pelo cabeçalho antes de ler; e confere de novo o que chegou (o cabeçalho pode mentir)
+    const declarado = parseInt(request.headers.get("content-length") || "", 10);
+    if (declarado > LIMITE_ARQUIVO_IMPORT) return erroJson("arquivo acima de 20 MB", 413);
+    const bytes = new Uint8Array(await request.arrayBuffer());
+    if (bytes.byteLength > LIMITE_ARQUIVO_IMPORT) return erroJson("arquivo acima de 20 MB", 413);
+    if (!bytes.byteLength) return erroJson("arquivo vazio", 400);
+    try {
+      const path = await subirDropbox(env, caminho, bytes, depsOpt?.fetchImpl, "overwrite");
+      return j({ path });
+    } catch (err) {
+      return erroJson(`não foi possível guardar o arquivo: ${err && err.message ? err.message : String(err)}`, 502);
+    }
   }
   if (url.pathname === "/api/importar/preview" && request.method === "POST") {
    try {
