@@ -36,20 +36,6 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 
 ## Ideias ainda sem card
 
-- **P2 · `/patrimonio`: data e pessoa do print.** No smoke de 13/10/2026 o print do C6 Invest
-  ("Atualizado em 07/10/26") foi gravado com o ano 2024 — o modelo leu o ano de 2 dígitos errado
-  (corrigido à mão). Regra proposta: data lida que fique a mais de 60 dias da data da mensagem é
-  descartada e vale a da mensagem. E prints sem nome (os do Itaú) não trazem a pessoa: só entram
-  com `/patrimonio caio itau` na legenda; avaliar se a conta implica a pessoa por padrão
-  (ex.: itau → Caio) para não depender da legenda. Origem: smoke do A2 (13/10/2026).
-  Mais dois do mesmo smoke, corrigidos à mão no banco: o print-resumo do Itaú ("meus
-  investimentos", só o total) entrou como produto da família `outros` e somaria por cima das
-  famílias; e o Tesouro ("TIT PUBLICO") veio como agregado e sumiria quando há títulos de renda
-  fixa. Proposta: o prompt marca print que só tem o total da carteira e ele não grava produto;
-  Tesouro é sempre `titulo`.
-  E o FGTS (app da Caixa) não é uma conta que o leitor conhece (`itau|c6|nubank|mercadopago`):
-  o saldo de 13/10 entrou à mão como conta `fgts`, família `outros`. Para os próximos meses, o
-  leitor precisa aceitar `fgts` (e, se fizer sentido, uma família própria, por ser ilíquido).
 - **P3 · Entrada malformada fora das rotas de grupo ainda vira 500.** `DELETE /api/transacoes/:id`
   (e o `del:` do Telegram), `PATCH /api/transacoes/:id` e as rotas por id de categorias,
   subcategorias e pessoas passam o id cru pro `::uuid`; corpo que não é JSON faz `request.json()`

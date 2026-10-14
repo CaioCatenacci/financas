@@ -4,14 +4,15 @@ Reorganizada em 2026-10-09 em torno dos três objetivos do projeto: (1) o que en
 que sai; (2) para onde o dinheiro vai; (3) a casa. A faixa Agora fica com o Caio.
 
 ## Agora
+- H4
+- A4
+- C4
 
 ## Próximo
 - A1
 - A3
 
 ## Depois
-- B3
-- C4
 - C5
 - C6
 - C7
