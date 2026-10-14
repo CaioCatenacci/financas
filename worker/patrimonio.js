@@ -11,10 +11,20 @@ import { centsToBR } from "./money.js";
 import { reconhecerNaoGasto } from "./classificar.js";
 
 // vocabulário fechado (os CHECKs da tabela `patrimonio` dizem o mesmo)
-export const FAMILIAS = ["fundos", "renda_fixa", "caixa", "outros"];
+// fgts (A4): família própria porque o FGTS só sai para a compra do imóvel — soma no total (e no
+// "quanto já temos" da Casa) igual às outras, mas aparece separado do que dá para usar
+export const FAMILIAS = ["fundos", "renda_fixa", "caixa", "outros", "fgts"];
 export const NIVEIS = ["titulo", "agregado"];
 export const PERIODOS = ["mes", "ano", "12m", "desde_inicio"];
-export const CONTAS = ["itau", "c6", "nubank", "mercadopago"];
+export const CONTAS = ["itau", "c6", "nubank", "mercadopago", "fgts"];
+
+// A4: de quem é a conta quando nem o print nem a legenda dizem (os prints do Itaú não trazem o
+// nome). É o que o banco já tem por conta; a legenda e o nome lido no print vencem o mapa.
+export const PESSOA_POR_CONTA = { itau: "Caio", fgts: "Caio", c6: "Paola", nubank: "Paola", mercadopago: "Paola" };
+
+// A4: data lida a mais disto da data da mensagem é erro de leitura (o "07/10/24" do C6 lido como
+// 2024), não um print velho: vale a data da mensagem.
+export const JANELA_DATA_DIAS = 60;
 
 // a conta cujo rendimento é calculado: os aportes/resgates estão no extrato do Itaú (Decisões do
 // card, opção A). As demais usam o rendimento do print.
@@ -32,7 +42,24 @@ export function normalizarConta(v) {
   if (s.startsWith("c6")) return "c6";
   if (s === "nu" || s.startsWith("nubank")) return "nubank";
   if (s === "mp" || s.startsWith("mercadopago")) return "mercadopago";
+  if (s.startsWith("fgts")) return "fgts";
   return null;
+}
+
+const diaUTC = (iso) => Date.parse(iso + "T00:00:00Z") / 86400000;
+
+/**
+ * A data que vale para o print: a lida, se estiver a até 60 dias da mensagem (para trás ou para
+ * frente); senão, a da mensagem — e `descartada` avisa, para a confirmação dizer. Sem data lida,
+ * a da mensagem sem aviso (não houve o que descartar).
+ * @returns {{dataISO: string, descartada: boolean}}
+ */
+export function dataEfetiva(dataPrint, dataMensagem) {
+  if (!dataPrint) return { dataISO: dataMensagem, descartada: false };
+  const dias = Math.abs(diaUTC(dataPrint) - diaUTC(dataMensagem));
+  // NaN (data ilegível) também cai fora da janela
+  if (!(dias <= JANELA_DATA_DIAS)) return { dataISO: dataMensagem, descartada: true };
+  return { dataISO: dataPrint, descartada: false };
 }
 
 /**
@@ -232,9 +259,11 @@ export function montarPatrimonio(meses, { linhas = [], aportes = [], periodosIta
 }
 
 // confirmação do bot: o que leu, o total (sem contar duas vezes) e quantos produtos
-export function textoConfirmacao({ conta, pessoa, dataISO, produtos }) {
+// (A4) com a data do print descartada, uma linha a mais diz qual data ficou
+export function textoConfirmacao({ conta, pessoa, dataISO, produtos, dataDescartada = false }) {
   const { total_cents } = totalContaData(produtos);
   const [a, m, d] = dataISO.split("-");
   const n = produtos.length;
-  return `✅ Patrimônio · ${conta} · ${pessoa} · ${d}/${m}/${a}\nR$ ${centsToBR(total_cents)} em ${n} produto${n === 1 ? "" : "s"}`;
+  const aviso = dataDescartada ? `\ndata do print ignorada, usei ${d}/${m}` : "";
+  return `✅ Patrimônio · ${conta} · ${pessoa} · ${d}/${m}/${a}\nR$ ${centsToBR(total_cents)} em ${n} produto${n === 1 ? "" : "s"}${aviso}`;
 }

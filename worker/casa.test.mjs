@@ -224,3 +224,13 @@ test("paramVigente: o mais recente com vigente_desde até o mês; nenhum antes �
   assert.equal(paramVigente(ps, "2025-12"), null);
   assert.equal(paramVigente([], "2026-09"), null);
 });
+
+test("A4: a família fgts entra no \"quanto já temos\" (o FGTS pode ir para a compra do imóvel)", () => {
+  const linhas = [
+    { ...linha("2026-10", "13", "fgts", "Caio", R(3000)), familia: "fgts" },
+    linha("2026-10", "09", "itau", "Caio", R(1000)),
+  ];
+  const serie = patrimonioCarregado(["2026-10"], linhas);
+  assert.equal(serie[0].patrimonio_cents, R(4000));
+  assert.equal(serie[0].contas.find((c) => c.conta === "fgts").total_cents, R(3000));
+});

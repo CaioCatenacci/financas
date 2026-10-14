@@ -1608,6 +1608,70 @@ test("A2: foto sem a legenda segue o fluxo do comprovante (modo padrão)", async
   assert.equal(estado.patrimonio.length, 0);
 });
 
+// ---------- A4 ----------
+// a mensagem de fotoPat é de 11/10/2026 (Brasília)
+test("A4: data do print a 61 dias da mensagem é descartada; grava com a da mensagem e avisa", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ dataISO: "2026-08-11" }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.ok(estado.patrimonio.every((p) => p.data === "2026-10-11"));
+  assert.deepEqual(estado.subidos, ["/Finanças/Patrimônio/2026/2026-10-11_itau_caio.jpg"]);
+  assert.match(estado.respostas.at(-1), /data do print ignorada, usei 11\/10/);
+});
+
+test("A4: data do print a 59 dias da mensagem vale, sem aviso", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ dataISO: "2026-08-13" }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.ok(estado.patrimonio.every((p) => p.data === "2026-08-13"));
+  assert.doesNotMatch(estado.respostas.at(-1), /ignorada/);
+});
+
+test("A4: print do Itaú sem pessoa e sem legenda grava como Caio (mapa fixo por conta)", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ pessoa: null }) });
+  const pedidas = [];
+  const orig = deps.db.pessoaPorNome;
+  deps.db.pessoaPorNome = async (n) => { pedidas.push(n); return orig(n); };
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.deepEqual(pedidas, ["Caio"]);
+  assert.equal(estado.patrimonio.length, 3);
+  assert.ok(estado.patrimonio.every((p) => p.pessoa_id === "pCaio"));
+});
+
+test("A4: a legenda vence o mapa — /patrimonio paola itau grava Paola", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ pessoa: null }) });
+  await tratarUpdate(fotoPat("/patrimonio paola itau"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(estado.patrimonio.length, 3);
+  assert.ok(estado.patrimonio.every((p) => p.conta === "itau" && p.pessoa_id === "pPaola"));
+});
+
+test("A4: a pessoa lida no print vence o mapa (um c6 do Caio não vira da Paola)", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ conta: "c6", pessoa: "Caio" }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(estado.patrimonio.length, 3);
+  assert.ok(estado.patrimonio.every((p) => p.conta === "c6" && p.pessoa_id === "pCaio"));
+});
+
+test("A4: print-resumo não grava nada (nem Dropbox, nem documento, nem patrimônio) e pede o print com os produtos", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ resumo: true, produtos: [] }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(estado.subidos.length, 0);
+  assert.equal(estado.docs.length, 0);
+  assert.equal(estado.patrimonio.length, 0);
+  assert.deepEqual(estado.respostas, ["Esse é o resumo da carteira; manda o print com os produtos."]);
+});
+
+test("A4: print do app da Caixa → conta fgts, pessoa Caio pelo mapa, família fgts", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ conta: "fgts", pessoa: null, dataISO: "2026-10-10",
+    produtos: [{ produto: "Saldo FGTS", familia: "fgts", nivel: "agregado", saldo_cents: 300000, vencimento: null, taxa: null, rendimento_print_cents: null, periodo_rendimento: null }] }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.deepEqual(estado.patrimonio.map((p) => [p.conta, p.pessoa_id, p.familia]), [["fgts", "pCaio", "fgts"]]);
+});
+
+test("A4: sem conta, a resposta lista o fgts entre as contas da legenda", async () => {
+  const { deps, estado } = depsPatrimonio({ leitura: leituraItau({ conta: null }) });
+  await tratarUpdate(fotoPat("/patrimonio"), { TELEGRAM_TOKEN: "t" }, deps);
+  assert.match(estado.respostas.at(-1), /fgts/);
+});
+
 function dbPatrimonioFake() {
   const estado = {};
   return {
