@@ -10,6 +10,7 @@ import {
   markdownSimples, avisoMesParcial, htmlDiagnostico, AVISO_MES_PARCIAL, SEM_DIAGNOSTICO,
   montarTelaPatrimonio, htmlPatrimonio, reaisDeCents, rotuloRendimentoApp, SEM_PATRIMONIO,
   parseBRtoCents, corpoParamCasa, montarTelaCasa, htmlCasa, SEM_FOTO_CASA,
+  consultaArquivoImport, aplicarEGuardarArquivo, AVISO_ARQUIVO_NAO_GUARDADO,
 } from "../public/app.js";
 import { montarCasa } from "../worker/casa.js";
 import { mesesAte } from "../worker/salario.js";
@@ -1194,4 +1195,82 @@ test("G4 htmlCasa: o formulário vem preenchido com os parâmetros vigentes, em 
   const h = htmlCasa(casaResp(), casaParam);
   assert.match(h, /id="casaCusto"[^>]*value="1\.000\.000,00"/);
   assert.match(h, /id="casaAlvo"[^>]*value="2029-09"/);
+});
+
+// ---- C4: guardar o arquivo original depois do aplicar ----
+// apiPost e o envio do arquivo são falsos e registram a ordem das chamadas
+function fluxoFalso({ aplicarFalha = false, envio = async () => ({ ok: true, status: 200 }) } = {}) {
+  const chamadas = [];
+  return {
+    chamadas,
+    apiPost: async (p, body) => {
+      chamadas.push({ rota: p, body });
+      if (aplicarFalha) throw new Error("aplicar falhou: 500");
+      return { gravados: 2, naoGasto: 0, agrupados: 0 };
+    },
+    enviarArquivo: async (p, arquivo) => { chamadas.push({ rota: p, arquivo }); return envio(p, arquivo); },
+  };
+}
+const arquivoFalso = { nome: "extrato-de-mentira.pdf" };
+
+test("C4: extrato Itaú — aplica e só depois faz UM POST do File em /api/importar/arquivo com tipo, banco e período", async () => {
+  const f = fluxoFalso();
+  const st = { tipo: "extrato", preview: { cobertura: { de: "2026-09-03", ate: "2026-10-13" } }, arquivo: arquivoFalso };
+  const r = await aplicarEGuardarArquivo(st, { tipo: "extrato" }, f);
+  assert.deepEqual(f.chamadas.map((c) => c.rota), [
+    "/api/importar/aplicar",
+    "/api/importar/arquivo?tipo=extrato&banco=itau&de=2026-09-03&ate=2026-10-13",
+  ]);
+  assert.equal(f.chamadas[1].arquivo, arquivoFalso); // o próprio File, bytes como vieram
+  assert.equal(r.gravados, 2);
+  assert.equal(r.avisoArquivo, undefined);
+});
+
+test("C4: se o aplicar falha, a rota do arquivo não é chamada (nada de guardar o que não entrou)", async () => {
+  const f = fluxoFalso({ aplicarFalha: true });
+  const st = { tipo: "extrato", preview: { cobertura: { de: "2026-09-03", ate: "2026-10-13" } }, arquivo: arquivoFalso };
+  await assert.rejects(() => aplicarEGuardarArquivo(st, {}, f));
+  assert.deepEqual(f.chamadas.map((c) => c.rota), ["/api/importar/aplicar"]);
+});
+
+test("C4: envio com status fora de 2xx não desfaz o import — o resultado volta com o aviso exato", async () => {
+  const f = fluxoFalso({ envio: async () => ({ ok: false, status: 502 }) });
+  const st = { tipo: "c6", preview: { cobertura: { de: "2026-08-01", ate: "2026-08-31" } }, arquivo: arquivoFalso };
+  const r = await aplicarEGuardarArquivo(st, {}, f);
+  assert.equal(r.gravados, 2);
+  assert.equal(r.avisoArquivo, "o import entrou, mas o arquivo original não foi guardado");
+  assert.equal(AVISO_ARQUIVO_NAO_GUARDADO, "o import entrou, mas o arquivo original não foi guardado");
+});
+
+test("C4: erro de rede no envio também vira só o aviso", async () => {
+  const f = fluxoFalso({ envio: async () => { throw new TypeError("Failed to fetch"); } });
+  const st = { tipo: "fatura", ano: 2026, mes: 10, preview: {}, arquivo: arquivoFalso };
+  const r = await aplicarEGuardarArquivo(st, {}, f);
+  assert.equal(r.gravados, 2);
+  assert.equal(r.avisoArquivo, AVISO_ARQUIVO_NAO_GUARDADO);
+});
+
+test("C4: sem período (extrato sem 'Saldo do dia') não envia nada e avisa", async () => {
+  const f = fluxoFalso();
+  const st = { tipo: "extrato", preview: { cobertura: null }, arquivo: arquivoFalso };
+  const r = await aplicarEGuardarArquivo(st, {}, f);
+  assert.deepEqual(f.chamadas.map((c) => c.rota), ["/api/importar/aplicar"]);
+  assert.equal(r.avisoArquivo, AVISO_ARQUIVO_NAO_GUARDADO);
+});
+
+test("C4: a Wise passa pelo mesmo fluxo, como extrato do banco wise", async () => {
+  const f = fluxoFalso();
+  const st = { tipo: "wise", preview: { cobertura: { de: "2026-07-01", ate: "2026-09-30" } }, arquivo: arquivoFalso };
+  await aplicarEGuardarArquivo(st, { tipo: "wise", conversoes: [] }, f);
+  assert.equal(f.chamadas[1].rota, "/api/importar/arquivo?tipo=extrato&banco=wise&de=2026-07-01&ate=2026-09-30");
+});
+
+test("C4: consultaArquivoImport traduz os tipos da tela para tipo/banco da rota", () => {
+  const cob = { cobertura: { de: "2026-09-03", ate: "2026-10-13" } };
+  assert.equal(consultaArquivoImport({ tipo: "extrato", preview: cob }), "tipo=extrato&banco=itau&de=2026-09-03&ate=2026-10-13");
+  assert.equal(consultaArquivoImport({ tipo: "c6", preview: cob }), "tipo=extrato&banco=c6&de=2026-09-03&ate=2026-10-13");
+  // fatura: mês do vencimento digitado, com 2 dígitos (o nome no Dropbox é AAAA-MM)
+  assert.equal(consultaArquivoImport({ tipo: "fatura", ano: 2026, mes: 3, preview: {} }), "tipo=fatura&banco=itau&mes=2026-03");
+  assert.equal(consultaArquivoImport({ tipo: "fatura", ano: null, mes: null, preview: {} }), null);
+  assert.equal(consultaArquivoImport({ tipo: "extrato", preview: {} }), null);
 });

@@ -611,6 +611,44 @@ export function corpoPreview(tipo, texto, { conta = null, ano = null, mes = null
   return { tipo, texto, conta: conta || "conta" };
 }
 
+// C4: depois do aplicar, o arquivo original vai para o Dropbox. Query da rota
+// /api/importar/arquivo: tipo ∈ {extrato, fatura}, banco ∈ {itau, c6, wise} e o período — extrato
+// e Wise pela cobertura da prévia (de/ate), fatura pelo ano/mês digitados (mês do vencimento).
+// Sem período → null: o app não inventa nome e avisa que o arquivo não foi guardado.
+export const AVISO_ARQUIVO_NAO_GUARDADO = "o import entrou, mas o arquivo original não foi guardado";
+
+export function consultaArquivoImport(st) {
+  const q = new URLSearchParams();
+  if (st.tipo === "fatura") {
+    const ano = parseInt(st.ano, 10), mes = parseInt(st.mes, 10);
+    if (!ano || !mes || mes < 1 || mes > 12) return null;
+    q.set("tipo", "fatura"); q.set("banco", "itau"); q.set("mes", `${ano}-${String(mes).padStart(2, "0")}`);
+    return q.toString();
+  }
+  const banco = { extrato: "itau", c6: "c6", wise: "wise" }[st.tipo];
+  const cob = st.preview && st.preview.cobertura;
+  if (!banco || !cob || !cob.de || !cob.ate) return null;
+  q.set("tipo", "extrato"); q.set("banco", banco); q.set("de", cob.de); q.set("ate", cob.ate);
+  return q.toString();
+}
+
+// C4: aplicar → guardar o original. O aplicar que falha lança (e nada é enviado); o envio que
+// falha (rede, status fora de 2xx, período ausente) não desfaz o import: o resultado volta com
+// `avisoArquivo`. `enviarArquivo(caminho, arquivo)` devolve a Response (injetado p/ teste).
+export async function aplicarEGuardarArquivo(st, payload, { apiPost, enviarArquivo }) {
+  const resultado = await apiPost("/api/importar/aplicar", payload);
+  const consulta = consultaArquivoImport(st);
+  let guardou = false;
+  if (consulta && st.arquivo) {
+    try {
+      const r = await enviarArquivo(`/api/importar/arquivo?${consulta}`, st.arquivo);
+      guardou = !!(r && r.ok);
+    } catch { guardou = false; }
+  }
+  if (!guardou && resultado && typeof resultado === "object") resultado.avisoArquivo = AVISO_ARQUIVO_NAO_GUARDADO;
+  return resultado;
+}
+
 // "Aplicar" bloqueia só quando o checksum manda bloquear (extrato com diferença — o saldo não
 // fecha, algo foi mal lido). A fatura é AVISO (bloqueiaAplicar=false): IOF/encargos entram no
 // total sem serem lançamentos, então a diferença é esperada e não impede aplicar.
@@ -666,7 +704,10 @@ if (typeof document !== "undefined") {
     catalogo: { categorias: [], subcategorias: [] }, // Fase B: categorias/subcategorias por id
     filtro: { categoria: "", pessoa: "", origem: "", texto: "", computa: "" },
     selecao: new Set(), // ids selecionados p/ edição em massa (persiste ao filtrar/re-renderizar)
-    importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null },
+    // C4: `arquivo` é o File escolhido no preview — o input é recriado vazio por drawImportar(),
+    // então o aplicar não o acharia mais lá. Guardar o File (não o buffer: o pdf.js pode deixá-lo
+    // detached) e mandar os bytes como vieram.
+    importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null, arquivo: null },
     lancTudo: false,
     fechamento: null, fechamentoGrade: false, // G2: /api/fechamento e o "ver 12 meses" aberto
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
@@ -690,6 +731,8 @@ if (typeof document !== "undefined") {
     }
     return r.json();
   };
+  // C4: corpo = o File como veio (bytes crus, sem JSON); devolve a Response p/ quem chama olhar o status
+  const enviarArquivo = (p, arquivo) => fetch(p, { method: "POST", headers: { "content-type": "application/octet-stream" }, body: arquivo });
   // lê {erro} do corpo p/ mostrar a mensagem real (400 de regra de grupo, etc.), senão o status
   const erroDe = async (r, padrao) => { let msg = padrao; try { const e = await r.json(); if (e && e.erro) msg = e.erro; } catch { /* corpo não-JSON */ } return new Error(msg); };
   const apiPatch = async (p, body) => {
@@ -1685,6 +1728,11 @@ if (typeof document !== "undefined") {
   // mensagem de resultado do "Aplicar" (compartilhada pelos dois ramos de render de drawImportar).
   function msgResultado(r) {
     if (!r) return "";
+    // C4: o import entrou mesmo quando o original não foi guardado; o aviso vem junto, não no lugar
+    const aviso = r.avisoArquivo ? `<p class="impchk impchk-warn">⚠ ${esc(r.avisoArquivo)}</p>` : "";
+    return msgGravados(r) + aviso;
+  }
+  function msgGravados(r) {
     if (r.agrupados == null && r.naoGasto == null) { // G1: resultado do tipo wise (só conversões)
       return `<p class="impresultado">✅ ${r.gravados} conversão(ões) gravada(s). Atualize o Resumo para ver o salário do mês.</p>`;
     }
@@ -1816,7 +1864,7 @@ if (typeof document !== "undefined") {
         if (!ano || !mes || mes < 1 || mes > 12) { alert("Preencha ano (ex.: 2025) e mês (1–12) da fatura."); return; }
         st.ano = ano; st.mes = mes;
       }
-      st.carregando = true; st.ultimoResultado = null; drawImportar();
+      st.carregando = true; st.ultimoResultado = null; st.arquivo = arquivo; drawImportar();
       try {
         if (leituraDoTipo(st.tipo) === "csv") {
           // G1: CSV é texto — vai direto, sem pdf.js
@@ -1849,8 +1897,9 @@ if (typeof document !== "undefined") {
           // G1: manda só as conversões novas; o servidor grava em `conversoes` (dedup por linha_hash)
           const conversoes = st.preview.itens.filter(it => it.status === "novo");
           // G2: a cobertura (1ª à última conversão do CSV) vai junto, pra entrar em importacoes
-          st.ultimoResultado = await apiPost("/api/importar/aplicar", { tipo: "wise", conversoes, cobertura: st.preview.cobertura || null });
-          st.preview = null;
+          st.ultimoResultado = await aplicarEGuardarArquivo(st,
+            { tipo: "wise", conversoes, cobertura: st.preview.cobertura || null }, { apiPost, enviarArquivo });
+          st.preview = null; st.arquivo = null;
           drawImportar();
           return;
         }
@@ -1862,8 +1911,9 @@ if (typeof document !== "undefined") {
         // marcá-lo fora do resumo (evita contar o gasto do cartão duas vezes). G2: vai sempre, mesmo
         // sem total — o servidor grava o mês da fatura em importacoes.
         if (st.tipo === "fatura") payload.fatura = { totalCents: st.preview.totalCents, ano: st.ano, mes: st.mes };
-        st.ultimoResultado = await apiPost("/api/importar/aplicar", payload);
-        st.preview = null; // evita reaplicar o mesmo lote sem novo preview
+        // C4: depois do aplicar dar certo, guarda o PDF original (falha aqui só vira aviso)
+        st.ultimoResultado = await aplicarEGuardarArquivo(st, payload, { apiPost, enviarArquivo });
+        st.preview = null; st.arquivo = null; // evita reaplicar o mesmo lote sem novo preview
         drawImportar();
       } catch (err) {
         alert("Falha ao aplicar: " + err.message);
@@ -1887,7 +1937,7 @@ if (typeof document !== "undefined") {
     }
   });
   $("#importar").addEventListener("change", e => {
-    if (e.target.id === "imptipo") { estado.importar.tipo = e.target.value; estado.importar.preview = null; drawImportar(); }
+    if (e.target.id === "imptipo") { estado.importar.tipo = e.target.value; estado.importar.preview = null; estado.importar.arquivo = null; drawImportar(); }
   });
 
   // Inc 4.5 Tarefa 2: range de datas p/ buscar TRANSAÇÕES (aba Lançamentos) — mês único
@@ -2045,7 +2095,7 @@ if (typeof document !== "undefined") {
   $("#fechamento").addEventListener("click", e => {
     const fonte = e.target.closest(".fech-falta");
     if (fonte) {
-      estado.importar.tipo = fonte.dataset.tipo; estado.importar.preview = null;
+      estado.importar.tipo = fonte.dataset.tipo; estado.importar.preview = null; estado.importar.arquivo = null;
       document.querySelector('.tab[data-view="importar"]')?.click();
       return;
     }
