@@ -18,7 +18,7 @@ import { alocarSalario, mesesAte } from "./salario.js";
 import { montarFechamento, ultimoDiaDoMes } from "./fechamento.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
-import { parsePatrimonio, dataDaMensagem, caminhoPatrimonio, textoConfirmacao, montarPatrimonio } from "./patrimonio.js";
+import { parsePatrimonio, dataDaMensagem, caminhoPatrimonio, textoConfirmacao, montarPatrimonio, dataEfetiva, PESSOA_POR_CONTA, CONTAS } from "./patrimonio.js";
 import { montarCasa, validarParamCasa, paramVigente } from "./casa.js";
 import { montarLembrete, contasSemFotoDoMes, momentoDoLembrete, idsDaAllowlist, enviarLembrete } from "./lembrete.js";
 
@@ -157,7 +157,9 @@ export async function tratarUpdate(update, env, deps) {
 }
 
 // A2: lê o print (modo patrimonio), completa conta/pessoa/data, sobe pro Dropbox e grava um
-// registro por produto. A legenda vence o que o modelo leu; sem data no print, vale a da mensagem.
+// registro por produto. A legenda vence o que o modelo leu; sem data no print (ou com ela a mais de
+// 60 dias da mensagem), vale a da mensagem. A4: sem pessoa no print nem na legenda, o mapa por
+// conta completa; o print-resumo não grava nada.
 async function tratarPatrimonio(ev, env, deps, { bytes, mime, hash, legenda }) {
   const ex = await deps.extrairImpl(bytes, mime, null, "patrimonio");
   if (!ex.ok) {
@@ -166,17 +168,19 @@ async function tratarPatrimonio(ev, env, deps, { bytes, mime, hash, legenda }) {
     return;
   }
   const n = ex.normalizado;
+  // antes de qualquer gravação (Dropbox, documento): o resumo não é guardado
+  if (n.resumo) { await deps.responderImpl(ev.chatId, "Esse é o resumo da carteira; manda o print com os produtos.", env); return; }
   const conta = legenda.conta ?? n.conta;
-  const nomePessoa = legenda.pessoa ?? n.pessoa;
+  const nomePessoa = legenda.pessoa ?? n.pessoa ?? (conta ? PESSOA_POR_CONTA[conta] : null) ?? null;
   if (!conta || !nomePessoa) {
     const falta = [!conta && "a conta", !nomePessoa && "a pessoa"].filter(Boolean).join(" e ");
-    await deps.responderImpl(ev.chatId, `Não reconheci ${falta} no print. Reenvie com a legenda: /patrimonio <pessoa> <itau|c6|nubank|mercadopago>`, env);
+    await deps.responderImpl(ev.chatId, `Não reconheci ${falta} no print. Reenvie com a legenda: /patrimonio <pessoa> <${CONTAS.join("|")}>`, env);
     return;
   }
   const pessoa = await deps.db.pessoaPorNome(nomePessoa);
   if (!pessoa) { await deps.responderImpl(ev.chatId, `Pessoa "${nomePessoa}" não existe. Reenvie com a legenda: /patrimonio <pessoa> <conta>`, env); return; }
 
-  const dataISO = n.dataISO ?? dataDaMensagem(ev.date);
+  const { dataISO, descartada } = dataEfetiva(n.dataISO, dataDaMensagem(ev.date));
   const ext = ev.tipo === "pdf" ? "pdf" : (mime === "image/png" ? "png" : "jpg");
   const caminho = caminhoPatrimonio({ dataISO, conta, pessoa: pessoa.nome, ext });
   const dropboxPath = await deps.subir(env, caminho, bytes);
@@ -185,7 +189,7 @@ async function tratarPatrimonio(ev, env, deps, { bytes, mime, hash, legenda }) {
     tipo_arquivo: mime, hash, telegram_file_id: ev.fileId,
   });
   await deps.db.inserirPatrimonio(n.produtos.map((p) => ({ ...p, data: dataISO, conta, pessoa_id: pessoa.id, documento_id: doc.id })));
-  await deps.responderImpl(ev.chatId, textoConfirmacao({ conta, pessoa: pessoa.nome, dataISO, produtos: n.produtos }), env);
+  await deps.responderImpl(ev.chatId, textoConfirmacao({ conta, pessoa: pessoa.nome, dataISO, produtos: n.produtos, dataDescartada: descartada }), env);
 }
 
 // depsOpt: injeção p/ teste (mesmo padrão do dbOpt em handleApi).

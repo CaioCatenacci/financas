@@ -144,9 +144,9 @@ create table patrimonio (
   id                     uuid        primary key default gen_random_uuid(),
   data                   date        not null,
   pessoa_id              uuid        not null references pessoas(id),
-  conta                  text        not null,          -- 'itau' | 'c6' | 'nubank' | 'mercadopago'
+  conta                  text        not null,          -- 'itau' | 'c6' | 'nubank' | 'mercadopago' | 'fgts'
   produto                text        not null,
-  familia                text        not null check (familia in ('fundos','renda_fixa','caixa','outros')),
+  familia                text        not null check (familia in ('fundos','renda_fixa','caixa','outros','fgts')),
   nivel                  text        not null check (nivel in ('titulo','agregado')),
   vencimento             date,
   taxa                   text,

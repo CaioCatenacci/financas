@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   totalContaData, fotoDoMes, cobreMes, rendimentoDoMes, montarPatrimonio, rotuloRendimento,
   parsePatrimonio, normalizarConta, caminhoPatrimonio, dataDaMensagem, textoConfirmacao,
+  dataEfetiva, PESSOA_POR_CONTA, CONTAS, FAMILIAS,
 } from "./patrimonio.js";
 
 // Todos os valores são inventados (o repositório é público). R$ 1.000,00 = 100000 centavos.
@@ -208,4 +209,60 @@ test("textoConfirmacao: traz o total (sem contar duas vezes) e o número de prod
   assert.match(t, /250\.000,00/);
   assert.match(t, /3 produtos/);
   assert.match(t, /09\/10\/2026/);
+});
+
+// ---------- A4: o print certo sozinho ----------
+
+test("A4 dataEfetiva (Exemplo): ano lido 2024 num print mandado em 14/10/2026 fica longe demais → vale a da mensagem", () => {
+  // o C6 mostra "07/10/24"; lido como 2024, cai a 737 dias da mensagem
+  assert.deepEqual(dataEfetiva("2024-10-07", "2026-10-14"), { dataISO: "2026-10-14", descartada: true });
+});
+
+test("A4 dataEfetiva: a 61 dias (para trás ou para frente) descarta; a 59 e a 60 mantém a data do print", () => {
+  // a regra é "a mais de 60 dias": 60 exatos ainda é a data do print
+  assert.deepEqual(dataEfetiva("2026-08-14", "2026-10-14"), { dataISO: "2026-10-14", descartada: true }); // 61 para trás
+  assert.deepEqual(dataEfetiva("2026-12-14", "2026-10-14"), { dataISO: "2026-10-14", descartada: true }); // 61 para frente
+  assert.deepEqual(dataEfetiva("2026-08-16", "2026-10-14"), { dataISO: "2026-08-16", descartada: false }); // 59
+  assert.deepEqual(dataEfetiva("2026-08-15", "2026-10-14"), { dataISO: "2026-08-15", descartada: false }); // 60
+  assert.deepEqual(dataEfetiva("2026-12-12", "2026-10-14"), { dataISO: "2026-12-12", descartada: false }); // 59 para frente
+});
+
+test("A4 dataEfetiva: sem data no print vale a da mensagem, sem aviso (não houve o que descartar)", () => {
+  assert.deepEqual(dataEfetiva(null, "2026-10-14"), { dataISO: "2026-10-14", descartada: false });
+});
+
+test("A4 PESSOA_POR_CONTA: o mapa fixo que completa a pessoa quando nem o print nem a legenda dizem", () => {
+  assert.deepEqual(PESSOA_POR_CONTA, { itau: "Caio", fgts: "Caio", c6: "Paola", nubank: "Paola", mercadopago: "Paola" });
+  // toda conta do vocabulário tem dono no mapa: conta nova sem dono voltaria a pedir legenda
+  for (const c of CONTAS) assert.ok(PESSOA_POR_CONTA[c], c);
+});
+
+test("A4 FGTS: conta e família próprias; a legenda /patrimonio caio fgts acha a conta", () => {
+  assert.ok(CONTAS.includes("fgts"));
+  assert.ok(FAMILIAS.includes("fgts"));
+  assert.equal(normalizarConta("fgts"), "fgts");
+  assert.equal(normalizarConta("FGTS"), "fgts");
+  assert.deepEqual(parsePatrimonio("/patrimonio caio fgts"), { conta: "fgts", pessoa: "caio" });
+});
+
+test("A4 FGTS: a família fgts soma no total da conta e aparece separada em porFamilia", () => {
+  const linhas = [
+    { mes: "2026-10", data: "2026-10-13", conta: "fgts", pessoa: "Caio", familia: "fgts", nivel: "agregado", saldo_cents: R(3000), rend_mes_cents: null, n_rend_mes: 0 },
+    { mes: "2026-10", data: "2026-10-09", conta: "itau", pessoa: "Caio", familia: "fundos", nivel: "agregado", saldo_cents: R(1000), rend_mes_cents: null, n_rend_mes: 0 },
+  ];
+  const f = fotoDoMes(linhas.filter((l) => l.conta === "fgts"));
+  assert.equal(f.total_cents, R(3000));
+  assert.deepEqual(f.porFamilia, { fgts: R(3000) });
+  const r = montarPatrimonio(["2026-10"], { linhas });
+  const fgts = r.meses[0].porConta.find((c) => c.conta === "fgts");
+  assert.deepEqual(fgts.porFamilia, { fgts: R(3000) });
+  assert.equal(r.meses[0].total_cents, R(4000));
+});
+
+test("A4 textoConfirmacao: com a data descartada, a confirmação avisa qual data usou", () => {
+  const produtos = [{ familia: "caixa", nivel: "agregado", saldo_cents: R(100) }];
+  const t = textoConfirmacao({ conta: "c6", pessoa: "Paola", dataISO: "2026-10-14", produtos, dataDescartada: true });
+  assert.match(t, /data do print ignorada, usei 14\/10/);
+  const sem = textoConfirmacao({ conta: "c6", pessoa: "Paola", dataISO: "2026-10-14", produtos });
+  assert.doesNotMatch(sem, /ignorada/);
 });

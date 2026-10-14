@@ -640,10 +640,22 @@ entra por **print da tela**, mandado pelo Telegram como um comprovante. É a bas
 
 - **`patrimonio(data, pessoa_id, conta, produto, familia, nivel, vencimento, taxa, saldo_cents,
   rendimento_print_cents, periodo_rendimento, documento_id)`** (migração `0015`, sem semente).
-  Vocabulário fechado: `familia ∈ {fundos, renda_fixa, caixa, outros}`, `nivel ∈ {titulo,
+  Vocabulário fechado: `familia ∈ {fundos, renda_fixa, caixa, outros, fgts}`, `nivel ∈ {titulo,
   agregado}`, `periodo_rendimento ∈ {mes, ano, 12m, desde_inicio}` ou null; `conta ∈ {itau, c6,
-  nubank, mercadopago}` (validado no Worker). Um registro por produto, **no menor grão que o print
+  nubank, mercadopago, fgts}` (validado no Worker). Um registro por produto, **no menor grão que o print
   mostrar**; `data` = a do print, sem ela a da mensagem (horário de Brasília).
+- **O print certo sozinho (A4, 14/10/2026)**, para os prints do mês irem sem legenda:
+  - **data:** a lida a **mais de 60 dias** da mensagem (para trás ou para frente) é erro de leitura
+    (o "07/10/24" do C6 lido como 2024) e vale a da mensagem; a confirmação diz "data do print
+    ignorada, usei DD/MM" (`dataEfetiva`, `worker/patrimonio.js`);
+  - **pessoa:** legenda > nome lido no print > mapa fixo `PESSOA_POR_CONTA` (itau/fgts → Caio;
+    c6/nubank/mercadopago → Paola);
+  - **print-resumo** (só o total da carteira): o modelo devolve `resumo: true`; nada é gravado (nem
+    Dropbox, nem documento) e o bot pede o print com os produtos;
+  - **Tesouro** ("TIT PUBLICO", "Tesouro Selic/IPCA/Prefixado/Direto") é sempre `titulo`, forçado
+    em `validarPatrimonio`;
+  - **FGTS** (app da Caixa): conta e família `fgts` (migração `0018`). Só sai para a compra do
+    imóvel: soma no total e no "quanto já temos" da Casa como as outras, a família só o separa.
 - **Sem contar duas vezes** (`worker/patrimonio.js`, puro): numa conta e data, os títulos de uma
   família substituem o agregado dela. **Foto do mês** de uma conta: para cada família, a última
   data do mês em que ela apareceu (um detalhe no dia 05 e um agregado no dia 20 não duplicam; um

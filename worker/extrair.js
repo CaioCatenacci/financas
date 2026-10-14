@@ -28,10 +28,10 @@ export function PROMPT(categorias) {
 // produto vem no menor grão que o print mostrar, com a família do vocabulário fechado.
 export function PROMPT_PATRIMONIO() {
   return [
-    "Você lê um print da tela de investimentos/saldo do app de um banco ou corretora (Itaú, C6, Nubank, Mercado Pago).",
+    "Você lê um print da tela de investimentos/saldo do app de um banco ou corretora (Itaú, C6, Nubank, Mercado Pago) ou do FGTS (app da Caixa).",
     "Responda SOMENTE um JSON com as chaves:",
-    '{ "data": "AAAA-MM-DD"|null, "conta": "itau"|"c6"|"nubank"|"mercadopago"|null, "pessoa": string|null,',
-    '  "produtos": [ { "produto": string, "familia": "fundos"|"renda_fixa"|"caixa"|"outros",',
+    '{ "data": "AAAA-MM-DD"|null, "conta": "itau"|"c6"|"nubank"|"mercadopago"|"fgts"|null, "pessoa": string|null, "resumo": true|false,',
+    '  "produtos": [ { "produto": string, "familia": "fundos"|"renda_fixa"|"caixa"|"outros"|"fgts",',
     '    "nivel": "titulo"|"agregado", "saldo": número, "vencimento": "AAAA-MM-DD"|null, "taxa": string|null,',
     '    "rendimento": número|null, "periodo": "mes"|"ano"|"12m"|"desde_inicio"|null } ],',
     '  "confianca": número entre 0 e 1 }.',
@@ -39,7 +39,9 @@ export function PROMPT_PATRIMONIO() {
     "pessoa = o primeiro nome do titular, se aparecer; senão null.",
     "Um produto por linha, no MENOR grão que o print mostrar: cada título (CDB com taxa e vencimento, Tesouro) com nivel='titulo';",
     "o total de um grupo (Fundos, Renda Fixa/CDB, Cofrinhos/Caixinhas) com nivel='agregado'. Se o print mostrar o grupo E os títulos dele, devolva os dois.",
-    "familia: Fundos → fundos; CDB, Tesouro, LCI/LCA, Renda Fixa → renda_fixa; Cofrinhos, Caixinhas, conta remunerada → caixa; o resto → outros.",
+    "familia: Fundos → fundos; CDB, Tesouro, LCI/LCA, Renda Fixa → renda_fixa; Cofrinhos, Caixinhas, conta remunerada → caixa; saldo do FGTS → fgts (conta fgts); o resto → outros.",
+    "Tesouro Direto (TIT PUBLICO, Tesouro Selic/IPCA/Prefixado) é sempre nivel='titulo'.",
+    "resumo = true quando o print só mostra o total da carteira (ex.: \"meus investimentos\", sem a lista de produtos); nesse caso produtos = []. Com produtos na tela, resumo = false.",
     "saldo e rendimento em reais (número, ponto decimal). rendimento = o que o print mostra de rendimento do produto, com o período (mes = no mês; ano = no ano; 12m = 12 meses; desde_inicio = desde a aplicação); sem rendimento, null nos dois.",
     "Não some nem invente valores: copie o que está na tela.",
   ].join("\n");
@@ -67,8 +69,11 @@ export function validarPatrimonio(campos) {
   const dataISO = c.data == null ? null : normalizarData(String(c.data));
   const conta = normalizarConta(c.conta);
   const pessoa = typeof c.pessoa === "string" && c.pessoa.trim() ? c.pessoa.trim() : null;
-  const brutos = Array.isArray(c.produtos) ? c.produtos : [];
-  if (!brutos.length) erros.push("nenhum produto lido");
+  // A4: o print-resumo (só o total da carteira) não tem produto: é aceito marcado, sem produtos, e
+  // quem grava recusa com uma resposta própria. Gravá-lo como produto somaria por cima das famílias.
+  const resumo = c.resumo === true;
+  const brutos = resumo ? [] : (Array.isArray(c.produtos) ? c.produtos : []);
+  if (!brutos.length && !resumo) erros.push("nenhum produto lido");
   const produtos = brutos.map((p, i) => {
     const q = p && typeof p === "object" ? p : {};
     const onde = `produto ${i + 1}`;
@@ -83,7 +88,8 @@ export function validarPatrimonio(campos) {
     const rendimento_print_cents = q.rendimento == null ? null : centavosDe(q.rendimento, { negativo: true });
     if (q.rendimento != null && rendimento_print_cents == null) erros.push(`${onde}: rendimento inválido`);
     return {
-      produto, familia: q.familia, nivel: q.nivel, saldo_cents,
+      // A4: Tesouro é sempre título, diga o modelo o que disser (no smoke ele veio como agregado)
+      produto, familia: q.familia, nivel: ehTesouro(produto) && q.nivel === "agregado" ? "titulo" : q.nivel, saldo_cents,
       vencimento: q.vencimento == null ? null : normalizarData(String(q.vencimento)),
       taxa: typeof q.taxa === "string" && q.taxa.trim() ? q.taxa.trim() : null,
       rendimento_print_cents,
@@ -92,7 +98,14 @@ export function validarPatrimonio(campos) {
     };
   });
   if (erros.length) return { ok: false, erros };
-  return { ok: true, erros: [], normalizado: { dataISO, conta, pessoa, produtos } };
+  return { ok: true, erros: [], normalizado: { dataISO, conta, pessoa, produtos, resumo } };
+}
+
+// "TIT PUBLICO", "Tít. Público IPCA", "Tesouro Selic/IPCA/Prefixado/Direto/Renda+", sem acento nem caixa
+function ehTesouro(nome) {
+  if (!nome) return false;
+  const s = nome.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  return /\btit(ulo)?s?\.?\s*public/.test(s) || /\btesouro\s*(selic|ipca|prefixado|direto|renda)/.test(s);
 }
 
 function macrosDe(categorias) {

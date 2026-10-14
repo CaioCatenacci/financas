@@ -89,3 +89,41 @@ test("PROMPT_PATRIMONIO pede a forma {data, conta, pessoa, produtos} com o vocab
   const p = PROMPT_PATRIMONIO();
   for (const t of ["produtos", "fundos", "renda_fixa", "caixa", "outros", "titulo", "agregado", "desde_inicio"]) assert.match(p, new RegExp(t));
 });
+
+// ---------- A4 ----------
+
+test("A4 validarPatrimonio: Tesouro é sempre título, mesmo que o modelo diga agregado", () => {
+  const nomes = ["TIT PUBLICO", "Tít. Público IPCA 2035", "Tesouro Selic 2029", "TESOURO IPCA+ 2040", "Tesouro Prefixado 2031", "Tesouro Direto"];
+  for (const produto of nomes) {
+    const v = validarPatrimonio({ ...printOk, produtos: [{ ...printOk.produtos[1], produto, nivel: "agregado" }] });
+    assert.equal(v.ok, true, produto);
+    assert.equal(v.normalizado.produtos[0].nivel, "titulo", produto);
+  }
+  // o que não é Tesouro segue o nível que o modelo deu
+  assert.equal(validarPatrimonio(printOk).normalizado.produtos[0].nivel, "agregado");
+});
+
+test("A4 validarPatrimonio: print-resumo (só o total da carteira) é aceito sem produtos e marcado", () => {
+  const v = validarPatrimonio({ data: "2026-10-09", conta: "itau", pessoa: null, resumo: true, produtos: [] });
+  assert.equal(v.ok, true);
+  assert.equal(v.normalizado.resumo, true);
+  assert.deepEqual(v.normalizado.produtos, []);
+  // sem a marca, sem produto continua recusando
+  assert.equal(validarPatrimonio({ data: "2026-10-09", conta: "itau", produtos: [] }).ok, false);
+  assert.equal(validarPatrimonio(printOk).normalizado.resumo, false);
+});
+
+test("A4 validarPatrimonio: conta fgts com família fgts é aceita", () => {
+  const v = validarPatrimonio({ data: "2026-10-13", conta: "FGTS", pessoa: null,
+    produtos: [{ produto: "Saldo FGTS", familia: "fgts", nivel: "agregado", saldo: 3000, vencimento: null, taxa: null, rendimento: null, periodo: null }] });
+  assert.equal(v.ok, true);
+  assert.equal(v.normalizado.conta, "fgts");
+  assert.equal(v.normalizado.produtos[0].familia, "fgts");
+});
+
+test("A4 PROMPT_PATRIMONIO: pede a marca de resumo e conhece o FGTS (conta e família)", () => {
+  const p = PROMPT_PATRIMONIO();
+  assert.match(p, /"resumo"/);
+  assert.match(p, /"fgts"\|null/); // no enum de conta
+  assert.match(p, /"outros"\|"fgts"/); // no enum de família
+});
