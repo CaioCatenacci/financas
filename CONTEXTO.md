@@ -77,6 +77,20 @@ arquivo fica no mesmo lugar. Assim:
 
 Nada de refatorar caminho com a categoria — dados em movimento.
 
+**Originais dos imports (C4, 14/10/2026).** Depois de um `aplicar` bem-sucedido, a aba Importar
+manda o arquivo como veio (o PDF do C6 segue com senha; o Worker não abre) para
+`POST /api/importar/arquivo`, que sobe para:
+
+- extrato → `/Finanças/Extratos/<banco>/AAAA-MM-DD_a_AAAA-MM-DD_<banco>_extrato.pdf` (cobertura da prévia);
+- fatura → `/Finanças/Faturas/<banco>/AAAA-MM_<banco>_fatura.pdf` (mês do vencimento digitado);
+- Wise → `/Finanças/Extratos/wise/AAAA-MM-DD_a_AAAA-MM-DD_wise_extrato.csv`.
+
+`<banco>` ∈ {`itau`, `c6`, `wise`}; o caminho sai de `caminhoArquivoImport` (`worker/dropbox_nome.js`).
+Aqui, ao contrário dos comprovantes, o upload é **overwrite**: o nome é função só do período, então
+reimportar o mesmo período substitui o arquivo, sem "(1)". Os comprovantes seguem `add` +
+`autorename`. Falha no envio não desfaz o import: só o aviso "o import entrou, mas o arquivo
+original não foi guardado". Nada vai para `documentos`. Isto encerra a "estrutura fina do Dropbox".
+
 ---
 
 ## 5. Dois níveis de categoria + reembolso desde a v1

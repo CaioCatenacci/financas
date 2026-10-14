@@ -67,3 +67,8 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 - **P3 · Bordas do ritmo da casa a confirmar.** Menos de 6 meses fechados (média sobre os que
   houver), falta ≤ 0 (projeção 0) e data alvo vencida (ritmo necessário null) seguem o padrão do
   PM (CONTEXTO §22); o Caio confirma ou corrige. Origem: G4 (13/10/2026).
+- **P3 · Extrato sem nenhum "Saldo do dia" não tem o original guardado.** O nome do arquivo no
+  Dropbox vem da cobertura da prévia (1º e último saldo); sem saldo a cobertura é null, o aplicar
+  passa e o app só avisa "o import entrou, mas o arquivo original não foi guardado". Nunca
+  aconteceu nos imports de hoje; se aparecer, decidir se o nome cai nas datas das linhas.
+  Origem: C4 (14/10/2026).
