@@ -12,7 +12,6 @@ que sai; (2) para onde o dinheiro vai; (3) a casa. A faixa Agora fica com o Caio
 ## Depois
 - C5
 - C6
-- C7
 - D1
 - D2
 - D4
