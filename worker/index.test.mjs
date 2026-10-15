@@ -683,6 +683,15 @@ function dbResumoFake() {
     resumoPorPessoaCategoria: async (de, ate) => { estado.ppc = { de, ate }; return [{ pessoa: "Alice", categoria: "Casa", total_cents: 30000 }]; },
     resumoDiario: async (de, ateExcl) => { estado.de = de; estado.ateExcl = ateExcl; return [{ dia: "2026-09-01", total: 500 }]; },
     resumoMesVsAnterior: async (mesRef) => { estado.mesRef = mesRef; return [{ macro: "Casa", atual: 500, ant: 300 }]; },
+    // D5 (meses e valores inventados): primeira fatura do ano anterior vence em maio
+    faturasImportadas: async (de, ateExcl) => { estado.faturas = { de, ateExcl }; return estado.mesesFatura || ["2025-05", "2025-06", "2025-07", "2026-08", "2026-09"]; },
+    resumoAnoVsAnterior: async (de, ateExcl, deAnt, ateExclAnt) => {
+      estado.ano = { de, ateExcl, deAnt, ateExclAnt };
+      return [
+        { categoria: "Escola", atual_cents: 440000, anterior_cents: 400000 },
+        { categoria: "Não Identificado", atual_cents: 10000, anterior_cents: 90000 },
+      ];
+    },
   };
 }
 
@@ -704,6 +713,52 @@ test("/api/resumo?mes= devolve porPessoaCategoria do db, no intervalo do mês", 
   const data = await (await handleApi(req, env, new URL(req.url), db)).json();
   assert.deepEqual(data.porPessoaCategoria, [{ pessoa: "Alice", categoria: "Casa", total_cents: 30000 }]);
   assert.deepEqual(db.estado.ppc, { de: "2026-09-01", ate: "2026-09-30" });
+});
+
+// ---------- D5: este ano × ano passado ----------
+test("D5 /api/resumo?mes= devolve anoVsAnterior com as datas do período e as categorias em centavos inteiros", async () => {
+  // Exemplo do D5: setembro/2026 e primeira fatura de 2025 em maio → jun–set nos dois anos
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/resumo?mes=2026-09", { headers: { "Cookie": "token=token123" } });
+  const data = await (await handleApi(req, { APP_TOKEN: "token123", DATABASE_URL: "" }, new URL(req.url), db)).json();
+  const a = data.anoVsAnterior;
+  assert.equal(a.de, "2026-06-01");
+  assert.equal(a.ate, "2026-09-30");
+  assert.equal(a.de_anterior, "2025-06-01");
+  assert.equal(a.ate_anterior, "2025-09-30");
+  assert.deepEqual(Object.keys(a).sort(), ["ate", "ate_anterior", "categorias", "de", "de_anterior"]);
+  // as faturas do ano anterior (início) e do corrente (fim) vêm numa leitura só; o SQL recebe janelas meio-abertas
+  assert.deepEqual(db.estado.faturas, { de: "2025-01-01", ateExcl: "2027-01-01" });
+  assert.deepEqual(db.estado.ano, { de: "2026-06-01", ateExcl: "2026-10-01", deAnt: "2025-06-01", ateExclAnt: "2025-10-01" });
+  for (const c of a.categorias) {
+    assert.ok(Number.isInteger(c.atual_cents) && Number.isInteger(c.anterior_cents), "centavos inteiros");
+  }
+});
+
+test("D5 a categoria padrão (Não Identificado) entra em anoVsAnterior.categorias como as outras, sem filtro nem ajuste", async () => {
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/resumo?mes=2026-09", { headers: { "Cookie": "token=token123" } });
+  const data = await (await handleApi(req, { APP_TOKEN: "token123", DATABASE_URL: "" }, new URL(req.url), db)).json();
+  assert.deepEqual(data.anoVsAnterior.categorias.find((c) => c.categoria === "Não Identificado"),
+    { categoria: "Não Identificado", atual_cents: 10000, anterior_cents: 90000 });
+});
+
+test("D5 sem fatura no ano anterior, anoVsAnterior vem null (o card não aparece)", async () => {
+  const db = dbResumoFake();
+  db.estado.mesesFatura = ["2026-01"];
+  const req = new Request("http://localhost/api/resumo?mes=2026-09", { headers: { "Cookie": "token=token123" } });
+  const data = await (await handleApi(req, { APP_TOKEN: "token123", DATABASE_URL: "" }, new URL(req.url), db)).json();
+  assert.equal(data.anoVsAnterior, null);
+  assert.equal(db.estado.ano, undefined, "nem consulta a soma");
+});
+
+test("D5 mês antes do início: o objeto vem com `de` = início e categorias vazias, sem somar nada", async () => {
+  const db = dbResumoFake();
+  const req = new Request("http://localhost/api/resumo?mes=2026-03", { headers: { "Cookie": "token=token123" } });
+  const data = await (await handleApi(req, { APP_TOKEN: "token123", DATABASE_URL: "" }, new URL(req.url), db)).json();
+  assert.equal(data.anoVsAnterior.de, "2026-06-01");
+  assert.deepEqual(data.anoVsAnterior.categorias, []);
+  assert.equal(db.estado.ano, undefined);
 });
 
 // ---------- Inc 4.6: grupos ----------
@@ -2304,6 +2359,9 @@ function dbCascataFake(linhas) {
     resumoPorPessoaCategoria: async () => [],
     resumoDiario: async () => [],
     resumoMesVsAnterior: async () => [],
+    // D5 entrou junto no /api/resumo: sem fatura no ano anterior, anoVsAnterior = null
+    faturasImportadas: async () => [],
+    resumoAnoVsAnterior: async () => [],
   };
 }
 

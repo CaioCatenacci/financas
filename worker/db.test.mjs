@@ -635,6 +635,43 @@ test("resumoMesVsAnterior ancora no mês passado (não em max(data))", async () 
   assert.doesNotMatch(c.text, /max\(data\)/i);
 });
 
+test("D5 resumoAnoVsAnterior: despesa que conta, por categoria, nos dois períodos, centavos inteiros", async () => {
+  // linhas inventadas: o driver devolve ::bigint como string
+  const sql = fakeSql([{ categoria: "Escola", atual_cents: "440000", anterior_cents: "400000" }]);
+  const db = criarDb(sql);
+  const r = await db.resumoAnoVsAnterior("2026-06-01", "2026-10-01", "2025-06-01", "2025-10-01");
+  assert.deepEqual(r, [{ categoria: "Escola", atual_cents: 440000, anterior_cents: 400000 }]);
+  const c = sql.chamadas[0];
+  assert.match(c.text, /natureza = 'despesa' and t\.conta_no_resumo/i);
+  assert.doesNotMatch(c.text, /computa_resumo/);
+  assert.match(c.text, /join categorias c on c\.id = t\.categoria_id/i);
+  assert.match(c.text, /round\(sum\(t\.valor_final\).*\*100\)\)::bigint/i);
+  // a categoria padrão não é filtrada nem ajustada: Não Identificado aparece como as outras
+  assert.doesNotMatch(c.text, /padrao/i);
+  for (const d of ["2026-06-01", "2026-10-01", "2025-06-01", "2025-10-01"]) assert.ok(c.values.includes(d), d);
+});
+
+test("D5 resumoAnoVsAnterior: só as linhas com conta_no_resumo entram na soma", async () => {
+  // fake que executa o filtro do WHERE sobre linhas inventadas: um membro de grupo não
+  // representante (conta_no_resumo=false) e uma receita ficam de fora
+  const linhas = [
+    { data: "2026-07-10", natureza: "despesa", conta_no_resumo: true,  categoria: "Escola", valor_final: 100.10 },
+    { data: "2026-07-10", natureza: "despesa", conta_no_resumo: false, categoria: "Escola", valor_final: 100.10 },
+    { data: "2025-07-10", natureza: "despesa", conta_no_resumo: true,  categoria: "Escola", valor_final: 90.00 },
+    { data: "2026-07-11", natureza: "receita", conta_no_resumo: true,  categoria: "Escola", valor_final: 500.00 },
+  ];
+  const sql = (strings, ...values) => {
+    const text = strings.join("?");
+    assert.match(text, /natureza = 'despesa' and t\.conta_no_resumo/);
+    const [de, ateExcl, deAnt, ateExclAnt] = values;
+    const conta = linhas.filter((l) => l.natureza === "despesa" && l.conta_no_resumo);
+    const soma = (a, b) => Math.round(conta.filter((l) => l.data >= a && l.data < b).reduce((s, l) => s + Math.round(l.valor_final * 100), 0));
+    return Promise.resolve([{ categoria: "Escola", atual_cents: String(soma(de, ateExcl)), anterior_cents: String(soma(deAnt, ateExclAnt)) }]);
+  };
+  const r = await criarDb(sql).resumoAnoVsAnterior("2026-06-01", "2026-10-01", "2025-06-01", "2025-10-01");
+  assert.deepEqual(r, [{ categoria: "Escola", atual_cents: 10010, anterior_cents: 9000 }]);
+});
+
 test("catalogo devolve a flag padrao das categorias (fallback por flag, não por nome)", async () => {
   const sql = fakeSql([]);
   const db = criarDb(sql);
@@ -664,7 +701,8 @@ test("leituras agregadas filtram por conta_no_resumo, não por computa_resumo", 
   await db.resumoReembolsoAno();
   await db.resumoPorPessoa("2026-09-01", "2026-09-30");
   await db.realizadoPorCategoriaMes("2026-09-01", "2026-10-01");
-  assert.equal(sql.chamadas.length, 7);
+  await db.resumoAnoVsAnterior("2026-06-01", "2026-10-01", "2025-06-01", "2025-10-01");
+  assert.equal(sql.chamadas.length, 8);
   for (const c of sql.chamadas) {
     assert.match(c.text, /conta_no_resumo/, c.text);
     assert.doesNotMatch(c.text, /\bcomputa_resumo\b/, c.text);

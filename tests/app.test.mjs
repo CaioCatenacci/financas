@@ -12,6 +12,7 @@ import {
   parseBRtoCents, corpoParamCasa, montarTelaCasa, htmlCasa, SEM_FOTO_CASA,
   lotesSugestao, aplicarSugestoes, jevPreenche, seloJev, celulaCategoriaImport, avisoJevHtml, AVISO_JEV,
   consultaArquivoImport, aplicarEGuardarArquivo, AVISO_ARQUIVO_NAO_GUARDADO,
+  linhasAnoVsAnterior, subtituloAnoVsAnterior, htmlAnoVsAnterior, SEM_COMPARACAO,
 } from "../public/app.js";
 import { montarCasa } from "../worker/casa.js";
 import { mesesAte } from "../worker/salario.js";
@@ -1668,4 +1669,75 @@ test("opcoesEsfera: seletor da aba Ajustes só oferece pessoal/empresa e marca a
   assert.deepEqual([...html.matchAll(/value="(\w+)"/g)].map((m) => m[1]), ["pessoal", "empresa"]);
   assert.match(html, /value="empresa" selected/);
   assert.match(opcoesEsfera(undefined), /value="pessoal" selected/, "catálogo sem esfera mostra o default da coluna");
+});
+
+// ---- D5: este ano × ano passado (valores inventados, os do Exemplo) ----
+const AV_EXEMPLO = {
+  de: "2026-06-01", ate: "2026-09-30", de_anterior: "2025-06-01", ate_anterior: "2025-09-30",
+  categorias: [
+    { categoria: "Mercado", atual_cents: 300000, anterior_cents: 320000 },
+    { categoria: "Escola", atual_cents: 440000, anterior_cents: 400000 },
+  ],
+};
+
+test("D5 linhasAnoVsAnterior ordena pela maior alta em reais: escola (+400) antes de mercado (−200)", () => {
+  const l = linhasAnoVsAnterior(AV_EXEMPLO.categorias);
+  assert.deepEqual(l.map((x) => x.categoria), ["Escola", "Mercado"]);
+  assert.equal(l[0].diff_cents, 40000);
+  assert.equal(l[0].pct, 10);
+  assert.equal(l[1].diff_cents, -20000);
+  assert.equal(l[1].pct, -6); // −6,25% → inteiro, como no Exemplo
+});
+
+test("D5 a ordem é pela diferença em reais, não pelo %: alta grande em base grande vem antes de alta pequena em base pequena", () => {
+  const l = linhasAnoVsAnterior([
+    { categoria: "Lazer", atual_cents: 2000, anterior_cents: 1000 },       // +10, +100%
+    { categoria: "Saúde", atual_cents: 1100000, anterior_cents: 1000000 }, // +1.000, +10%
+  ]);
+  assert.deepEqual(l.map((x) => x.categoria), ["Saúde", "Lazer"]);
+});
+
+test("D5 categoria sem gasto no ano anterior mostra 'novo' no lugar do %", () => {
+  const [l] = linhasAnoVsAnterior([{ categoria: "Pet", atual_cents: 5000, anterior_cents: 0 }]);
+  assert.equal(l.pct, null);
+  assert.equal(l.novo, true);
+  const html = htmlAnoVsAnterior({ ...AV_EXEMPLO, categorias: [{ categoria: "Pet", atual_cents: 5000, anterior_cents: 0 }] }, "2026-09");
+  assert.match(html, />novo</);
+  assert.doesNotMatch(html, /Infinity|NaN/);
+});
+
+test("D5 subtítulo do card: o intervalo usado nos dois anos", () => {
+  assert.equal(subtituloAnoVsAnterior(AV_EXEMPLO), "jun–set 2026 × jun–set 2025");
+  assert.equal(subtituloAnoVsAnterior({ de: "2026-06-01", ate: "2026-10-31", de_anterior: "2025-06-01", ate_anterior: "2025-10-31" }),
+    "jun–out 2026 × jun–out 2025");
+});
+
+test("D5 card com o título, o subtítulo e uma linha por categoria com totais, diferença em R$ e %", () => {
+  const html = htmlAnoVsAnterior(AV_EXEMPLO, "2026-09");
+  assert.match(html, /Este ano × ano passado/);
+  assert.match(html, /jun–set 2026 × jun–set 2025/);
+  assert.ok(html.indexOf("Escola") < html.indexOf("Mercado"), "escola antes do mercado");
+  assert.match(html, /R\$ 4\.400,00/);
+  assert.match(html, /R\$ 4\.000,00/);
+  assert.match(html, /\+R\$ 400,00/);
+  assert.match(html, /\+10%/);
+  assert.match(html, /-R\$ 200,00/);
+  assert.match(html, /-6%/);
+});
+
+test("D5 mês selecionado antes do início: o card diz 'sem comparação para este mês'", () => {
+  const html = htmlAnoVsAnterior({ de: "2026-06-01", ate: "2026-03-31", de_anterior: "2025-06-01", ate_anterior: "2025-03-31", categorias: [] }, "2026-03");
+  assert.equal(SEM_COMPARACAO, "sem comparação para este mês");
+  assert.match(html, /Este ano × ano passado/);
+  assert.match(html, /sem comparação para este mês/);
+});
+
+test("D5 anoVsAnterior null (sem fatura no ano anterior): o card não é renderizado", () => {
+  assert.equal(htmlAnoVsAnterior(null, "2026-09"), "");
+  assert.equal(htmlAnoVsAnterior(undefined, "2026-09"), "");
+});
+
+test("D5 o texto da categoria vai escapado (nome vem do banco)", () => {
+  const html = htmlAnoVsAnterior({ ...AV_EXEMPLO, categorias: [{ categoria: "<b>x</b>", atual_cents: 100, anterior_cents: 100 }] }, "2026-09");
+  assert.doesNotMatch(html, /<b>x<\/b>/);
 });

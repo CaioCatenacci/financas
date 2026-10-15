@@ -321,6 +321,24 @@ export function criarDb(sql) {
         order by atual desc`;
     },
 
+    // D5: despesa que conta, por categoria, no período deste ano [de, ateExcl) e no mesmo período
+    // do ano anterior [deAnt, ateExclAnt). Soma em SQL, centavos inteiros (::bigint chega string do
+    // driver e vira number na borda). Nenhum filtro de categoria: a padrão (Não Identificado) entra
+    // como as outras, de propósito (sem correção, decisão do D5).
+    async resumoAnoVsAnterior(de, ateExcl, deAnt, ateExclAnt) {
+      const rows = await sql`
+        select c.nome as categoria,
+          coalesce((round(sum(t.valor_final) filter (where t.data >= ${de} and t.data < ${ateExcl})*100))::bigint, 0) as atual_cents,
+          coalesce((round(sum(t.valor_final) filter (where t.data >= ${deAnt} and t.data < ${ateExclAnt})*100))::bigint, 0) as anterior_cents
+        from transacoes t
+        join categorias c on c.id = t.categoria_id
+        where t.natureza = 'despesa' and t.conta_no_resumo
+          and ((t.data >= ${de} and t.data < ${ateExcl}) or (t.data >= ${deAnt} and t.data < ${ateExclAnt}))
+        group by c.nome
+        order by c.nome`;
+      return rows.map(r => ({ categoria: r.categoria, atual_cents: Number(r.atual_cents), anterior_cents: Number(r.anterior_cents) }));
+    },
+
     async resumoReembolsoAno() {
       return await sql`
         select extract(year from t.data)::int as ano, c.nome as macro,

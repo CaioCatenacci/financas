@@ -677,6 +677,44 @@ export function htmlPatrimonio(resp) {
 // ---- G4: Projeto Casa ----
 // O servidor faz a conta (worker/casa.js); aqui só a tela a partir de /api/casa e
 // /api/casa/param. Centavos inteiros na API; null é "sem dado", nunca zero.
+// ---- D5: este ano × ano passado ----
+// O servidor decide o período (início pelas faturas do ano anterior) e soma em SQL; aqui só a
+// diferença entre dois inteiros em centavos, a ordem e o texto. Card some com anoVsAnterior null.
+export const SEM_COMPARACAO = "sem comparação para este mês";
+
+// uma linha por categoria; ordem pela maior alta em reais (não pelo %: o que aperta o orçamento é
+// o valor). % inteiro; sem gasto no ano anterior não há base → "novo" (pct null).
+export function linhasAnoVsAnterior(categorias) {
+  return (categorias || []).map((c) => {
+    const diff_cents = c.atual_cents - c.anterior_cents;
+    const novo = !c.anterior_cents;
+    return { ...c, diff_cents, novo, pct: novo ? null : Math.round(diff_cents * 100 / c.anterior_cents) };
+  }).sort((a, b) => b.diff_cents - a.diff_cents || a.categoria.localeCompare(b.categoria));
+}
+
+// "jun–out 2026 × jun–out 2025"
+export function subtituloAnoVsAnterior(av) {
+  const faixa = (de, ate) => `${MESES_CURTOS[Number(de.slice(5, 7)) - 1]}–${MESES_CURTOS[Number(ate.slice(5, 7)) - 1]} ${ate.slice(0, 4)}`;
+  return `${faixa(av.de, av.ate)} × ${faixa(av.de_anterior, av.ate_anterior)}`;
+}
+
+export function htmlAnoVsAnterior(av, mes) {
+  if (!av) return "";
+  const titulo = `<div class="cardhead"><div><h2>Este ano × ano passado</h2>`;
+  if (mes < av.de.slice(0, 7)) return `<div class="card">${titulo}</div></div><p class="vazio">${esc(SEM_COMPARACAO)}</p></div>`;
+  const sinal = (c) => (c > 0 ? "+" : "") + reaisDeCents(c);
+  const linhas = linhasAnoVsAnterior(av.categorias).map((l) =>
+    `<tr><td>${esc(l.categoria)}</td><td class="num">${reaisDeCents(l.atual_cents)}</td><td class="num">${reaisDeCents(l.anterior_cents)}</td>` +
+    `<td class="num ${l.diff_cents > 0 ? "down" : l.diff_cents < 0 ? "up" : ""}">${sinal(l.diff_cents)}</td>` +
+    `<td class="num">${l.novo ? "novo" : (l.pct > 0 ? "+" : "") + l.pct + "%"}</td></tr>`).join("");
+  const ano = av.ate.slice(0, 4), anoAnt = av.ate_anterior.slice(0, 4);
+  return `<div class="card">${titulo}<p class="sub">${esc(subtituloAnoVsAnterior(av))}</p></div></div>` +
+    (linhas
+      ? `<table class="pat-contas avs-tab"><thead><tr><th>Categoria</th><th class="num">${ano}</th><th class="num">${anoAnt}</th><th class="num">Diferença</th><th class="num">%</th></tr></thead><tbody>${linhas}</tbody></table>`
+      : `<p class="vazio">sem despesas no período</p>`) +
+    `</div>`;
+}
+
 export const SEM_FOTO_CASA = "mande o primeiro print (/patrimonio …)";
 export const SEM_PARAM_CASA = "preencha custo, reserva e data alvo do Projeto Casa";
 
@@ -1256,6 +1294,13 @@ if (typeof document !== "undefined") {
       rc.addEventListener("mousemove", e => { const i = +rc.dataset.i, s = steps[i], v = valorDe(s); showTip(e, `<b>${esc(s.nm)}</b>${i === 0 && cascata.estimado ? " · estimado" : ""}<br>${v < 0 ? "−" : ""}${BRL(Math.abs(v))}`); });
       rc.addEventListener("mouseleave", hideTip);
     });
+  }
+
+  // ----- D5: este ano × ano passado (null → o card não aparece) -----
+  function drawAnoVsAnterior() {
+    const el = $("#anovsant"); if (!el) return;
+    el.innerHTML = htmlAnoVsAnterior(estado.resumo.anoVsAnterior, estado.mes);
+    el.classList.toggle("hidden", !el.innerHTML);
   }
 
   // ----- dumbbell mês vs anterior -----
@@ -2210,7 +2255,7 @@ if (typeof document !== "undefined") {
       const nomes = estado.catalogo.categorias.map(c => c.nome).concat(transacoes.map(t => t.categoria));
       estado.cores = construirCores(nomes);
       popularFiltros(); popularMassaBar();
-      drawKPIs(); drawFechamento(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet(); drawRows();
+      drawKPIs(); drawFechamento(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawAnoVsAnterior(); drawSunburstPessoa(); drawBullet(); drawRows();
     } catch (e) { alert("Falha ao carregar: " + e.message); }
   }
 
@@ -2227,7 +2272,7 @@ if (typeof document !== "undefined") {
       const qs = `?mes=${estado.mes}`;
       const [resumo, metasMes, saldoMensal, fechamento] = await Promise.all([apiGet("/api/resumo" + qs), apiGet("/api/metas" + qs), apiGet(`/api/saldo-mensal?ate=${estado.mes}`), carregarFechamento()]);
       estado.resumo = resumo; estado.metasMes = metasMes; estado.saldoMensal = saldoMensal; estado.fechamento = fechamento;
-      drawKPIs(); drawFechamento(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawSunburstPessoa(); drawBullet();
+      drawKPIs(); drawFechamento(); drawSaldoMes(); drawSaldo12(); drawDiario(); drawSunburst(); drawWaterfall(); drawDumbbell(); drawAnoVsAnterior(); drawSunburstPessoa(); drawBullet();
     } catch (e) { alert("Falha ao carregar resumo: " + e.message); }
   }
 
