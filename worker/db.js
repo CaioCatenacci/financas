@@ -446,6 +446,40 @@ export function criarDb(sql) {
       return rows.map(r => ({ mes: r.mes, n: Number(r.n) }));
     },
 
+    // ---- G6: calendário das rotinas ----
+    // (mês, conta, pessoa) com print, do histórico inteiro: a lista de contas do calendário é de
+    // todas as que já apareceram, e o primeiro mês dá o corte do "não se aplica"
+    async printsPorMes() {
+      return await sql`
+        select to_char(p.data,'YYYY-MM') as mes, p.conta, pe.nome as pessoa
+        from patrimonio p
+        join pessoas pe on pe.id = p.pessoa_id
+        group by 1, 2, 3
+        order by 1, 2, 3`;
+    },
+
+    // meses com diagnóstico salvo (texto não vazio) entre `de` e `ate`, ambos 'YYYY-MM'
+    async diagnosticosNaJanela(de, ate) {
+      const rows = await sql`
+        select mes
+        from diagnosticos
+        where mes >= ${de} and mes <= ${ate} and length(trim(texto)) > 0
+        order by 1`;
+      return rows.map(r => r.mes);
+    },
+
+    // lançamentos que contam no resumo, por mês, na janela [de, ateExcl): mês sem nenhum não tem
+    // o que triar. Contagem em SQL, pelo mesmo filtro da triagem (conta_no_resumo).
+    async transacoesPorMes(de, ateExcl) {
+      const rows = await sql`
+        select to_char(t.data,'YYYY-MM') as mes, count(*) as n
+        from transacoes t
+        where t.conta_no_resumo and t.data >= ${de} and t.data < ${ateExcl}
+        group by to_char(t.data,'YYYY-MM')
+        order by 1`;
+      return rows.map(r => ({ mes: r.mes, n: Number(r.n) }));
+    },
+
     // ---- A2: patrimônio por print ----
     // um registro por produto lido, tudo numa transação só (o print entra inteiro ou não entra)
     async inserirPatrimonio(lista) {

@@ -16,7 +16,7 @@ import { validarLote, sugerirLote, AVISO_INDISPONIVEL } from "./sugestoes.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { alocarSalario, mesesAte } from "./salario.js";
-import { montarFechamento, ultimoDiaDoMes } from "./fechamento.js";
+import { montarFechamento, montarRotinas, ultimoDiaDoMes } from "./fechamento.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
 import { parsePatrimonio, dataDaMensagem, caminhoPatrimonio, textoConfirmacao, montarPatrimonio, dataEfetiva, PESSOA_POR_CONTA, CONTAS } from "./patrimonio.js";
@@ -258,6 +258,10 @@ function importacaoDoAplicar(b) {
 // (importacoes, categoria padrão por flag); a regra do estado é pura (worker/fechamento.js) e
 // recebe o mês corrente de quem chama (rota /api/fechamento, Projeto Casa e o cron do G5).
 async function lerFechamentoDb(db, ate, mesCorrente) {
+  return (await lerFechamentoESalarios(db, ate, mesCorrente)).meses;
+}
+// o calendário do G6 também precisa do brl do salário por mês: a mesma leitura, sem repetir a query
+async function lerFechamentoESalarios(db, ate, mesCorrente) {
   const meses = mesesAte(ate, 12);
   const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
   const [coberturas, faturas, semCategoria, params, conversoes] = await Promise.all([
@@ -267,7 +271,7 @@ async function lerFechamentoDb(db, ate, mesCorrente) {
   // salário: cobertura = a última conversão, de qualquer origem (wise ou nomad)
   const ultimaConversao = conversoes.reduce((m, c) => (!m || String(c.data) > m ? String(c.data).slice(0, 10) : m), null);
   const salarios = alocarSalario(conversoes, params, meses);
-  return montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao });
+  return { meses: montarFechamento(meses, mesCorrente, { coberturas, faturas, semCategoria, salarios, ultimaConversao }), salarios };
 }
 
 // A2: patrimônio — 12 meses terminando em `ate`, mais o mês anterior ao primeiro (o rendimento do
@@ -505,7 +509,16 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
     const ate = url.searchParams.get("ate");
     if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(ate || "")) return erroJson("ate inválido (use YYYY-MM)", 400);
     const mesCorrente = new Date().toISOString().slice(0, 7);
-    return j({ ate, mes_corrente: mesCorrente, meses: await lerFechamento(ate, mesCorrente) });
+    // G6: o calendário das rotinas lê, além do fechamento, prints, diagnósticos e a contagem de
+    // lançamentos; só esta rota (o lembrete do G5 e o Projeto Casa seguem com lerFechamento).
+    const meses = mesesAte(ate, 12);
+    const de = primeiroDiaDoMes(meses[0]), ateExcl = primeiroDiaDoMes(mesAnterior(ate, -1));
+    const [fech, prints, diagnosticos, transacoes] = await Promise.all([
+      lerFechamentoESalarios(db, ate, mesCorrente), db.printsPorMes(), db.diagnosticosNaJanela(meses[0], ate),
+      db.transacoesPorMes(de, ateExcl),
+    ]);
+    const r = montarRotinas(fech.meses, { salarios: fech.salarios, prints, diagnosticos, transacoes });
+    return j({ ate, mes_corrente: mesCorrente, primeiro_print: r.primeiro_print, meses: r.meses });
   }
 
   // ---- A2: patrimônio por print ----

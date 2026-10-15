@@ -1234,3 +1234,39 @@ test("G4 casaParams converte bigint e data_alvo; setCasaParam faz upsert por vig
   assert.match(sql.chamadas[1].text, /on conflict \(vigente_desde\) do update/i);
   assert.deepEqual(sql.chamadas[1].values, ["2026-10-01", 1, 0, "2029-01-01"]);
 });
+
+// ---------- G6: calendário das rotinas ----------
+test("G6 printsPorMes: (mês, conta, pessoa) do histórico inteiro do patrimônio, agrupado em SQL", async () => {
+  const sql = fakeSql([{ mes: "2031-07", conta: "c6", pessoa: "Ana" }]);
+  const db = criarDb(sql);
+  const r = await db.printsPorMes();
+  const q = sql.chamadas[0].text;
+  assert.match(q, /from patrimonio/i);
+  assert.match(q, /group by/i);
+  assert.doesNotMatch(q, /where/i); // sem janela: a lista de contas é de todo o histórico
+  assert.deepEqual(sql.chamadas[0].values, []);
+  assert.deepEqual(r, [{ mes: "2031-07", conta: "c6", pessoa: "Ana" }]);
+});
+
+test("G6 diagnosticosNaJanela: meses com texto salvo entre de e ate (YYYY-MM)", async () => {
+  const sql = fakeSql([{ mes: "2031-07" }]);
+  const db = criarDb(sql);
+  const r = await db.diagnosticosNaJanela("2030-08", "2031-07");
+  assert.match(sql.chamadas[0].text, /from diagnosticos/i);
+  assert.match(sql.chamadas[0].text, /length\(trim\(texto\)\) > 0/i);
+  assert.deepEqual(sql.chamadas[0].values, ["2030-08", "2031-07"]);
+  assert.deepEqual(r, ["2031-07"]);
+});
+
+test("G6 transacoesPorMes conta em SQL só o que conta no resumo (nunca computa_resumo), por mês", async () => {
+  const sql = fakeSql([{ mes: "2031-07", n: "40" }]);
+  const db = criarDb(sql);
+  const r = await db.transacoesPorMes("2030-08-01", "2031-08-01");
+  const q = sql.chamadas[0].text;
+  assert.match(q, /count\(\*\)/i);
+  assert.match(q, /conta_no_resumo/);
+  assert.doesNotMatch(q, /computa_resumo/);
+  assert.match(q, /group by/i);
+  assert.deepEqual(sql.chamadas[0].values, ["2030-08-01", "2031-08-01"]);
+  assert.deepEqual(r, [{ mes: "2031-07", n: 40 }]);
+});

@@ -111,3 +111,55 @@ test("montarFechamento junta as leituras do banco: Itaú = extrato/itau, C6 = ex
   assert.equal(r[0].sem_categoria, 6);
   assert.equal(r[2].sem_categoria, 0);
 });
+
+// ---------- G6: calendário das rotinas ----------
+// As rotinas que não são import (print do patrimônio, triagem, diagnóstico) entram como campos
+// novos por mês; o estado do mês continua sendo só o dos imports (o lembrete do G5 depende disso).
+import { montarRotinas } from "./fechamento.js";
+
+test("G6 patrimônio sem print, triagem pendente e diagnóstico ausente NÃO tiram o mês de 'fechado'", () => {
+  const fech = montarFechamento(["2026-08"], HOJE, {
+    coberturas: [{ conta: "itau", tipo: "extrato", ate: "2026-08-31" }, { conta: "c6", tipo: "extrato", ate: "2026-08-31" }],
+    faturas: ["2026-08"], semCategoria: [{ mes: "2026-08", n: 9 }],
+  });
+  const r = montarRotinas(fech, {
+    salarios: [{ mes: "2026-08", brl_cents: 100, estimado: false }],
+    prints: [{ mes: "2026-07", conta: "c6", pessoa: "Ana" }], // a conta existe, mas sem foto em agosto
+    diagnosticos: [], transacoes: [{ mes: "2026-08", n: 40 }],
+  });
+  const ago = r.meses[0];
+  assert.equal(ago.estado, "fechado");
+  assert.deepEqual(ago.patrimonio, [{ conta: "c6", pessoa: "Ana", tem_print: false }]);
+  assert.equal(ago.diagnostico, false);
+  assert.equal(ago.sem_categoria, 9);
+});
+
+test("G6 montarRotinas: contas do patrimônio vêm do histórico inteiro, mesmo as que só aparecem fora da janela", () => {
+  const fech = montarFechamento(["2026-09", "2026-10"], HOJE, {});
+  const prints = [
+    { mes: "2025-01", conta: "itau", pessoa: "Bia" }, // muito antes da janela
+    { mes: "2025-02", conta: "nubank", pessoa: "Ana" },
+    { mes: "2026-10", conta: "itau", pessoa: "Bia" },
+  ];
+  const r = montarRotinas(fech, { prints });
+  assert.deepEqual(r.meses[0].patrimonio, [
+    { conta: "itau", pessoa: "Bia", tem_print: false }, { conta: "nubank", pessoa: "Ana", tem_print: false },
+  ]);
+  assert.deepEqual(r.meses[1].patrimonio, [
+    { conta: "itau", pessoa: "Bia", tem_print: true }, { conta: "nubank", pessoa: "Ana", tem_print: false },
+  ]);
+  // o corte do "não se aplica" é o primeiro print de qualquer conta, que pode estar fora da janela
+  assert.equal(r.primeiro_print, "2025-01");
+});
+
+test("G6 montarRotinas: diagnóstico por mês, contagem de transações, brl do salário; sem leitura = vazio", () => {
+  const fech = montarFechamento(["2026-08", "2026-09"], HOJE, {});
+  const r = montarRotinas(fech, {
+    salarios: [{ mes: "2026-08", brl_cents: 500, estimado: false }, { mes: "2026-09", brl_cents: null, estimado: false }],
+    diagnosticos: ["2026-08"], transacoes: [{ mes: "2026-08", n: "12" }],
+  });
+  assert.deepEqual(r.meses.map((m) => [m.mes, m.diagnostico, m.transacoes, m.salario_brl_cents]),
+    [["2026-08", true, 12, 500], ["2026-09", false, 0, null]]);
+  assert.equal(r.primeiro_print, null);
+  assert.deepEqual(r.meses[0].patrimonio, []);
+});
