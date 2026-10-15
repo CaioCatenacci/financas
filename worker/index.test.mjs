@@ -681,7 +681,7 @@ function dbResumoFake() {
     resumoDiario: async (de, ateExcl) => { estado.de = de; estado.ateExcl = ateExcl; return [{ dia: "2026-09-01", total: 500 }]; },
     resumoMesVsAnterior: async (mesRef) => { estado.mesRef = mesRef; return [{ macro: "Casa", atual: 500, ant: 300 }]; },
     // D5 (meses e valores inventados): primeira fatura do ano anterior vence em maio
-    faturasImportadas: async (de, ateExcl) => { estado.faturas = { de, ateExcl }; return estado.mesesFatura || ["2025-05", "2025-06", "2025-07"]; },
+    faturasImportadas: async (de, ateExcl) => { estado.faturas = { de, ateExcl }; return estado.mesesFatura || ["2025-05", "2025-06", "2025-07", "2026-08", "2026-09"]; },
     resumoAnoVsAnterior: async (de, ateExcl, deAnt, ateExclAnt) => {
       estado.ano = { de, ateExcl, deAnt, ateExclAnt };
       return [
@@ -724,8 +724,8 @@ test("D5 /api/resumo?mes= devolve anoVsAnterior com as datas do período e as ca
   assert.equal(a.de_anterior, "2025-06-01");
   assert.equal(a.ate_anterior, "2025-09-30");
   assert.deepEqual(Object.keys(a).sort(), ["ate", "ate_anterior", "categorias", "de", "de_anterior"]);
-  // as faturas do ano anterior inteiro decidem o início; o SQL recebe janelas meio-abertas
-  assert.deepEqual(db.estado.faturas, { de: "2025-01-01", ateExcl: "2026-01-01" });
+  // as faturas do ano anterior (início) e do corrente (fim) vêm numa leitura só; o SQL recebe janelas meio-abertas
+  assert.deepEqual(db.estado.faturas, { de: "2025-01-01", ateExcl: "2027-01-01" });
   assert.deepEqual(db.estado.ano, { de: "2026-06-01", ateExcl: "2026-10-01", deAnt: "2025-06-01", ateExclAnt: "2025-10-01" });
   for (const c of a.categorias) {
     assert.ok(Number.isInteger(c.atual_cents) && Number.isInteger(c.anterior_cents), "centavos inteiros");

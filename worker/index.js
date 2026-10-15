@@ -451,10 +451,12 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
 
   // D5: este ano × ano passado. O início vem das faturas importadas no ano anterior (regra pura,
   // worker/ano_vs_anterior.js); sem fatura no ano anterior → null (o card some). Mês selecionado
-  // antes do início → o objeto com `de` = início e categorias vazias (o app diz "sem comparação").
+  // antes do início (ou sem fatura no ano corrente até ele) → o objeto com `de` = início e categorias
+  // vazias (o app diz "sem comparação"). O fim para no último mês com fatura importada no ano.
   const lerAnoVsAnterior = async (mes) => {
     const ano = Number(mes.slice(0, 4));
-    const faturas = await db.faturasImportadas(`${ano - 1}-01-01`, `${ano}-01-01`);
+    // ano anterior (início) e ano corrente (fim: o último mês com fatura importada)
+    const faturas = await db.faturasImportadas(`${ano - 1}-01-01`, `${ano + 1}-01-01`);
     const p = periodoAnoVsAnterior(mes, faturas);
     if (!p) return null;
     const categorias = p.antesDoInicio ? [] : await db.resumoAnoVsAnterior(p.de, p.ateExcl, p.de_anterior, p.ateExclAnterior);

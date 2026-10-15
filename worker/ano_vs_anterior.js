@@ -25,14 +25,32 @@ export function inicioComparacao(ano, mesesFatura) {
 }
 
 /**
+ * Último mês (número) do ano corrente, até o selecionado, com fatura importada; 0 se nenhum.
+ * O fim da comparação para nele: um mês sem a fatura ainda não tem as compras do cartão, e o ano
+ * corrente pareceria mais barato que o anterior (decisão do Caio, 15/10/2026).
+ */
+export function fimComparacao(ano, mesSelecionado, mesesFatura) {
+  const prefixo = `${ano}-`;
+  const meses = (mesesFatura || [])
+    .filter((x) => typeof x === "string" && x.startsWith(prefixo))
+    .map((x) => Number(x.slice(5, 7)))
+    .filter((x) => x <= mesSelecionado);
+  return meses.length ? Math.max(...meses) : 0;
+}
+
+/**
  * Datas da comparação para o mês selecionado ('AAAA-MM'): de/ate (inclusivos, como na API) e os
- * fins exclusivos para o SQL. `antesDoInicio` = o mês selecionado ainda não chegou ao início.
+ * fins exclusivos para o SQL. O fim é o menor entre o mês selecionado e o último mês com fatura
+ * importada no ano corrente. `antesDoInicio` = não sobra nenhum mês entre o início e o fim.
  * null quando não há fatura no ano anterior.
+ * @param {string[]} mesesFatura  meses 'AAAA-MM' do vencimento das faturas, do ano anterior e do corrente
  */
 export function periodoAnoVsAnterior(mes, mesesFatura) {
-  const ano = Number(mes.slice(0, 4)), m = Number(mes.slice(5, 7));
+  const ano = Number(mes.slice(0, 4));
   const inicio = inicioComparacao(ano, mesesFatura);
   if (inicio == null) return null;
+  const m = Math.max(fimComparacao(ano, Number(mes.slice(5, 7)), mesesFatura), 1);
+  const semMes = fimComparacao(ano, Number(mes.slice(5, 7)), mesesFatura) < Number(inicio);
   return {
     de: `${ano}-${inicio}-01`,
     ate: `${ano}-${pad(m)}-${pad(ultimoDia(ano, m))}`,
@@ -40,6 +58,6 @@ export function periodoAnoVsAnterior(mes, mesesFatura) {
     ate_anterior: `${ano - 1}-${pad(m)}-${pad(ultimoDia(ano - 1, m))}`,
     ateExcl: diaSeguinteAoMes(ano, m),
     ateExclAnterior: diaSeguinteAoMes(ano - 1, m),
-    antesDoInicio: m < Number(inicio),
+    antesDoInicio: semMes,
   };
 }

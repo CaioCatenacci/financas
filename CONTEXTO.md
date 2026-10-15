@@ -847,8 +847,11 @@ A comparação de período longo saiu com os presets no Inc 4.5 (§14); volta co
 Resumo, ancorado no mês selecionado. A pergunta é "em que categoria o orçamento está ficando
 mais apertado de um ano para o outro" (escola, plano de saúde e outras são corrigidas todo ano).
 
-- **Período:** do início até o mês selecionado, contra as mesmas datas do ano anterior (o fim
-  anterior é o último dia do mesmo mês). O início é regra pura (`worker/ano_vs_anterior.js`) sobre
+- **Período:** do início até o **último mês com fatura importada no ano corrente que não passe
+  do mês selecionado** (decisão do Caio, 15/10/2026: o mês corrente sem a fatura não tem as compras
+  do cartão e mostraria uma queda falsa em tudo), contra as mesmas datas do ano anterior (o fim
+  anterior é o último dia do mesmo mês). Sem nenhuma fatura no ano corrente entre o início e o mês
+  selecionado, vale o "sem comparação". O início é regra pura (`worker/ano_vs_anterior.js`) sobre
   os meses de fatura em `importacoes` (tipo fatura, mês do vencimento em `de`, qualquer conta):
   há fatura de janeiro do ano anterior → janeiro; senão, o mês seguinte ao da primeira fatura do
   ano anterior (a primeira só traz parte das compras do mês dela). Sem fatura no ano anterior, ou
