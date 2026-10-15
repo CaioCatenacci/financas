@@ -16,6 +16,7 @@ import { validarLote, sugerirLote, AVISO_INDISPONIVEL } from "./sugestoes.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { alocarSalario, mesesAte } from "./salario.js";
+import { periodoAnoVsAnterior } from "./ano_vs_anterior.js";
 import { montarFechamento, montarRotinas, ultimoDiaDoMes } from "./fechamento.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
@@ -448,6 +449,17 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
   if (url.pathname.startsWith("/api/pessoas/") && request.method === "PATCH") { const b = await body(); await db.renomearPessoa(id(), b.nome); return j({ ok: true }); }
   if (url.pathname.startsWith("/api/pessoas/") && request.method === "DELETE") { await db.desativarPessoa(id()); return j({ ok: true }); }
 
+  // D5: este ano × ano passado. O início vem das faturas importadas no ano anterior (regra pura,
+  // worker/ano_vs_anterior.js); sem fatura no ano anterior → null (o card some). Mês selecionado
+  // antes do início → o objeto com `de` = início e categorias vazias (o app diz "sem comparação").
+  const lerAnoVsAnterior = async (mes) => {
+    const ano = Number(mes.slice(0, 4));
+    const faturas = await db.faturasImportadas(`${ano - 1}-01-01`, `${ano}-01-01`);
+    const p = periodoAnoVsAnterior(mes, faturas);
+    if (!p) return null;
+    const categorias = p.antesDoInicio ? [] : await db.resumoAnoVsAnterior(p.de, p.ateExcl, p.de_anterior, p.ateExclAnterior);
+    return { de: p.de, ate: p.ate, de_anterior: p.de_anterior, ate_anterior: p.ate_anterior, categorias };
+  };
   if (url.pathname === "/api/resumo") {
     // mes=YYYY-MM filtra o resumo naquele mês e ancora o mesVsAnterior nele;
     // sem mes, cai no fallback de/ate (compatibilidade) e mesVsAnterior usa o mês do "ate".
@@ -482,6 +494,7 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
       porPessoaCategoria: await db.resumoPorPessoaCategoria(de, ate),
       mesVsAnterior: await db.resumoMesVsAnterior(mesRef),
       diario: ateExcl ? await db.resumoDiario(de, ateExcl) : [],
+      anoVsAnterior: ateExcl ? await lerAnoVsAnterior(mesRef) : null,
     });
   }
 
