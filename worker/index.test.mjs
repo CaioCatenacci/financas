@@ -674,6 +674,9 @@ function dbResumoFake() {
     salarioParams: async () => [{ vigente_desde: "2026-01-01", usd_cents: 800000 }],
     conversoes: async () => [{ id: "c1", data: "2026-09-03", usd_cents: 800000, brl_cents: 4000000, origem: "wise" }],
     saldoPorMes: async (de, ateExcl) => { estado.saldo = { de, ateExcl }; return [{ mes: "2026-09", receita_cents: 100000, despesa_cents: 3800000 }]; },
+    // A3: somas da cascata (inventadas; a igualdade com o saldo-mensal tem teste próprio, abaixo)
+    somasPorEsfera: async (de, ateExcl) => { estado.esfera = { de, ateExcl }; return { despesa_empresa_cents: 300000, despesa_pessoal_cents: 2500000, outras_receitas_cents: 100000 }; },
+    despesaPessoalPorCategoria: async () => [{ macro: "Casa", total_cents: 2500000 }],
     resumoKPIs: async () => ({ receita: "1000.00", despesa: "500.00", reembolso: "0.00" }),
     resumoPorCategoria: async () => [{ macro: "Casa", sub: "Limpeza", natureza: "despesa", total: 500, n: 1 }],
     resumoPorPessoa: async () => [{ pessoa: "Alice", natureza: "despesa", total: 300 }],
@@ -2262,4 +2265,104 @@ test("PATCH /api/categorias/:id com corpo JSON null não vira 500: não há o qu
   const r = await handleApi(req, envApi, new URL("http://localhost/api/categorias/cEquip"), db);
   assert.equal(r.status, 200);
   assert.deepEqual(chamadas, []);
+});
+
+// ---------- A3: cascata no Resumo ----------
+// db falso cujas leituras (somas por esfera, grupos pessoais, saldo por mês) saem TODAS das mesmas
+// linhas inventadas, com o filtro de conta_no_resumo e a janela [de, ateExcl) que o SQL aplica.
+// Sem isso, "cascata.saldo === saldo-mensal" seria tautologia de dois mocks independentes.
+function dbCascataFake(linhas) {
+  const contam = (de, ateExcl) => linhas.filter(l => l.conta_no_resumo && l.data >= de && l.data < ateExcl);
+  const soma = (ls) => ls.reduce((a, l) => a + l.cents, 0);
+  return {
+    salarioParams: async () => [{ vigente_desde: "2026-01-01", usd_cents: 800000 }],
+    conversoes: async () => [{ id: "c1", data: "2026-09-03", usd_cents: 800000, brl_cents: 4000000, origem: "wise" }],
+    saldoPorMes: async (de, ateExcl) => {
+      const porMes = {};
+      for (const l of contam(de, ateExcl)) {
+        const m = (porMes[l.data.slice(0, 7)] ||= { mes: l.data.slice(0, 7), receita_cents: 0, despesa_cents: 0 });
+        m[`${l.natureza}_cents`] += l.cents;
+      }
+      return Object.values(porMes);
+    },
+    somasPorEsfera: async (de, ateExcl) => {
+      const ls = contam(de, ateExcl);
+      return {
+        despesa_empresa_cents: soma(ls.filter(l => l.natureza === "despesa" && l.esfera === "empresa")),
+        despesa_pessoal_cents: soma(ls.filter(l => l.natureza === "despesa" && l.esfera === "pessoal")),
+        outras_receitas_cents: soma(ls.filter(l => l.natureza === "receita")),
+      };
+    },
+    despesaPessoalPorCategoria: async (de, ateExcl) => {
+      const m = {};
+      for (const l of contam(de, ateExcl)) if (l.natureza === "despesa" && l.esfera === "pessoal") m[l.macro] = (m[l.macro] || 0) + l.cents;
+      return Object.entries(m).map(([macro, total_cents]) => ({ macro, total_cents }));
+    },
+    resumoKPIs: async () => ({ receita: "0.00", despesa: "0.00", reembolso: "0.00" }),
+    resumoPorCategoria: async () => [],
+    resumoPorPessoa: async () => [],
+    resumoPorPessoaCategoria: async () => [],
+    resumoDiario: async () => [],
+    resumoMesVsAnterior: async () => [],
+  };
+}
+
+// Exemplo do A3 (valores inventados): salário 40.000 (conversão de setembro), empresa 3.000,
+// outras receitas 1.000, pessoais 20.000 + 5.000 → disponível 37.000, saldo 13.000.
+const LINHAS_A3 = [
+  { data: "2026-09-05", natureza: "despesa", esfera: "empresa", macro: "Empresa", cents: 300000, conta_no_resumo: true },
+  { data: "2026-09-10", natureza: "despesa", esfera: "pessoal", macro: "Casa", cents: 2000000, conta_no_resumo: true },
+  { data: "2026-09-30", natureza: "despesa", esfera: "pessoal", macro: "Lazer", cents: 500000, conta_no_resumo: true },
+  { data: "2026-09-12", natureza: "receita", esfera: "pessoal", macro: "Receita", cents: 100000, conta_no_resumo: true },
+  // membro de grupo / fora do resumo: não pode contar em nenhum dos dois lados
+  { data: "2026-09-15", natureza: "despesa", esfera: "pessoal", macro: "Casa", cents: 999900, conta_no_resumo: false },
+  // outro mês: fora da janela
+  { data: "2026-08-31", natureza: "despesa", esfera: "empresa", macro: "Empresa", cents: 777700, conta_no_resumo: true },
+];
+
+test("A3 /api/resumo?mes= devolve a cascata em centavos: salário → empresa → disponível → outras receitas → pessoais → saldo", async () => {
+  const db = dbCascataFake(LINHAS_A3);
+  const req = new Request("http://localhost/api/resumo?mes=2026-09", { headers: G1_COOK });
+  const { cascata } = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.deepEqual(cascata, {
+    salario_cents: 4000000, despesa_empresa_cents: 300000, disponivel_cents: 3700000,
+    outras_receitas_cents: 100000, despesa_pessoal_cents: 2500000, saldo_cents: 1300000, estimado: false,
+    pessoais: [{ macro: "Casa", total_cents: 2000000 }, { macro: "Lazer", total_cents: 500000 }],
+  });
+});
+
+test("A3 cascata.saldo_cents é igual ao saldo do mesmo mês em /api/saldo-mensal (mesmas linhas)", async () => {
+  const db = dbCascataFake(LINHAS_A3);
+  const r1 = new Request("http://localhost/api/resumo?mes=2026-09", { headers: G1_COOK });
+  const { cascata } = await (await handleApi(r1, G1_ENV, new URL(r1.url), db)).json();
+  const r2 = new Request("http://localhost/api/saldo-mensal?ate=2026-09", { headers: G1_COOK });
+  const saldoMensal = await (await handleApi(r2, G1_ENV, new URL(r2.url), db)).json();
+  assert.equal(cascata.saldo_cents, saldoMensal.find(m => m.mes === "2026-09").saldo_cents);
+  assert.equal(cascata.saldo_cents, 1300000);
+});
+
+test("A3 mês com salário estimado (sem conversão ainda): cascata.estimado = true", async () => {
+  const db = dbCascataFake(LINHAS_A3);
+  const req = new Request("http://localhost/api/resumo?mes=2026-10", { headers: G1_COOK });
+  const { cascata } = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(cascata.estimado, true);
+  assert.ok(cascata.salario_cents > 0);
+});
+
+test("A3 mês antes do primeiro parâmetro: salario_cents = 0 (nunca null), estimado = false, o resto segue", async () => {
+  // o primeiro vigente_desde (2026-01) é posterior ao mês pedido
+  const db = dbCascataFake([{ data: "2025-06-10", natureza: "despesa", esfera: "pessoal", macro: "Casa", cents: 50000, conta_no_resumo: true }]);
+  const req = new Request("http://localhost/api/resumo?mes=2025-06", { headers: G1_COOK });
+  const { cascata } = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(cascata.salario_cents, 0);
+  assert.equal(cascata.estimado, false);
+  assert.equal(cascata.despesa_pessoal_cents, 50000);
+  assert.equal(cascata.saldo_cents, -50000);
+});
+
+test("A3 /api/resumo sem mes= (de/ate livre) não monta cascata", async () => {
+  const db = dbCascataFake(LINHAS_A3);
+  const req = new Request("http://localhost/api/resumo?de=2026-01-01&ate=2026-12-31", { headers: G1_COOK });
+  const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
+  assert.equal(data.cascata, null);
 });
