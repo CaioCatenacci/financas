@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolverCategoria, subsDaCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
+import { resolverCategoria, subsDaCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar, esferaDaCategoria } from "./categorias.js";
 
 // catálogo de teste: 2 categorias + 2 subs + fallback Outros
 const catalogo = {
@@ -120,4 +120,22 @@ test("naturezaAoReclassificar: crédito/estorno de extrato ou fatura fica receit
 test("naturezaAoReclassificar: sem natureza de categoria conhecida → mantém a atual", () => {
   assert.equal(naturezaAoReclassificar("despesa", "manual", null), "despesa");
   assert.equal(naturezaAoReclassificar("receita", "manual", undefined), "receita");
+});
+
+// ---- A1: esfera é propriedade da categoria (decisão de 15/10/2026) ----
+// A esfera diz o que o dinheiro É (despesa da empresa ou da casa), não a conta por onde passou:
+// a transação herda a esfera da categoria em toda gravação de categoria.
+test("esferaDaCategoria: categoria empresa → empresa (ex.: extrato em Não Identificado reclassificado p/ Empresa)", () => {
+  assert.equal(esferaDaCategoria("pessoal", "empresa"), "empresa");
+});
+
+test("esferaDaCategoria: categoria pessoal → pessoal (sair da Empresa devolve a linha à casa)", () => {
+  assert.equal(esferaDaCategoria("empresa", "pessoal"), "pessoal");
+  assert.equal(esferaDaCategoria("pessoal", "pessoal"), "pessoal");
+});
+
+test("esferaDaCategoria: esfera de categoria desconhecida (id inválido, catálogo sem a coluna) → mantém a atual", () => {
+  assert.equal(esferaDaCategoria("empresa", undefined), "empresa");
+  assert.equal(esferaDaCategoria("pessoal", null), "pessoal");
+  assert.equal(esferaDaCategoria("pessoal", "outra"), "pessoal"); // vocabulário fechado: nada de valor novo
 });

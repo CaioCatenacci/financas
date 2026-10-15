@@ -2163,3 +2163,91 @@ test("C4: falha do Dropbox vira erro (não 200), para o app avisar que o arquivo
   const r = await handleApi(req, envApi, new URL(req.url), {}, { fetchImpl });
   assert.ok(r.status >= 400);
 });
+
+// ---- A1: a esfera vem da categoria (Empresa = empresa; o resto, pessoal) ----
+function dbFakeComEmpresa() {
+  const db = dbFake();
+  const base = db.catalogo;
+  db.catalogo = async () => {
+    const c = await base();
+    return {
+      categorias: [...c.categorias.map((x) => ({ ...x, esfera: "pessoal" })),
+        { id: "cEmp", nome: "Empresa", natureza: "despesa", esfera: "empresa" }],
+      subcategorias: [...c.subcategorias, { id: "sContab", categoria_id: "cEmp", nome: "Contabilidade" }],
+    };
+  };
+  return db;
+}
+
+test("texto com categoria=Empresa grava esfera empresa (antes era 'pessoal' fixo)", async () => {
+  const db = dbFakeComEmpresa();
+  const deps = { db, confirmar: async () => {}, responderImpl: async () => {} };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "contador 350,00 10/09/2026 categoria=Empresa" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.estado.inseridos[0].categoria_id, "cEmp");
+  assert.equal(db.estado.inseridos[0].esfera, "empresa");
+});
+
+test("texto com categoria pessoal segue gravando esfera pessoal", async () => {
+  const db = dbFakeComEmpresa();
+  const deps = { db, confirmar: async () => {}, responderImpl: async () => {} };
+  const update = { message: { chat: { id: 7 }, message_id: 1, text: "padaria 12,00 10/09/2026 categoria=Casa" } };
+  await tratarUpdate(update, { TELEGRAM_TOKEN: "t" }, deps);
+  assert.equal(db.estado.inseridos[0].esfera, "pessoal");
+});
+
+function depsFoto(db, normalizado) {
+  return {
+    db,
+    baixar: async () => ({ bytes: new Uint8Array([1, 2, 3]), mime: "image/jpeg" }),
+    extrairImpl: async () => ({ ok: true, normalizado, extraido_por: "gemini", confianca: 0.9 }),
+    subir: async () => "/x.jpg", hashBytes: async () => "hA1",
+    confirmar: async () => {}, responderImpl: async () => {},
+  };
+}
+const fotoA1 = { message: { chat: { id: 7 }, message_id: 1, photo: [{ file_id: "b", width: 800 }] } };
+
+test("foto classificada pelo modelo em Empresa grava esfera empresa", async () => {
+  const db = dbFakeComEmpresa();
+  await tratarUpdate(fotoA1, { TELEGRAM_TOKEN: "t" }, depsFoto(db,
+    { dataISO: "2026-09-10", valorCents: 35000, natureza: "despesa", macro: "Empresa", sub: "Contabilidade", descricao: "Contador" }));
+  assert.equal(db.estado.inseridos[0].categoria_id, "cEmp");
+  assert.equal(db.estado.inseridos[0].esfera, "empresa");
+});
+
+test("foto: a regra aprendida que leva p/ Empresa também dá esfera empresa (a esfera é da categoria final)", async () => {
+  const db = dbFakeComEmpresa();
+  db.buscarAssociacao = async () => ({ categoria_id: "cEmp", subcategoria_id: "sContab" });
+  await tratarUpdate(fotoA1, { TELEGRAM_TOKEN: "t" }, depsFoto(db,
+    { dataISO: "2026-09-10", valorCents: 35000, natureza: "despesa", macro: "Casa", sub: null, descricao: "Contador",
+      contraparte_nome: "Contabil Exemplo", contraparte_chave: "00000000000" }));
+  assert.equal(db.estado.inseridos[0].esfera, "empresa");
+});
+
+test("PATCH /api/categorias/:id com {esfera} válida grava a esfera e regrava as transações (200)", async () => {
+  const chamadas = [];
+  const db = { mudarEsferaCategoria: async (id, esfera) => chamadas.push(["esfera", id, esfera]),
+    renomearCategoria: async (id, nome) => chamadas.push(["nome", id, nome]) };
+  const r = await handleApi(reqApi("/api/categorias/cEquip", "PATCH", { esfera: "empresa" }), envApi, new URL("http://localhost/api/categorias/cEquip"), db);
+  assert.equal(r.status, 200);
+  // só {esfera}: não renomeia (antes o PATCH gravava nome=undefined)
+  assert.deepEqual(chamadas, [["esfera", "cEquip", "empresa"]]);
+});
+
+test("PATCH /api/categorias/:id com esfera fora do vocabulário → 400, sem gravar nada", async () => {
+  const chamadas = [];
+  const db = { mudarEsferaCategoria: async () => chamadas.push("esfera"), renomearCategoria: async () => chamadas.push("nome") };
+  for (const esfera of ["Empresa", "pj", "", null]) {
+    const r = await handleApi(reqApi("/api/categorias/cEquip", "PATCH", { nome: "X", esfera }), envApi, new URL("http://localhost/api/categorias/cEquip"), db);
+    assert.equal(r.status, 400, `esfera ${JSON.stringify(esfera)}`);
+  }
+  assert.deepEqual(chamadas, []);
+});
+
+test("PATCH /api/categorias/:id só com {nome} continua renomeando, sem tocar na esfera", async () => {
+  const chamadas = [];
+  const db = { mudarEsferaCategoria: async () => chamadas.push("esfera"), renomearCategoria: async (id, nome) => chamadas.push(["nome", id, nome]) };
+  const r = await handleApi(reqApi("/api/categorias/cEquip", "PATCH", { nome: "Equipamento" }), envApi, new URL("http://localhost/api/categorias/cEquip"), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(chamadas, [["nome", "cEquip", "Equipamento"]]);
+});

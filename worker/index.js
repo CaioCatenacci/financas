@@ -8,7 +8,7 @@ import { centsToBR } from "./money.js";
 import { tokenValido, segredoTelegramValido, chatPermitido } from "./auth.js";
 import { normalizarChave, normalizarNome, derivarChave } from "./contraparte.js";
 import { parseAprender } from "./teach.js";
-import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar } from "./categorias.js";
+import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao, naturezaAoReclassificar, esferaDaCategoria, ESFERAS } from "./categorias.js";
 import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, montarPreviewWise, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
@@ -73,7 +73,7 @@ export async function tratarUpdate(update, env, deps) {
     if (d.pessoa) { const pe = await deps.db.pessoaPorNome(d.pessoa); if (pe) pessoa_id = pe.id; else avisos.push(`pessoa "${d.pessoa}" não existe — deixei sem pessoa`); }
 
     const tx = await deps.db.inserirTransacao({
-      dataISO: d.dataISO, natureza, esfera: "pessoal",
+      dataISO: d.dataISO, natureza, esfera: esferaDaCategoria("pessoal", catResolvida?.esfera),
       valorCents: d.valorCents, reembolsoCents: 0, categoria_id, subcategoria_id,
       descricao: d.descricao, pessoa_id, fonte: "manual", origem_categoria: "manual",
       extraido_por: null, confianca: null, documento_id: null,
@@ -142,7 +142,9 @@ export async function tratarUpdate(update, env, deps) {
     tipo_arquivo: mime, hash, telegram_file_id: ev.fileId,
   });
   const tx = await deps.db.inserirTransacao({
-    dataISO: n.dataISO, natureza: n.natureza, esfera: "pessoal",
+    // A1: a esfera é a da categoria FINAL (modelo ou regra aprendida)
+    dataISO: n.dataISO, natureza: n.natureza,
+    esfera: esferaDaCategoria("pessoal", catalogo.categorias.find((x) => x.id === categoria_id)?.esfera),
     valorCents: n.valorCents, reembolsoCents: 0, categoria_id, subcategoria_id,
     descricao: n.descricao, pessoa_id: null, fonte: "imagem", origem_categoria: origemCat,
     extraido_por: ex.extraido_por, confianca: ex.confianca, documento_id: doc.id,
@@ -418,7 +420,15 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
 
   // ---- gestão de categorias ----
   if (url.pathname === "/api/categorias" && request.method === "POST") { const b = await body(); return j(await db.criarCategoria(b.nome, b.natureza)); }
-  if (url.pathname.startsWith("/api/categorias/") && request.method === "PATCH") { const b = await body(); await db.renomearCategoria(id(), b.nome); return j({ ok: true }); }
+  if (url.pathname.startsWith("/api/categorias/") && request.method === "PATCH") {
+    const b = await body();
+    // A1: {esfera} e {nome} são independentes — um PATCH só com esfera não pode apagar o nome
+    // (antes renomeava incondicionalmente, gravando nome=undefined). Valida antes de gravar.
+    if ("esfera" in b && !ESFERAS.includes(b.esfera)) return erroJson("esfera inválida (pessoal|empresa)", 400);
+    if (b.nome) await db.renomearCategoria(id(), b.nome);
+    if ("esfera" in b) await db.mudarEsferaCategoria(id(), b.esfera);
+    return j({ ok: true });
+  }
   if (url.pathname.startsWith("/api/categorias/") && request.method === "DELETE") { await db.desativarCategoria(id()); return j({ ok: true }); }
 
   // ---- gestão de subcategorias (inclui merge e mover) ----

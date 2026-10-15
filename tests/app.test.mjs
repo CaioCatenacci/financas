@@ -1597,3 +1597,38 @@ test("C4: consultaArquivoImport traduz os tipos da tela para tipo/banco da rota"
   assert.equal(consultaArquivoImport({ tipo: "fatura", ano: null, mes: null, preview: {} }), null);
   assert.equal(consultaArquivoImport({ tipo: "extrato", preview: {} }), null);
 });
+
+// ---- A1: no import, a linha herda a esfera da categoria resolvida (antes: 'pessoal' fixo) ----
+test("montarDecisao: item resolvido p/ categoria empresa grava esfera empresa; o resto segue pessoal", () => {
+  const catalogo = {
+    categorias: [
+      { id: "cNI", nome: "Não Identificado", padrao: true, esfera: "pessoal" },
+      { id: "cEmp", nome: "Empresa", esfera: "empresa" },
+    ],
+    subcategorias: [{ id: "sContab", categoria_id: "cEmp", nome: "Contabilidade" }],
+  };
+  const preview = { itens: [
+    { status: "novo", data: "2026-09-10", descricao: "CONTADOR", valorCents: 35000, natureza: "despesa",
+      linhaHash: "hA", computaResumo: true, categoriaNome: "Empresa", subNome: "Contabilidade", categoriaOrg: null },
+    { status: "novo", data: "2026-09-11", descricao: "PADARIA", valorCents: 1200, natureza: "despesa",
+      linhaHash: "hB", computaResumo: true, categoriaNome: null, subNome: null, categoriaOrg: null },
+  ] };
+  const d = montarDecisao(preview, catalogo, "extrato");
+  assert.equal(d.novos[0].categoria_id, "cEmp");
+  assert.equal(d.novos[0].esfera, "empresa");
+  assert.equal(d.novos[1].categoria_id, "cNI");
+  assert.equal(d.novos[1].esfera, "pessoal");
+});
+
+test("montarDecisao: catálogo sem esfera (fixture antiga) cai em pessoal, o default da coluna", () => {
+  const d = montarDecisao(previewFixture(), CATALOGO_IMPORT, "extrato");
+  assert.equal(d.novos[0].esfera, "pessoal");
+});
+
+test("opcoesEsfera: seletor da aba Ajustes só oferece pessoal/empresa e marca a esfera da categoria", async () => {
+  const { opcoesEsfera } = await import("../public/app.js");
+  const html = opcoesEsfera("empresa");
+  assert.deepEqual([...html.matchAll(/value="(\w+)"/g)].map((m) => m[1]), ["pessoal", "empresa"]);
+  assert.match(html, /value="empresa" selected/);
+  assert.match(opcoesEsfera(undefined), /value="pessoal" selected/, "catálogo sem esfera mostra o default da coluna");
+});
