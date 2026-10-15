@@ -1826,6 +1826,192 @@ test("G4 GET /api/casa?ate= junta patrimônio (todo o histórico), saldo do G1, 
   }
 });
 
+// ---- H4: POST /api/importar/sugestoes (JEV no import) ----
+// Tudo com fetch falso que conta as chamadas: o CI não tem rede nem chave, e o repositório é
+// público (descrições inventadas). O fetch global é trocado só durante cada teste.
+const CATALOGO_JEV = {
+  categorias: [
+    { id: "kA", nome: "Alimentação", natureza: "despesa", padrao: false, ativa: true },
+    { id: "kC", nome: "Compras", natureza: "despesa", padrao: false, ativa: true },
+    { id: "kN", nome: "Não Identificado", natureza: "despesa", padrao: true, ativa: true },
+  ],
+  subcategorias: [
+    { id: "a1", categoria_id: "kA", nome: "Ifood", ativa: true },
+    { id: "c1", categoria_id: "kC", nome: "Amazon", ativa: true },
+    { id: "c2", categoria_id: "kC", nome: "Compras", ativa: true },
+  ],
+};
+function dbJev({ associacoes = {} } = {}) {
+  const f = {
+    escritas: [],
+    catalogo: async () => CATALOGO_JEV,
+    associacoesPorNome: async () => associacoes,
+    // qualquer escrita em associações aqui é bug: nenhuma regra nasce do JEV
+    upsertAssociacao: async (...a) => { f.escritas.push(a); },
+  };
+  return f;
+}
+const envJev = { ...envApi, TYPESAFE_API_KEY: "chave-de-teste" };
+const linhaJev = (indice, descricao, extra = {}) => ({
+  indice, descricao, contraparte: null, valorCents: 4990, natureza: "despesa", status: "novo",
+  categoriaNome: null, categoriaOrg: null, ...extra,
+});
+// responde por pergunta: porDescricao[descricao] = { categoria: [choice, prob], subcategoria: [...] }
+function fetchJev(porDescricao, { status = null } = {}) {
+  const f = { chamadas: [] };
+  f.impl = async (url, init) => {
+    const corpo = JSON.parse(init.body);
+    f.chamadas.push({ url, init, corpo });
+    if (status) return new Response("{}", { status });
+    const [id] = Object.keys(corpo.questions);
+    const [choice, prob] = porDescricao[corpo.state.descricao][id];
+    return new Response(JSON.stringify({ answers: { [id]: { choice, probabilities: { [choice]: prob } } } }), { status: 200 });
+  };
+  return f;
+}
+async function comFetch(f, fn) {
+  const original = globalThis.fetch;
+  globalThis.fetch = f.impl;
+  try { return await fn(); } finally { globalThis.fetch = original; }
+}
+const postSug = (corpo) => reqApi("/api/importar/sugestoes", "POST", corpo);
+const urlSug = new URL("http://localhost/api/importar/sugestoes");
+
+test("H4: lote com mais de 20 linhas → 400, sem chamar o JEV", async () => {
+  const f = fetchJev({});
+  const itens = Array.from({ length: 21 }, (_, i) => linhaJev(i, `LOJA ${i}`));
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens }), envJev, urlSug, dbJev()));
+  assert.equal(r.status, 400);
+  assert.equal(f.chamadas.length, 0);
+});
+
+test("H4: Exemplo do card — IFD* pela regra sem chamada, 0,96 preenche, 0,46 fica na padrão", async () => {
+  const f = fetchJev({
+    "LOJA EXEMPLO LTDA": { categoria: ["Compras", 0.96], subcategoria: ["Compras", 0.88] },
+    "FULANO DE TAL": { categoria: ["Compras", 0.46] },
+  });
+  const db = dbJev();
+  const itens = [linhaJev(0, "IFD*LANCHONETE EXEMPLO"), linhaJev(1, "LOJA EXEMPLO LTDA"), linhaJev(2, "FULANO DE TAL")];
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens }), envJev, urlSug, db));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(d.indisponivel, false);
+  const [ifd, loja, fulano] = d.itens;
+  assert.deepEqual(ifd, { indice: 0, preenche: true,
+    sugestao: { categoria: "Alimentação", subcategoria: "Ifood", prob_categoria: 1, prob_subcategoria: 1 } });
+  assert.deepEqual(loja, { indice: 1, preenche: true,
+    sugestao: { categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.96, prob_subcategoria: 0.88 } });
+  assert.equal(fulano.preenche, false);
+  assert.equal(fulano.sugestao.prob_categoria, 0.46);
+  // IFD*: nenhuma; LOJA: categoria + sub; FULANO: só categoria (abaixo do limiar a sub não é usada)
+  assert.equal(f.chamadas.length, 3);
+  assert.ok(f.chamadas.every((c) => !c.corpo.state.descricao.startsWith("IFD*")));
+  assert.deepEqual(db.escritas, []);
+});
+
+test("H4: contrato HTTP — POST no systemone, Bearer com a chave, corpo {model, state, questions}", async () => {
+  const f = fetchJev({ "FULANO DE TAL": { categoria: ["Compras", 0.2] } });
+  await comFetch(f, () => handleApi(postSug({ fonte: "extrato", itens: [linhaJev(0, "FULANO DE TAL")] }), envJev, urlSug, dbJev()));
+  const [c] = f.chamadas;
+  assert.equal(c.url, "https://api.typesafe.ai/v1/systemone");
+  assert.equal(c.init.method, "POST");
+  assert.equal(c.init.headers.authorization, "Bearer chave-de-teste");
+  assert.deepEqual(Object.keys(c.corpo).sort(), ["model", "questions", "state"]);
+  assert.equal(c.corpo.model, "jev-latest");
+  assert.equal(c.corpo.state.fonte, "movimento da conta corrente (linha do extrato bancário)");
+  assert.equal(c.corpo.state.valor, "49,90");
+});
+
+test("H4: regra aprendida, fora da padrão, casada, repetida, ambígua e repasse não geram chamada", async () => {
+  const f = fetchJev({ "LOJA SEM REGRA": { categoria: ["Compras", 0.5] } });
+  const itens = [
+    linhaJev(0, "LOJA COM REGRA", { categoriaNome: "Compras" }), // regra aprendida na prévia
+    linhaJev(1, "PIX TRANSF CONTA PROPRIA", { status: "naoGasto", categoriaOrg: "Transferências" }), // repasse
+    linhaJev(2, "TALVEZ CASE", { status: "ambiguo" }),
+    linhaJev(3, "JA CASADA", { status: "casado" }),
+    linhaJev(4, "JA IMPORTADA", { status: "jaTem" }),
+    linhaJev(5, "LOJA ENSINADA DEPOIS"), // regra nova no banco, ensinada depois da prévia
+    linhaJev(6, "LOJA SEM REGRA"), // só esta vai
+  ];
+  const db = dbJev({ associacoes: { "LOJA ENSINADA DEPOIS": { categoriaNome: "Compras", subNome: null } } });
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "extrato", itens }), envJev, urlSug, db));
+  const d = await r.json();
+  assert.equal(f.chamadas.length, 1);
+  assert.equal(f.chamadas[0].corpo.state.descricao, "LOJA SEM REGRA");
+  assert.deepEqual(d.itens.slice(0, 6).map((i) => i.sugestao), [null, null, null, null, null, null]);
+  assert.deepEqual(d.itens.map((i) => i.indice), [0, 1, 2, 3, 4, 5, 6]);
+});
+
+test("H4: 429 faz exatamente uma nova tentativa; na segunda falha a linha fica sem sugestão e vira aviso", async () => {
+  const f = fetchJev({}, { status: 429 });
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens: [linhaJev(0, "LOJA EXEMPLO LTDA")] }), envJev, urlSug, dbJev()));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(f.chamadas.length, 2);
+  assert.equal(d.itens[0].sugestao, null);
+  assert.equal(d.indisponivel, true);
+  assert.equal(d.aviso, "classificação automática indisponível");
+});
+
+test("H4: 529 seguido de sucesso aproveita a segunda tentativa", async () => {
+  const resposta = { answers: { categoria: { choice: "Compras", probabilities: { Compras: 0.3 } } } };
+  const f = { chamadas: [] };
+  f.impl = async (url, init) => {
+    f.chamadas.push(init);
+    return f.chamadas.length === 1 ? new Response("{}", { status: 529 }) : new Response(JSON.stringify(resposta), { status: 200 });
+  };
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens: [linhaJev(0, "LOJA X")] }), envJev, urlSug, dbJev()));
+  const d = await r.json();
+  assert.equal(f.chamadas.length, 2);
+  assert.equal(d.itens[0].sugestao.prob_categoria, 0.3);
+  assert.equal(d.indisponivel, false);
+});
+
+test("H4: sem TYPESAFE_API_KEY → 200, linhas sem sugestão e aviso, sem chamada (nem a do IFD*)", async () => {
+  const f = fetchJev({});
+  const itens = [linhaJev(0, "IFD*LANCHONETE EXEMPLO"), linhaJev(1, "LOJA EXEMPLO LTDA")];
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens }), envApi, urlSug, dbJev()));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(f.chamadas.length, 0);
+  assert.deepEqual(d.itens.map((i) => i.sugestao), [null, null]);
+  assert.equal(d.indisponivel, true);
+  assert.equal(d.aviso, "classificação automática indisponível");
+});
+
+test("H4: fetch lançando erro → 200, linha sem sugestão e aviso (nunca 500)", async () => {
+  const f = { chamadas: [], impl: async () => { f.chamadas.push(1); throw new Error("rede caiu"); } };
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens: [linhaJev(0, "LOJA X")] }), envJev, urlSug, dbJev()));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(d.itens[0].sugestao, null);
+  assert.equal(d.indisponivel, true);
+});
+
+test("H4: resposta sem answers válidos → linha sem sugestão e aviso", async () => {
+  const f = { chamadas: [], impl: async () => { f.chamadas.push(1); return new Response(JSON.stringify({ outra: 1 }), { status: 200 }); } };
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens: [linhaJev(0, "LOJA X")] }), envJev, urlSug, dbJev()));
+  const d = await r.json();
+  assert.equal(r.status, 200);
+  assert.equal(f.chamadas.length, 1);
+  assert.equal(d.itens[0].sugestao, null);
+  assert.equal(d.indisponivel, true);
+});
+
+test("H4: banco fora do ar na rota de sugestões → 200 com aviso, não 500", async () => {
+  const db = dbJev();
+  db.catalogo = async () => { throw new Error("banco caiu"); };
+  const f = fetchJev({});
+  const r = await comFetch(f, () => handleApi(postSug({ fonte: "fatura", itens: [linhaJev(0, "LOJA X")] }), envJev, urlSug, db));
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).indisponivel, true);
+});
+
+test("H4: fonte fora de extrato/fatura → 400", async () => {
+  const r = await handleApi(postSug({ fonte: "imagem", itens: [] }), envJev, urlSug, dbJev());
+  assert.equal(r.status, 400);
+});
+
 // ---- C4: POST /api/importar/arquivo (arquivo original do import → Dropbox) ----
 import { LIMITE_ARQUIVO_IMPORT } from "./index.js";
 

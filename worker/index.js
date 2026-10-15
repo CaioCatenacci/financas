@@ -12,6 +12,7 @@ import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao
 import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, montarPreviewWise, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
+import { validarLote, sugerirLote, AVISO_INDISPONIVEL } from "./sugestoes.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { alocarSalario, mesesAte } from "./salario.js";
@@ -773,6 +774,24 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
      // devolve a mensagem real (não um 500 opaco) — facilita diagnosticar do navegador.
      return erroJson(`preview falhou: ${err && err.message ? err.message : String(err)}`, 500);
    }
+  }
+  // H4: sugestões do JEV para as linhas novas que caíram na padrão, pedidas pela tela DEPOIS da
+  // prévia, em lotes de até 20 (worker/sugestoes.js). Nunca 500: qualquer erro vira linhas sem
+  // sugestão + `indisponivel`, e o import segue (a prévia e o aplicar não dependem disto).
+  if (url.pathname === "/api/importar/sugestoes" && request.method === "POST") {
+    let b;
+    try { b = await body(); } catch { return erroJson("corpo inválido", 400); }
+    const erro = validarLote(b);
+    if (erro) return erroJson(erro, 400);
+    try {
+      const chave = typeof env.TYPESAFE_API_KEY === "string" ? env.TYPESAFE_API_KEY : "";
+      if (!chave) return j(await sugerirLote(b, { chave }));
+      const [catalogo, associacoes] = await Promise.all([db.catalogo(), db.associacoesPorNome()]);
+      return j(await sugerirLote(b, { catalogo, associacoes, chave, fetchImpl: (...a) => fetch(...a) }));
+    } catch {
+      return j({ itens: b.itens.map((i) => ({ indice: i?.indice ?? null, sugestao: null, preenche: false })),
+                 indisponivel: true, aviso: AVISO_INDISPONIVEL });
+    }
   }
   if (url.pathname === "/api/importar/aplicar" && request.method === "POST") {
    try {

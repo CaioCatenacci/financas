@@ -245,13 +245,14 @@ export function montarDecisao(preview, catalogo, fonte, gerarId = () => crypto.r
   const novos = [], naoGasto = [], casados = [];
   // linha de inserirTransacao a partir de um item do preview (paridade com _gravar do Python)
   const linhaDe = (item) => {
-    const nomeCat = item.categoriaOrg || item.categoriaNome || null; // null → padrão
-    const { categoria_id, subcategoria_id } = resolverCategoriaImport(nomeCat, item.subNome, catalogo);
+    const { nome: nomeCat, sub } = categoriaDoItem(item); // nome null → padrão
+    const { categoria_id, subcategoria_id } = resolverCategoriaImport(nomeCat, sub, catalogo);
     return {
       dataISO: item.data, natureza: item.natureza, esfera: "pessoal",
       valorCents: item.valorCents, reembolsoCents: 0,
       categoria_id, subcategoria_id,
       descricao: item.descricaoFinal ?? item.descricao,
+      // H4: a linha preenchida pelo JEV (item.jev) não tem categoriaNome → 'modelo', como a da padrão
       fonte, origem_categoria: item.categoriaNome ? "regra" : "modelo",
       contraparte_nome: item.contraparteNome,
       computa_resumo: item.computaResumo, linha_hash: item.linhaHash,
@@ -274,6 +275,81 @@ export function montarDecisao(preview, catalogo, fonte, gerarId = () => crypto.r
   }
   return { novos, naoGasto, casados };
 }
+
+// ---------- H4: JEV no import (sugestão depois da prévia) ----------
+// A prévia sai sem modelo; logo depois a tela pede POST /api/importar/sugestoes em lotes de até 20
+// (2 perguntas por linha cabem no teto de subrequests do Worker). Só vai a linha nova que caiu na
+// padrão: sem categoriaNome (regra aprendida) e sem categoriaOrg (não-gasto). A sugestão com
+// confiança >= 0,90 preenche a linha num campo próprio (`item.jev`), nunca no categoriaNome — que
+// marca 'regra' na gravação. A correção é na aba Lançamentos, depois de gravar (sem select aqui).
+export const LIMIAR_JEV = 0.9; // o mesmo de worker/jev.js (decisão do Caio no H3)
+export const LOTE_JEV = 20;
+export const AVISO_JEV = "classificação automática indisponível";
+const JEV_NENHUMA = "nenhuma serve";
+
+const vaiAoJev = (item) => !!item && item.status === "novo" && !item.categoriaNome && !item.categoriaOrg;
+
+// corpos do POST /api/importar/sugestoes: `indice` é a posição em preview.itens, por onde a
+// resposta volta para a linha certa.
+export function lotesSugestao(preview, fonte, tamanho = LOTE_JEV) {
+  const itens = [];
+  (preview?.itens || []).forEach((it, indice) => {
+    if (!vaiAoJev(it)) return;
+    itens.push({
+      indice, descricao: it.descricao, descricaoFinal: it.descricaoFinal ?? it.descricao,
+      contraparte: it.contraparteNome ?? null, valorCents: it.valorCents, natureza: it.natureza,
+      status: it.status, categoriaNome: it.categoriaNome ?? null, categoriaOrg: it.categoriaOrg ?? null,
+    });
+  });
+  const lotes = [];
+  for (let i = 0; i < itens.length; i += tamanho) lotes.push({ fonte, itens: itens.slice(i, i + tamanho) });
+  return lotes;
+}
+
+// preenche? confiança da categoria >= 0,90 e categoria de verdade ("nenhuma serve" nunca preenche).
+export function jevPreenche(s) {
+  return !!s && s.categoria !== JEV_NENHUMA && typeof s.prob_categoria === "number" && s.prob_categoria >= LIMIAR_JEV;
+}
+
+// grava a resposta de um lote nas linhas da prévia (muta, como o "tratar como novo"). A categoria
+// tem que existir no catálogo e não ser a padrão; a sub vai pelo nome respondido e é resolvida na
+// gravação por resolverCategoriaImport (nome que não existe na categoria → sub nula).
+export function aplicarSugestoes(preview, resposta, catalogo) {
+  for (const l of resposta?.itens || []) {
+    const item = preview?.itens?.[l.indice];
+    if (!vaiAoJev(item) || !l.sugestao) continue;
+    item.sugestao = l.sugestao;
+    if (!jevPreenche(l.sugestao)) continue;
+    const cat = (catalogo?.categorias || []).find(c => c.nome === l.sugestao.categoria && !c.padrao);
+    if (cat) item.jev = { categoria: cat.nome, subcategoria: l.sugestao.subcategoria || null, prob: l.sugestao.prob_categoria };
+  }
+  return preview;
+}
+
+// categoria (nome) e sub de uma linha da prévia: não-gasto > regra aprendida > JEV > padrão (null).
+// Uma fonte só para a gravação (montarDecisao) e para o que a tela mostra.
+function categoriaDoItem(item) {
+  if (item.categoriaOrg || item.categoriaNome) return { nome: item.categoriaOrg || item.categoriaNome, sub: item.subNome, jev: null };
+  if (item.jev) return { nome: item.jev.categoria, sub: item.jev.subcategoria, jev: item.jev };
+  return { nome: null, sub: item.subNome, jev: null };
+}
+
+export const seloJev = (prob) => "JEV " + Number(prob).toFixed(2).replace(".", ",");
+
+// célula "Categoria" da prévia: texto (com o selo do JEV quando foi ele que preencheu).
+export function celulaCategoriaImport(item, catalogo) {
+  const { nome, sub, jev } = categoriaDoItem(item);
+  const texto = esc(nome || categoriaPadrao(catalogo)?.nome || "—") + (sub ? " › " + esc(sub) : "");
+  if (!jev) return texto;
+  return texto + ` <span class="selo-jev" title="sugerida pelo JEV; corrija em Lançamentos depois de gravar">${esc(seloJev(jev.prob))}</span>`;
+}
+
+export function avisoJevHtml({ indisponivel = false, pendentes = 0 } = {}) {
+  if (indisponivel) return `<p class="impchk impchk-warn">⚠ ${esc(AVISO_JEV)}</p>`;
+  if (pendentes > 0) return `<p class="impchk">classificando automaticamente… (${pendentes} lote(s) pendente(s); dá para gravar já)</p>`;
+  return "";
+}
+// ---------- fim H4 ----------
 
 // C2: casa à mão um item "ambiguo" com um dos seus candidatos (vindos do preview). Muta o item
 // (mesmo estilo do "tratar como novo") para status "casado", com matchId/matchGrupoId do escolhido —
@@ -707,7 +783,7 @@ if (typeof document !== "undefined") {
     // C4: `arquivo` é o File escolhido no preview — o input é recriado vazio por drawImportar(),
     // então o aplicar não o acharia mais lá. Guardar o File (não o buffer: o pdf.js pode deixá-lo
     // detached) e mandar os bytes como vieram.
-    importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null, arquivo: null },
+    importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null, arquivo: null, jevPendentes: 0, jevIndisponivel: false },
     lancTudo: false,
     fechamento: null, fechamentoGrade: false, // G2: /api/fechamento e o "ver 12 meses" aberto
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
@@ -1695,7 +1771,7 @@ if (typeof document !== "undefined") {
       <tr data-i="${i}">
         <td class="dt">${fmtData(it.data)}</td>
         <td>${esc(it.descricaoFinal ?? it.descricao)}</td>
-        <td>${esc(it.categoriaOrg || it.categoriaNome || categoriaPadrao(estado.catalogo)?.nome || "—")}${it.subNome ? " › " + esc(it.subNome) : ""}</td>
+        <td>${celulaCategoriaImport(it, estado.catalogo)}</td>
         <td class="val">${it.natureza === "receita" ? "+" : ""}R$ ${centavosBR(String(it.valorCents / 100))}</td>
         ${comAmbiguo ? `<td>${botoesCandidatos(it)} <button class="chip impResolve" type="button" data-i="${i}">tratar como novo</button></td>` : "<td></td>"}
       </tr>`).join("");
@@ -1834,6 +1910,7 @@ if (typeof document !== "undefined") {
         <div class="cardhead"><div><h2>Preview</h2><p class="sub">${esc(resumoTexto(preview))}</p></div></div>
         ${checksumHtml}
         ${(preview.avisos || []).map(a => `<p class="impchk impchk-warn">⚠ ${esc(a)}</p>`).join("")}
+        ${avisoJevHtml({ indisponivel: st.jevIndisponivel, pendentes: st.jevPendentes })}
         ${resultado}
         <div style="margin-top:14px">
           <button id="impaplicar" class="chip" type="button" ${ok ? "" : "disabled"}>Aplicar</button>
@@ -1845,6 +1922,28 @@ if (typeof document !== "undefined") {
       ${tabelaItens("Ambíguos — não serão aplicados, a menos que você escolha o lançamento certo ou trate como novo", ambiguos, { comAmbiguo: true })}
       ${tabelaItens("Já importados antes (ignorados)", jaTem)}
     `;
+  }
+
+  // H4: depois da prévia, pede as sugestões do JEV lote a lote e redesenha a cada um. Erro de rede
+  // ou rota indisponível só acende o aviso: as linhas ficam na padrão e gravar segue possível.
+  // Nova prévia ou gravação no meio do caminho (st.preview trocou) encerra o laço.
+  async function pedirSugestoes() {
+    const st = estado.importar;
+    const preview = st.preview;
+    if (!preview || st.tipo === "wise") return;
+    const lotes = lotesSugestao(preview, fonteDoTipo(st.tipo));
+    st.jevPendentes = lotes.length;
+    if (!lotes.length) return;
+    drawImportar();
+    for (const lote of lotes) {
+      let r = null;
+      try { r = await apiPost("/api/importar/sugestoes", lote); } catch { r = null; }
+      if (st.preview !== preview) return;
+      if (r) aplicarSugestoes(preview, r, estado.catalogo);
+      if (!r || r.indisponivel) st.jevIndisponivel = true;
+      st.jevPendentes--;
+      drawImportar();
+    }
   }
 
   $("#importar").addEventListener("click", async e => {
@@ -1864,7 +1963,7 @@ if (typeof document !== "undefined") {
         if (!ano || !mes || mes < 1 || mes > 12) { alert("Preencha ano (ex.: 2025) e mês (1–12) da fatura."); return; }
         st.ano = ano; st.mes = mes;
       }
-      st.carregando = true; st.ultimoResultado = null; st.arquivo = arquivo; drawImportar();
+      st.carregando = true; st.ultimoResultado = null; st.arquivo = arquivo; st.jevPendentes = 0; st.jevIndisponivel = false; drawImportar();
       try {
         if (leituraDoTipo(st.tipo) === "csv") {
           // G1: CSV é texto — vai direto, sem pdf.js
@@ -1888,6 +1987,7 @@ if (typeof document !== "undefined") {
       } finally {
         st.carregando = false; drawImportar();
       }
+      pedirSugestoes(); // H4: sem await — a prévia já está na tela e o gravar não espera o JEV
       return;
     }
     if (e.target.id === "impaplicar") {
