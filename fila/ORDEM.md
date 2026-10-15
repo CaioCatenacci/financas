@@ -5,7 +5,6 @@ que sai; (2) para onde o dinheiro vai; (3) a casa. A faixa Agora fica com o Caio
 
 ## Agora
 - H5
-- C6
 
 ## Próximo
 
