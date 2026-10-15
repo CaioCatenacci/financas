@@ -408,37 +408,14 @@ export function montarSaldoMes(kpis, salario) {
 }
 
 // ---------- G2: fechamento do mês (o que falta importar) ----------
-// O servidor decide o estado (worker/fechamento.js); aqui só rótulo e a ligação de cada fonte com
-// o tipo da aba Importar que a resolve.
+// O servidor decide o estado (worker/fechamento.js); aqui só o rótulo. As rotinas do mês viraram
+// a grade do calendário (G6, abaixo).
 const ESTADOS_FECHAMENTO = { fechado: "fechado", parcial: "parcial", faltando: "faltando" };
 export function rotuloEstadoFechamento(estado) {
   return ESTADOS_FECHAMENTO[estado] || "—";
 }
 
 const ddmm = (iso) => (iso ? `${String(iso).slice(8, 10)}/${String(iso).slice(5, 7)}` : "");
-
-// uma linha por fonte: {fonte, texto, falta, tipo}. `tipo` (o valor de TIPOS_IMPORT) só vem em
-// quem falta, inteira ou em parte — é o clique que leva à aba Importar com o tipo escolhido.
-// Salário estimado aponta pra Wise (é a conversão que ainda não chegou); sem categoria é
-// pendência, não import, e só aparece quando há alguma.
-export function linhasFechamento(m) {
-  const f = (m && m.fontes) || {};
-  const extrato = (rot, fonte, tipo) => {
-    const x = f[fonte] || {};
-    const falta = x.cobertura !== "cheia";
-    return { fonte, texto: x.ate ? `${rot} até ${ddmm(x.ate)}` : `${rot}: falta`, falta, tipo: falta ? tipo : null };
-  };
-  const fat = f.fatura || {}, sal = f.salario || {};
-  const linhas = [
-    extrato("Itaú", "itau", "extrato"),
-    extrato("C6", "c6", "c6"),
-    { fonte: "fatura", texto: fat.existe ? "fatura: ok" : "fatura: falta", falta: !fat.existe, tipo: fat.existe ? null : "fatura" },
-    { fonte: "salario", texto: sal.estimado ? "salário: estimado" : "salário: ok", falta: !!sal.estimado, tipo: sal.estimado ? "wise" : null },
-  ];
-  const n = Number(m && m.sem_categoria) || 0;
-  if (n > 0) linhas.push({ fonte: "sem_categoria", texto: `${n} sem categoria`, falta: false, tipo: null });
-  return linhas;
-}
 
 // o mês selecionado dentro da resposta de /api/fechamento (null se não veio)
 export function mesDoFechamento(resp, mes) {
@@ -484,25 +461,131 @@ export function htmlDiagnostico(diag, fechamento, mes) {
   return `${aviso}<div class="diag-texto">${markdownSimples(texto)}</div>`;
 }
 
-// grade mês × fonte (link "ver 12 meses"): cada célula traz a cobertura (vira a cor) e um texto curto
-export function gradeFechamento(resp) {
-  const colunas = ["Itaú", "C6", "Fatura", "Salário", "Sem categoria"];
-  const linhas = ((resp && resp.meses) || []).map((m) => {
-    const f = m.fontes || {};
-    const ext = (x = {}) => ({ cobertura: x.cobertura || "faltando", texto: x.ate ? ddmm(x.ate) : "falta" });
-    const fat = f.fatura || {}, sal = f.salario || {};
+// ---------- G6: calendário das rotinas do mês ----------
+// Grade sempre aberta no topo do Resumo: linhas = rotinas, colunas = os 12 meses terminando no mês
+// selecionado. Cada célula tem um de quatro estados fixos (sem gradiente: o arquivo existe ou não
+// existe). O estado do mês (fechado/parcial/faltando) segue sendo o do servidor, só pelos imports:
+// print, triagem e diagnóstico aparecem aqui mas não seguram o "fechado" (o lembrete do G5 lê ele).
+export const ESTADOS_CELULA = ["feito", "parcial", "falta", "nao_se_aplica"];
+const ROTULO_CELULA = { feito: "feito", parcial: "parcial", falta: "falta", nao_se_aplica: "não se aplica" };
+// conta do patrimônio (vocabulário do print) → como aparece na linha
+const NOMES_CONTA = { itau: "Itaú", c6: "C6", nubank: "Nubank", mercadopago: "Mercado Pago", fgts: "FGTS" };
+// rotina de import → tipo da aba Importar que a resolve (mesmos valores de TIPOS_IMPORT)
+const TIPO_IMPORT_DA_ROTINA = { itau: "extrato", c6: "c6", fatura: "fatura", salario: "wise" };
+
+// os n meses terminando em `ate` ('YYYY-MM'), do mais antigo ao mais novo
+export function mesesAte(ate, n = 12) {
+  const [a, m] = String(ate).split("-").map(Number);
+  const out = [];
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(a, m - 1 - i, 1));
+    out.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`);
+  }
+  return out;
+}
+
+const celula = (mes, estado, title, texto = "") => ({ mes, estado, title, texto });
+
+// extrato: a cobertura do G2; o mês corrente (ou futuro) nunca passa de parcial — não acabou
+function celulaExtrato(rot, x = {}, mes, mesCorrente) {
+  let estado = x.cobertura === "cheia" ? "feito" : x.cobertura === "parcial" ? "parcial" : "falta";
+  if (estado === "feito" && mesCorrente && mes >= mesCorrente) estado = "parcial";
+  const title = x.ate && estado !== "falta" ? `${rot}: até ${ddmm(x.ate)}` : `${rot}: falta importar`;
+  return celula(mes, estado, title);
+}
+
+// as regras de cada linha, dado o mês da resposta (`m`, null se não veio)
+const REGRAS = {
+  itau: (m, ctx) => celulaExtrato("Itaú extrato", m.fontes?.itau, m.mes, ctx.mesCorrente),
+  c6: (m, ctx) => celulaExtrato("C6 extrato", m.fontes?.c6, m.mes, ctx.mesCorrente),
+  fatura: (m) => (m.fontes?.fatura?.existe
+    ? celula(m.mes, "feito", "fatura importada")
+    : celula(m.mes, "falta", "fatura: falta importar")),
+  // salário: brl nulo = nem estimativa; estimado = a conversão da Wise ainda não pagou o mês
+  salario: (m) => (m.salario_brl_cents == null
+    ? celula(m.mes, "falta", "salário: sem conversão nem estimativa")
+    : m.fontes?.salario?.estimado
+      ? celula(m.mes, "parcial", "salário estimado: a conversão da Wise ainda não entrou")
+      : celula(m.mes, "feito", "salário convertido")),
+  triagem: (m) => {
     const n = Number(m.sem_categoria) || 0;
-    return {
-      mes: m.mes, estado: m.estado,
-      celulas: [
-        ext(f.itau), ext(f.c6),
-        { cobertura: fat.existe ? "cheia" : "faltando", texto: fat.existe ? "ok" : "falta" },
-        { cobertura: sal.estimado ? "estimado" : "cheia", texto: sal.estimado ? "estimado" : "ok" },
-        { cobertura: n ? "pendente" : "cheia", texto: String(n) },
-      ],
-    };
+    if (!(Number(m.transacoes) > 0)) return celula(m.mes, "nao_se_aplica", "nenhum lançamento no mês");
+    if (n === 0) return celula(m.mes, "feito", "nada sem categoria");
+    return celula(m.mes, "parcial", `${n} sem categoria`, String(n));
+  },
+  diagnostico: (m) => (m.diagnostico
+    ? celula(m.mes, "feito", "diagnóstico salvo")
+    : m.estado === "fechado"
+      ? celula(m.mes, "falta", "mês fechado sem diagnóstico")
+      : celula(m.mes, "nao_se_aplica", "mês ainda não fechado")),
+};
+
+// print: antes do primeiro print de qualquer conta não se aplica (corte global); depois, a conta
+// tem foto naquele mês ou falta
+function celulaPrint(m, conta, pessoa, primeiroPrint) {
+  if (!primeiroPrint || m.mes < primeiroPrint) return celula(m.mes, "nao_se_aplica", "antes do primeiro print");
+  const p = (m.patrimonio || []).find((x) => x.conta === conta && x.pessoa === pessoa);
+  return p && p.tem_print
+    ? celula(m.mes, "feito", "print do mês recebido")
+    : celula(m.mes, "falta", "falta o print do mês (pelo Telegram)");
+}
+
+/**
+ * A grade do calendário a partir da resposta de /api/fechamento.
+ * @returns {{colunas:string[], linhas:Array<{id, rotulo, celulas:Array<{mes, estado, title, texto}>}>}}
+ */
+export function calendarioRotinas(resp, ate) {
+  const colunas = mesesAte(ate, 12);
+  const porMes = new Map(((resp && resp.meses) || []).map((m) => [m.mes, m]));
+  const ctx = { mesCorrente: resp && resp.mes_corrente };
+  const primeiroPrint = (resp && resp.primeiro_print) || null;
+  // contas do patrimônio: a API manda a lista do histórico inteiro em todo mês; a união cobre
+  // uma resposta parcial sem mudar a ordem
+  const contas = [];
+  for (const m of porMes.values()) for (const p of m.patrimonio || []) {
+    if (!contas.some((c) => c.conta === p.conta && c.pessoa === p.pessoa)) contas.push({ conta: p.conta, pessoa: p.pessoa });
+  }
+  const linha = (id, rotulo, regra) => ({
+    id, rotulo,
+    celulas: colunas.map((mes) => {
+      const m = porMes.get(mes);
+      return m ? regra(m) : celula(mes, "nao_se_aplica", "sem dados deste mês");
+    }),
   });
-  return { colunas, linhas };
+  return {
+    colunas,
+    linhas: [
+      linha("itau", "Itaú extrato", (m) => REGRAS.itau(m, ctx)),
+      linha("fatura", "Itaú fatura", REGRAS.fatura),
+      linha("c6", "C6 extrato", (m) => REGRAS.c6(m, ctx)),
+      linha("salario", "Salário (Wise)", REGRAS.salario),
+      ...contas.map((c) => linha(`print:${c.conta}/${c.pessoa}`, `Print ${NOMES_CONTA[c.conta] || c.conta}/${c.pessoa}`,
+        (m) => celulaPrint(m, c.conta, c.pessoa, primeiroPrint))),
+      linha("triagem", "Triagem", REGRAS.triagem),
+      linha("diagnostico", "Diagnóstico", REGRAS.diagnostico),
+    ],
+  };
+}
+
+/**
+ * O que o clique numa célula faz. Import em falta/parcial → aba Importar com o tipo; triagem com
+ * pendência → Lançamentos no mês da célula, filtrada na categoria padrão (achada pela flag
+ * `padrao`, nunca pelo nome: ela pode ser renomeada). Print e diagnóstico não têm ação (são feitos
+ * pelo Telegram e pela rotina do assistente). Null = a célula não é botão.
+ */
+export function acaoCelula(linha, cel, catalogo) {
+  if (!linha || !cel || (cel.estado !== "falta" && cel.estado !== "parcial")) return null;
+  const tipo = TIPO_IMPORT_DA_ROTINA[linha.id];
+  if (tipo) return { aba: "importar", tipo };
+  if (linha.id === "triagem") {
+    const padrao = ((catalogo && catalogo.categorias) || []).find((c) => c.padrao);
+    return padrao ? { aba: "lanc", mes: cel.mes, categoria: padrao.nome } : null;
+  }
+  return null;
+}
+
+export function rotuloCelula(estado) {
+  return ROTULO_CELULA[estado] || "";
 }
 
 // ---- A2: patrimônio por print ----
@@ -785,7 +868,7 @@ if (typeof document !== "undefined") {
     // detached) e mandar os bytes como vieram.
     importar: { tipo: "extrato", preview: null, carregando: false, ultimoResultado: null, ano: null, mes: null, arquivo: null, jevPendentes: 0, jevIndisponivel: false },
     lancTudo: false,
-    fechamento: null, fechamentoGrade: false, // G2: /api/fechamento e o "ver 12 meses" aberto
+    fechamento: null, // G2/G6: /api/fechamento (estado do mês + calendário das rotinas)
     sunburstFoco: null, // Inc 4.5 Tarefa 8: nome da categoria focada no sunburst (null = visão completa)
     sunburstPessoaFoco: null, // D6: pessoa focada no sunburst pessoa → categoria; separado do de cima
                               // de propósito: focar um sunburst não mexe no outro
@@ -846,28 +929,26 @@ if (typeof document !== "undefined") {
       cel("Reembolso (IR)", reembolso, "--c3", "dedutível");
   }
 
-  // ----- G2: fechamento do mês — o que falta importar -----
-  // Estado do mês selecionado e uma linha por fonte; a fonte que falta é botão (leva à aba
-  // Importar com o tipo escolhido). "ver 12 meses" abre a grade mês × fonte.
+  // ----- G2/G6: fechamento do mês + calendário das rotinas -----
+  // O selo do estado do mês selecionado (só pelos imports) e, sempre aberta, a grade rotina × 12
+  // meses. Célula com ação (calendarioRotinas/acaoCelula, puros) é botão; o resto só tem title.
   function drawFechamento() {
     const el = $("#fechamento"); if (!el) return;
     const m = mesDoFechamento(estado.fechamento, estado.mes);
     if (!m) { el.innerHTML = ""; el.classList.add("hidden"); return; }
     el.classList.remove("hidden");
-    const fontes = linhasFechamento(m).map(l => l.tipo
-      ? `<button type="button" class="chip fechfonte fech-falta" data-tipo="${esc(l.tipo)}" title="importar">${esc(l.texto)}</button>`
-      : `<span class="fechfonte${l.fonte === "sem_categoria" ? " fech-pend" : ""}">${esc(l.texto)}</span>`).join("");
-    let grade = "";
-    if (estado.fechamentoGrade) {
-      const g = gradeFechamento(estado.fechamento);
-      grade = `<table class="fechgrade"><thead><tr><th>Mês</th>${g.colunas.map(c => `<th>${esc(c)}</th>`).join("")}<th>Estado</th></tr></thead><tbody>` +
-        g.linhas.map(l => `<tr><td>${esc(mesLabelAno(l.mes))}</td>${l.celulas.map(c => `<td class="fech-${esc(c.cobertura)}">${esc(c.texto)}</td>`).join("")}` +
-          `<td><span class="fechselo fech-${esc(l.estado)}">${esc(rotuloEstadoFechamento(l.estado))}</span></td></tr>`).join("") +
-        `</tbody></table>`;
-    }
+    const cal = calendarioRotinas(estado.fechamento, estado.mes);
+    const cab = cal.colunas.map(c => `<th${c === estado.mes ? ' class="cal-sel"' : ""}>${esc(mesExtenso(c))}</th>`).join("");
+    const corpo = cal.linhas.map((l, li) => `<tr><th class="cal-rot">${esc(l.rotulo)}</th>` + l.celulas.map((c, ci) => {
+      const title = `${mesExtenso(c.mes)} · ${rotuloCelula(c.estado)}: ${c.title}`;
+      const dentro = acaoCelula(l, c, estado.catalogo)
+        ? `<button type="button" class="cal-cel cal-${esc(c.estado)}" data-l="${li}" data-c="${ci}" title="${esc(title)}">${esc(c.texto)}</button>`
+        : `<span class="cal-cel cal-${esc(c.estado)}" title="${esc(title)}">${esc(c.texto)}</span>`;
+      return `<td>${dentro}</td>`;
+    }).join("") + `</tr>`).join("");
     el.innerHTML = `<div class="fechtopo"><span class="fechselo fech-${esc(m.estado)}">${esc(rotuloEstadoFechamento(m.estado))}</span>` +
-      `<div class="fechfontes">${fontes}</div>` +
-      `<button type="button" class="chip" id="fechver">${estado.fechamentoGrade ? "esconder 12 meses" : "ver 12 meses"}</button></div>${grade}`;
+      `<span class="callegenda">${ESTADOS_CELULA.map(e => `<span class="cal-cel cal-${e}"></span>${esc(rotuloCelula(e))}`).join("")}</span></div>` +
+      `<div class="calwrap"><table class="calgrade"><thead><tr><th></th>${cab}</tr></thead><tbody>${corpo}</tbody></table></div>`;
   }
 
   // ----- G1: saldo do mês (salário por competência) -----
@@ -2191,15 +2272,21 @@ if (typeof document !== "undefined") {
     else if (v === "patrimonio") carregarPatrimonio();
     else if (v === "casa") carregarCasa();
   });
-  // G2: fonte que falta → aba Importar com o tipo daquela fonte; "ver 12 meses" abre/fecha a grade
+  // G6: célula com ação → import com o tipo, ou Lançamentos no mês da célula filtrada na padrão
   $("#fechamento").addEventListener("click", e => {
-    const fonte = e.target.closest(".fech-falta");
-    if (fonte) {
-      estado.importar.tipo = fonte.dataset.tipo; estado.importar.preview = null; estado.importar.arquivo = null;
+    const b = e.target.closest("button.cal-cel"); if (!b) return;
+    const l = calendarioRotinas(estado.fechamento, estado.mes).linhas[Number(b.dataset.l)];
+    const acao = l && acaoCelula(l, l.celulas[Number(b.dataset.c)], estado.catalogo);
+    if (!acao) return;
+    if (acao.aba === "importar") {
+      estado.importar.tipo = acao.tipo; estado.importar.preview = null; estado.importar.arquivo = null;
       document.querySelector('.tab[data-view="importar"]')?.click();
-      return;
+    } else if (acao.aba === "lanc") {
+      estado.mes = acao.mes; $("#mesSel").value = acao.mes;
+      estado.lancTudo = false; $("#lancTudo").setAttribute("aria-pressed", "false"); $("#mesSel").disabled = false;
+      estado.filtro.categoria = acao.categoria;
+      document.querySelector('.tab[data-view="lanc"]')?.click();
     }
-    if (e.target.id === "fechver") { estado.fechamentoGrade = !estado.fechamentoGrade; drawFechamento(); }
   });
   $("#lancTudo").addEventListener("click", () => {
     estado.lancTudo = !estado.lancTudo;
