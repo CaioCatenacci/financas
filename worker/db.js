@@ -1,6 +1,6 @@
 import { centsToNumeric } from "./money.js";
 import { derivarChave, normalizarNome } from "./contraparte.js";
-import { naturezaAoReclassificar } from "./categorias.js";
+import { naturezaAoReclassificar, esferaDaCategoria } from "./categorias.js";
 
 export function criarDb(sql) {
   // Builder da query de insert de transação. Reusado no insert único (captura) e no lote
@@ -41,7 +41,7 @@ export function criarDb(sql) {
 
     // catálogo do modelo por id (categorias + subcategorias ativas). Alimenta selects e resolução.
     async catalogo() {
-      const categorias = await sql`select id, nome, natureza, ativa, padrao from categorias where ativa order by nome`;
+      const categorias = await sql`select id, nome, natureza, esfera, ativa, padrao from categorias where ativa order by nome`;
       const subcategorias = await sql`select id, categoria_id, nome, ativa from subcategorias where ativa order by nome`;
       return { categorias, subcategorias };
     },
@@ -76,10 +76,12 @@ export function criarDb(sql) {
       // read-modify-write: o driver HTTP do Neon não compõe fragmentos aninhados,
       // então lemos a linha e mesclamos em JS. undefined = manter; '' = limpar (null).
       // a natureza da categoria NOVA vem no mesmo SELECT (subselect com o id pedido; null se não
-      // houver troca) — evita uma 2ª ida ao banco e alimenta naturezaAoReclassificar.
+      // houver troca) — evita uma 2ª ida ao banco e alimenta naturezaAoReclassificar. A esfera da
+      // categoria nova (A1) vem do mesmo jeito, no mesmo SELECT.
       const novaCat = c.categoria_id || null;
       const rows = await sql`
-        select t.*, (select natureza from categorias where id = ${novaCat}::uuid) as nova_cat_natureza
+        select t.*, (select natureza from categorias where id = ${novaCat}::uuid) as nova_cat_natureza,
+               (select esfera from categorias where id = ${novaCat}::uuid) as nova_cat_esfera
         from transacoes t where t.id = ${id}`;
       const t = rows[0];
       if (!t) return;
@@ -90,7 +92,8 @@ export function criarDb(sql) {
       const descricao = c.descricao === undefined ? t.descricao : (c.descricao || null);
       // natureza: explícita > segue a categoria nova (regra em categorias.js) > mantém
       const natureza = c.natureza ?? (novaCat ? naturezaAoReclassificar(t.natureza, t.fonte, t.nova_cat_natureza) : t.natureza);
-      const esfera = c.esfera ?? t.esfera;
+      // esfera: explícita > segue a categoria nova (A1, esferaDaCategoria) > mantém
+      const esfera = c.esfera ?? (novaCat ? esferaDaCategoria(t.esfera, t.nova_cat_esfera) : t.esfera);
       const valor_total = c.valorCents != null ? centsToNumeric(c.valorCents) : t.valor_total;
       const valor_reembolso = c.reembolsoCents != null ? centsToNumeric(c.reembolsoCents) : t.valor_reembolso;
       const computa_resumo = c.computa_resumo === undefined ? t.computa_resumo : !!c.computa_resumo;
@@ -140,7 +143,12 @@ export function criarDb(sql) {
                   when natureza = 'receita' and fonte in ('extrato','fatura') then 'receita'
                   when (select natureza from categorias where id = ${catId}::uuid) = 'despesa' then 'despesa'
                   else natureza end)
-            else natureza end
+            else natureza end,
+          -- esfera segue a da categoria nova (A1, mesma regra de esferaDaCategoria): sem categoria
+          -- conhecida, mantém
+          esfera = case when ${setCat}::boolean then
+            coalesce((select esfera from categorias where id = ${catId}::uuid), esfera)
+            else esfera end
         where id = any(${ids}::uuid[])`;
 
       let regras = 0;
@@ -216,6 +224,14 @@ export function criarDb(sql) {
     },
     async renomearCategoria(id, nome) {
       await sql`update categorias set nome = ${nome} where id = ${id}`;
+    },
+    // A1: mudar a esfera da categoria regrava a de todas as transações dela — as duas queries numa
+    // única sql.transaction, pra transacao.esfera nunca divergir da categoria no meio do caminho.
+    async mudarEsferaCategoria(id, esfera) {
+      await sql.transaction([
+        sql`update categorias set esfera = ${esfera} where id = ${id}`,
+        sql`update transacoes set esfera = ${esfera} where categoria_id = ${id}`,
+      ]);
     },
     async desativarCategoria(id) {
       // a padrão nunca sai do catálogo: sem ela o fallback de resolverCategoria volta a dar null

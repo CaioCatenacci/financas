@@ -816,6 +816,31 @@ linhas = rotinas, colunas = os 12 meses terminando no mês selecionado.
 - Mês antes do primeiro `salario_param` volta `brl_cents` nulo e cai em "falta"; não afeta a janela
   de hoje (ver BACKLOG).
 
+## 26. Esfera é da categoria: o que é da empresa, qualquer que seja a conta (A1, 15/10/2026)
+
+A receita PJ chega em dólar na Wise e cai no Itaú (PF) ou no C6 (PJ), e as contas da empresa
+saem de qualquer das duas; a apuração é feita como um todo. Por isso a esfera não pode vir da
+conta: ela diz **o que o dinheiro é**. Desde o G1 o salário não é transação, então a esfera só
+precisa marcar as despesas da empresa.
+
+- **A esfera é uma propriedade da categoria** (`categorias.esfera`, migração `0019`, default
+  `pessoal`): Empresa = `empresa`; o resto, inclusive Impostos/IR, = `pessoal`. A `0019` marcou a
+  Empresa (pelo nome, só na semente) e regravou o histórico: toda transação ficou com a esfera da
+  sua categoria.
+- **A transação herda** a esfera da categoria em toda gravação de categoria, como a natureza:
+  `esferaDaCategoria(esferaAtual, esferaCategoria)` (`worker/categorias.js`, puro; espelho em
+  `public/app.js`). Usada na captura por texto e por imagem (inclusive quando a regra aprendida
+  decide a categoria), no `montarDecisao` do import (o catálogo devolve `esfera`), em
+  `atualizarTransacao` (subselect da categoria nova) e no UPDATE único de `atualizarTransacoesLote`
+  (CASE em SQL). Esfera de categoria desconhecida mantém a atual. O `/aprender` só grava
+  `associacoes` (sem coluna esfera): não há o que herdar ali.
+- **Aba Ajustes:** um seletor pessoal/empresa por categoria chama `PATCH /api/categorias/:id
+  {esfera}`; o Worker valida o vocabulário (fora dele → 400) e grava a categoria e as transações
+  dela numa única `sql.transaction` (`db.mudarEsferaCategoria`). `{nome}` e `{esfera}` são
+  independentes no PATCH.
+- Nenhuma leitura agregada usa a esfera ainda; quem soma é a cascata (A3). Os importadores Python
+  seguem gravando a esfera pela regra antiga (BACKLOG).
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |

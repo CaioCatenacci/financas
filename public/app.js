@@ -235,6 +235,19 @@ function resolverCategoriaImport(nomeMacro, nomeSub, catalogo) {
   return { categoria_id, subcategoria_id };
 }
 
+// A1: espelho de esferaDaCategoria (worker/categorias.js) — a esfera é da categoria; esfera
+// desconhecida (catálogo sem a coluna) mantém a atual. Mexeu num, mexa no outro.
+const ESFERAS = ["pessoal", "empresa"];
+export function esferaDaCategoria(esferaAtual, esferaCategoria) {
+  return ESFERAS.includes(esferaCategoria) ? esferaCategoria : esferaAtual;
+}
+
+// <option>s do seletor de esfera da categoria na aba Ajustes (vocabulário fechado; a atual marcada).
+export function opcoesEsfera(esferaAtual) {
+  const atual = ESFERAS.includes(esferaAtual) ? esferaAtual : "pessoal";
+  return ESFERAS.map(e => `<option value="${e}"${e === atual ? " selected" : ""}>${e}</option>`).join("");
+}
+
 // monta a decisao revisada (novos/naoGasto/casados) a partir do preview + catálogo, espelhando
 // tools/importar_extrato.py::_gravar / importar_fatura.py, e — Inc 4.6 — a linha do "casado"
 // também vira transação: entra no grupo do lançamento que ela casou (nunca é a representante).
@@ -247,8 +260,10 @@ export function montarDecisao(preview, catalogo, fonte, gerarId = () => crypto.r
   const linhaDe = (item) => {
     const { nome: nomeCat, sub } = categoriaDoItem(item); // nome null → padrão
     const { categoria_id, subcategoria_id } = resolverCategoriaImport(nomeCat, sub, catalogo);
+    const cat = (catalogo.categorias || []).find(c => c.id === categoria_id);
     return {
-      dataISO: item.data, natureza: item.natureza, esfera: "pessoal",
+      // A1: a esfera vem da categoria resolvida (Empresa = empresa), não mais 'pessoal' fixo
+      dataISO: item.data, natureza: item.natureza, esfera: esferaDaCategoria("pessoal", cat?.esfera),
       valorCents: item.valorCents, reembolsoCents: 0,
       categoria_id, subcategoria_id,
       descricao: item.descricaoFinal ?? item.descricao,
@@ -1516,6 +1531,7 @@ if (typeof document !== "undefined") {
         <div class="ajcathead">
           <b>${esc(c.nome)}</b><span class="ajnat">${esc(c.natureza)}</span>${c.padrao ? `<span class="ajnat" title="recebe o que ninguém classificou (modelo, texto sem categoria, import)">padrão</span>` : ""}
           <span class="ajactions">
+            <select class="ajesfera" data-id="${esc(c.id)}" aria-label="Esfera de ${esc(c.nome)}" title="esfera: as transações da categoria herdam (empresa = despesa da empresa)">${opcoesEsfera(c.esfera)}</select>
             <button class="miniBtn" data-act="renomeiacat" data-id="${esc(c.id)}">renomear</button>
             ${c.padrao ? "" : `<button class="miniBtn" data-act="apagarcat" data-id="${esc(c.id)}">desativar</button>`}
           </span>
@@ -1622,6 +1638,19 @@ if (typeof document !== "undefined") {
     if (!e.target.classList.contains("ajassoccat")) return;
     const sub = document.querySelector(`#ajassocbody select.ajassocsub[data-i="${e.target.dataset.i}"]`);
     if (sub) sub.innerHTML = opcoesSub(e.target.value, null);
+  });
+
+  // A1: trocar a esfera da categoria regrava a de todas as transações dela (no Worker, numa transação só)
+  $("#ajustes").addEventListener("change", async e => {
+    if (!e.target.classList.contains("ajesfera")) return;
+    const c = estado.catalogo.categorias.find(x => x.id === e.target.dataset.id); if (!c) return;
+    const esfera = e.target.value;
+    if (!confirm(`Marcar "${c.nome}" como ${esfera}? Todas as transações dela passam a ${esfera}.`)) { e.target.value = c.esfera ?? "pessoal"; return; }
+    try {
+      await apiPatch(`/api/categorias/${c.id}`, { esfera });
+      await carregar();
+      drawAjustes();
+    } catch (err) { alert("Falha: " + err.message); e.target.value = c.esfera ?? "pessoal"; }
   });
 
   // ações do painel de regras: à parte do resto da aba, recarregam só a lista (não o app inteiro)

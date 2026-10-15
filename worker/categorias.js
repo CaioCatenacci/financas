@@ -59,6 +59,15 @@ export function naturezaAoReclassificar(naturezaAtual, fonte, naturezaCategoria)
   return creditoBancario ? "receita" : "despesa";
 }
 
+// A1 (15/10/2026): a esfera é propriedade da CATEGORIA (Empresa = empresa; o resto, inclusive
+// Impostos/IR, pessoal) e a transação a herda em toda gravação de categoria — captura, import,
+// reclassificação. Diz o que o dinheiro é, não a conta por onde passou. Esfera de categoria
+// desconhecida (id inválido, catálogo sem a coluna) mantém a atual: nada de valor fora do vocabulário.
+export const ESFERAS = ["pessoal", "empresa"];
+export function esferaDaCategoria(esferaAtual, esferaCategoria) {
+  return ESFERAS.includes(esferaCategoria) ? esferaCategoria : esferaAtual;
+}
+
 // nomes (categoria/subcategoria) a partir dos ids — p/ exibir na confirmação do Telegram.
 export function nomesDeCategoria(catalogo, categoria_id, subcategoria_id) {
   const c = (catalogo.categorias || []).find(x => x.id === categoria_id);

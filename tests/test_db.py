@@ -145,3 +145,12 @@ def test_sem_url_levanta_excecao_normal_para_virar_json(tmp_path):
     # SystemExit escapava do try/except dos comandos e saía sem JSON.
     with pytest.raises(DevVarsAusente, match="DATABASE_URL"):
         url_do_banco({}, tmp_path, git_common_dir=None)
+
+
+def test_toda_migracao_passa_pela_guarda_do_ensaiar_e_do_aplicar():
+    # o ensaiar/aplicar recusam arquivo que "controla a transação"; um bloco `do $$ ... end $$`
+    # cai nessa guarda (o corte em ';' deixa um pedaço começando com `end`) e a entrega travaria
+    from pathlib import Path
+    raiz = Path(__file__).resolve().parent.parent / "migrations"
+    for arq in sorted(raiz.glob("*.sql")):
+        assert not controla_transacao(arq.read_text(encoding="utf-8")), arq.name

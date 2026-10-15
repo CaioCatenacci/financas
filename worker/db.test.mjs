@@ -1270,3 +1270,72 @@ test("G6 transacoesPorMes conta em SQL só o que conta no resumo (nunca computa_
   assert.deepEqual(sql.chamadas[0].values, ["2030-08-01", "2031-08-01"]);
   assert.deepEqual(r, [{ mes: "2031-07", n: 40 }]);
 });
+
+// ---- A1: a esfera segue a categoria ao reclassificar (como a natureza) ----
+// Exemplo do card: linha de extrato em "Não Identificado" (pessoal) reclassificada p/ Empresa ›
+// Contabilidade vira empresa; voltar p/ uma categoria pessoal devolve 'pessoal'.
+const linhaExtratoA1 = (over = {}) => ({ id: "t1", data: "2026-09-10", categoria_id: "cNI", subcategoria_id: null,
+  valor_total: "350.00", valor_reembolso: "0.00", pessoa_id: null, descricao: "Contador",
+  natureza: "despesa", esfera: "pessoal", fonte: "extrato", contraparte_nome: null, contraparte_chave: null,
+  nova_cat_natureza: "despesa", ...over });
+
+test("atualizarTransacao: reclassificar p/ categoria empresa grava esfera empresa (lê a esfera da categoria nova no mesmo SELECT)", async () => {
+  const sql = fakeSql([linhaExtratoA1({ nova_cat_esfera: "empresa" })]);
+  const db = criarDb(sql);
+  await db.atualizarTransacao("t1", { categoria_id: "cEmp", subcategoria_id: "sContab" });
+  assert.equal(sql.chamadas.length, 2, "SELECT + UPDATE, sem ida extra ao banco p/ a esfera");
+  assert.match(sql.chamadas[0].text, /select esfera from categorias where id = .*as nova_cat_esfera/is);
+  const upd = sql.chamadas[1];
+  assert.match(upd.text, /esfera = \?/i);
+  assert.ok(upd.values.includes("empresa"), "esfera virou empresa");
+  assert.ok(!upd.values.includes("pessoal"), "a esfera antiga não sobra no UPDATE");
+});
+
+test("atualizarTransacao: reclassificar de volta p/ categoria pessoal grava esfera pessoal", async () => {
+  const sql = fakeSql([linhaExtratoA1({ categoria_id: "cEmp", esfera: "empresa", nova_cat_esfera: "pessoal" })]);
+  const db = criarDb(sql);
+  await db.atualizarTransacao("t1", { categoria_id: "cCasa", subcategoria_id: "" });
+  const upd = sql.chamadas[1];
+  assert.ok(upd.values.includes("pessoal"), "esfera voltou a pessoal");
+  assert.ok(!upd.values.includes("empresa"));
+});
+
+test("atualizarTransacao: editar sem trocar categoria não mexe na esfera", async () => {
+  const sql = fakeSql([linhaExtratoA1({ categoria_id: "cEmp", esfera: "empresa", nova_cat_esfera: null })]);
+  const db = criarDb(sql);
+  await db.atualizarTransacao("t1", { descricao: "Contador (set)" });
+  assert.ok(sql.chamadas[1].values.includes("empresa"));
+});
+
+test("atualizarTransacoesLote: com categoria nova, a esfera segue a da categoria no mesmo UPDATE (empresa e de volta pessoal)", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.atualizarTransacoesLote(["id1", "id2"], { categoria_id: "cEmp" }, { aprender: false });
+  assert.equal(sql.chamadas.length, 1, "um UPDATE só");
+  const upd = sql.chamadas[0];
+  assert.match(upd.text, /esfera\s*=\s*case when \?::boolean then\s*coalesce\(\(select esfera from categorias where id = \?::uuid\), esfera\)\s*else esfera end/i);
+  assert.ok(upd.values.includes("cEmp"));
+  // sem troca de categoria (só pessoa), o guard é false: a esfera não muda
+  const sql2 = fakeSql([]);
+  await criarDb(sql2).atualizarTransacoesLote(["id1"], { pessoa_id: "p1" });
+  assert.match(sql2.chamadas[0].text, /esfera\s*=\s*case when/i);
+  const iGuard = sql2.chamadas[0].text.split("?").findIndex((s) => /esfera\s*=\s*case when\s*$/i.test(s));
+  assert.equal(sql2.chamadas[0].values[iGuard], false);
+});
+
+test("catalogo devolve a esfera de cada categoria (alimenta captura, import e a aba Ajustes)", async () => {
+  const sql = fakeSql([]);
+  await criarDb(sql).catalogo();
+  assert.match(sql.chamadas[0].text, /select id, nome, natureza, esfera, ativa, padrao from categorias/i);
+});
+
+test("mudarEsferaCategoria: grava a esfera da categoria e regrava as transações dela numa única transação", async () => {
+  const sql = fakeSql([]);
+  const db = criarDb(sql);
+  await db.mudarEsferaCategoria("cEquip", "empresa");
+  assert.equal(sql.transacao.length, 2, "as duas queries vão no mesmo sql.transaction");
+  assert.match(sql.chamadas[0].text, /update categorias set esfera = \? where id = \?/i);
+  assert.deepEqual(sql.chamadas[0].values, ["empresa", "cEquip"]);
+  assert.match(sql.chamadas[1].text, /update transacoes set esfera = \? where categoria_id = \?/i);
+  assert.deepEqual(sql.chamadas[1].values, ["empresa", "cEquip"]);
+});

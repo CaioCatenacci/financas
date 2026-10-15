@@ -9,6 +9,8 @@ create table categorias (
   id       uuid primary key default gen_random_uuid(),
   nome     text not null unique,
   natureza text not null default 'despesa' check (natureza in ('despesa','receita')),
+  -- A1 (0019): o que é da empresa; a transação herda a esfera da categoria (Empresa = empresa)
+  esfera   text not null default 'pessoal' check (esfera in ('pessoal','empresa')),
   ativa    boolean not null default true,
   -- G4 (0017): a categoria da obra, achada pela flag (nunca pelo nome); só uma tem a flag
   projeto_casa boolean not null default false
