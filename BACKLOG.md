@@ -81,3 +81,12 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   esses caminhos para pôr linha na categoria Empresa (ou tirar dela) volta a criar
   `transacoes.esfera <> categorias.esfera`. Saídas: um trigger no banco (cobre todos os
   caminhos) ou levar `esferaDaCategoria` para os tools, junto com o C6. Origem: A1 (15/10/2026).
+- **P2 · Receita na categoria padrão pode duplicar o salário na cascata.** O salário vem de
+  `alocarSalario` (G1), mas um repasse do próprio salário (Wise → banco) que ficou sem
+  classificação na `padrao=true`, com natureza receita, entra também em "+ Outras receitas" (e no
+  saldo do G1, que conta do mesmo jeito). O defeito, se existir, é da triagem, não da cascata;
+  conferir os meses recentes. Origem: A3 (15/10/2026).
+- **P3 · Em que degrau entra uma receita de esfera empresa.** Hoje vai para "+ Outras receitas"
+  (CONTEXTO §27), para a cascata fechar com o saldo do mês; um estorno de despesa da empresa
+  poderia abater o degrau Empresa. Nenhuma linha assim no banco em 15/10/2026; o Caio decide se
+  aparecer. Origem: A3 (15/10/2026).
