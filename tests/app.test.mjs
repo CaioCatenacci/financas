@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
-  centavosBR, kf, deltaPct, rangeDoMes, construirWaterfall, subsDaCat,
+  centavosBR, kf, deltaPct, rangeDoMes, construirCascata, subsDaCat,
   anelPessoaCategoria, filtrarTransacoes, montarDecisao, podeAplicar, resumoTexto, montarMudancas,
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
   escolherCandidato, rotuloCandidato, linhaEditavel, idsSelecionaveis, esc,
@@ -43,14 +43,51 @@ test("rangeDoMes: de = dia 1, ateExcl = dia 1 do mês seguinte (vira o ano)", ()
   assert.deepEqual(rangeDoMes("2026-12"), { de: "2026-12-01", ateExcl: "2027-01-01" });
 });
 
-test("construirWaterfall monta receita → despesas → saldo com lo/hi cumulativos", () => {
-  const steps = construirWaterfall(1000, [{ nm: "A", v: 600 }, { nm: "B", v: 300 }]);
-  assert.deepEqual(steps, [
-    { nm: "Receita", tipo: "receita", lo: 0, hi: 1000 },
-    { nm: "A", tipo: "despesa", lo: 400, hi: 1000 },
-    { nm: "B", tipo: "despesa", lo: 100, hi: 400 },
-    { nm: "Saldo", tipo: "saldo", lo: 0, hi: 100 },
+// A3: o waterfall do Resumo é a cascata do mês (valores do Exemplo, inventados, em centavos):
+// salário 40.000 − empresa 3.000 = disponível 37.000; + 1.000 de outras receitas − pessoais
+// (20.000 + 5.000) = saldo 13.000, o mesmo do card "Saldo do mês".
+const CASCATA_EX = {
+  salario_cents: 4000000, despesa_empresa_cents: 300000, disponivel_cents: 3700000,
+  outras_receitas_cents: 100000, despesa_pessoal_cents: 2500000, saldo_cents: 1300000, estimado: false,
+  pessoais: [{ macro: "Casa", total_cents: 2000000 }, { macro: "Lazer", total_cents: 500000 }],
+};
+
+test("construirCascata monta salário → empresa → disponível → outras receitas → pessoais → saldo com lo/hi acumulados", () => {
+  assert.deepEqual(construirCascata(CASCATA_EX), [
+    { nm: "Salário (PJ)", tipo: "receita", lo: 0, hi: 4000000 },
+    { nm: "− Empresa", tipo: "despesa", lo: 3700000, hi: 4000000 },
+    { nm: "= Disponível para a casa", tipo: "subtotal", lo: 0, hi: 3700000 },
+    { nm: "+ Outras receitas", tipo: "receita", lo: 3700000, hi: 3800000 },
+    { nm: "Casa", tipo: "despesa", lo: 1800000, hi: 3800000 },
+    { nm: "Lazer", tipo: "despesa", lo: 1300000, hi: 1800000 },
+    { nm: "= Saldo do mês", tipo: "saldo", lo: 0, hi: 1300000 },
   ]);
+});
+
+test("construirCascata: o último degrau vale cascata.saldo_cents", () => {
+  const steps = construirCascata(CASCATA_EX);
+  assert.equal(steps.at(-1).hi - steps.at(-1).lo, CASCATA_EX.saldo_cents);
+});
+
+test("construirCascata: mês sem salário desenha 0 no primeiro degrau e o resto segue (negativo vira piso)", () => {
+  const c = { ...CASCATA_EX, salario_cents: 0, disponivel_cents: -300000, saldo_cents: -2700000 };
+  const steps = construirCascata(c);
+  assert.deepEqual(steps[0], { nm: "Salário (PJ)", tipo: "receita", lo: 0, hi: 0 });
+  assert.deepEqual(steps[1], { nm: "− Empresa", tipo: "despesa", lo: -300000, hi: 0 });
+  assert.deepEqual(steps[2], { nm: "= Disponível para a casa", tipo: "subtotal", lo: -300000, hi: 0 });
+  assert.deepEqual(steps.at(-1), { nm: "= Saldo do mês", tipo: "saldo", lo: -2700000, hi: 0 });
+  assert.ok(steps.every(s => Number.isInteger(s.lo) && Number.isInteger(s.hi)), "centavos inteiros, nada de NaN");
+});
+
+test("construirCascata: se os grupos pessoais não fecham com despesa_pessoal_cents, a diferença vira degrau próprio (o saldo nunca mente)", () => {
+  const c = { ...CASCATA_EX, pessoais: [{ macro: "Casa", total_cents: 2000000 }] };
+  const steps = construirCascata(c);
+  assert.deepEqual(steps.at(-2), { nm: "Outras despesas", tipo: "despesa", lo: 1300000, hi: 1800000 });
+  assert.deepEqual(steps.at(-1), { nm: "= Saldo do mês", tipo: "saldo", lo: 0, hi: 1300000 });
+});
+
+test("construirCascata: sem cascata (resumo sem mes=) não há degraus", () => {
+  assert.deepEqual(construirCascata(null), []);
 });
 
 test("anelPessoaCategoria dobra porPessoaCategoria em pessoa → categorias, e o anel interno fecha com a despesa do mês", () => {
