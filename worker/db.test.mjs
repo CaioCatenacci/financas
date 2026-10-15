@@ -1377,3 +1377,32 @@ test("mudarEsferaCategoria: grava a esfera da categoria e regrava as transaçõe
   assert.match(sql.chamadas[1].text, /update transacoes set esfera = \? where categoria_id = \?/i);
   assert.deepEqual(sql.chamadas[1].values, ["empresa", "cEquip"]);
 });
+
+test("A3 somasPorEsfera: soma em SQL por esfera, só o que conta, centavos inteiros na janela meio-aberta", async () => {
+  // o driver devolve ::bigint como string: a borda converte para número
+  const sql = fakeSql([{ despesa_empresa_cents: "300000", despesa_pessoal_cents: "2500000", outras_receitas_cents: "100000" }]);
+  const db = criarDb(sql);
+  const r = await db.somasPorEsfera("2026-09-01", "2026-10-01");
+  assert.deepEqual(r, { despesa_empresa_cents: 300000, despesa_pessoal_cents: 2500000, outras_receitas_cents: 100000 });
+  const q = sql.chamadas[0].text;
+  assert.match(q, /conta_no_resumo/);
+  assert.doesNotMatch(q, /computa_resumo/);
+  assert.match(q, /esfera = 'empresa'/);
+  assert.match(q, /esfera = 'pessoal'/);
+  assert.match(q, /round\(.*\*100\)\)::bigint/);
+  // outras receitas: todas as receitas que contam, sem filtro de esfera (senão a cascata não fecha)
+  assert.match(q, /filter \(where natureza = 'receita'\)/);
+  assert.match(q, /data < \?/);
+  assert.deepEqual(sql.chamadas[0].values, ["2026-09-01", "2026-10-01"]);
+});
+
+test("A3 despesaPessoalPorCategoria: só despesa pessoal que conta, por categoria, em centavos", async () => {
+  const sql = fakeSql([{ macro: "Casa", total_cents: "2000000" }]);
+  const db = criarDb(sql);
+  assert.deepEqual(await db.despesaPessoalPorCategoria("2026-09-01", "2026-10-01"), [{ macro: "Casa", total_cents: 2000000 }]);
+  const q = sql.chamadas[0].text;
+  assert.match(q, /conta_no_resumo/);
+  assert.match(q, /natureza = 'despesa'/);
+  assert.match(q, /esfera = 'pessoal'/);
+  assert.match(q, /c\.nome as macro/);
+});

@@ -44,13 +44,29 @@ export function rangeDoMes(mes) {
   return { de: `${mes}-01`, ateExcl: `${prox}-01` };
 }
 
-// receita (número) + cats despesa [{nm,v}] → passos do waterfall com lo/hi cumulativos
-export function construirWaterfall(receita, cats) {
-  receita = +receita;
-  const steps = [{ nm: "Receita", tipo: "receita", lo: 0, hi: receita }];
-  let run = receita;
-  for (const c of cats) { const v = +c.v; steps.push({ nm: c.nm, tipo: "despesa", lo: run - v, hi: run }); run -= v; }
-  steps.push({ nm: "Saldo", tipo: "saldo", lo: Math.min(0, run), hi: Math.max(0, run) });
+// A3: cascata do mês (/api/resumo → cascata, centavos) → degraus do waterfall com lo/hi
+// acumulados, em centavos inteiros: Salário (PJ) → − Empresa → = Disponível para a casa →
+// + Outras receitas → uma despesa por categoria pessoal → = Saldo do mês. O último degrau é o
+// saldo_cents do servidor (o mesmo do card "Saldo do mês"); se os grupos pessoais não fecharem
+// com despesa_pessoal_cents, a diferença vira o degrau "Outras despesas" em vez de sumir.
+export function construirCascata(cascata) {
+  if (!cascata) return [];
+  const n = v => Number(v) || 0;
+  const sal = n(cascata.salario_cents), emp = n(cascata.despesa_empresa_cents);
+  const disp = n(cascata.disponivel_cents), outras = n(cascata.outras_receitas_cents);
+  const pess = n(cascata.despesa_pessoal_cents), saldo = n(cascata.saldo_cents);
+  const faixa = v => ({ lo: Math.min(0, v), hi: Math.max(0, v) });
+  const steps = [
+    { nm: "Salário (PJ)", tipo: "receita", ...faixa(sal) },
+    { nm: "− Empresa", tipo: "despesa", lo: sal - emp, hi: sal },
+    { nm: "= Disponível para a casa", tipo: "subtotal", ...faixa(disp) },
+    { nm: "+ Outras receitas", tipo: "receita", lo: disp, hi: disp + outras },
+  ];
+  let run = disp + outras, somaGrupos = 0;
+  const desce = (nm, v) => { steps.push({ nm, tipo: "despesa", lo: run - v, hi: run }); run -= v; };
+  for (const p of (cascata.pessoais || [])) { const v = n(p.total_cents); somaGrupos += v; desce(p.macro || "—", v); }
+  if (pess !== somaGrupos) desce("Outras despesas", pess - somaGrupos);
+  steps.push({ nm: "= Saldo do mês", tipo: "saldo", ...faixa(saldo) });
   return steps;
 }
 
@@ -1096,7 +1112,7 @@ if (typeof document !== "undefined") {
     });
   }
 
-  // ----- despesa por macro (para donut + waterfall) -----
+  // ----- despesa por macro (para o sunburst; o waterfall é a cascata do A3) -----
   function despesaPorMacro() {
     const m = new Map();
     for (const r of (estado.resumo.porCategoria || [])) {
@@ -1242,12 +1258,18 @@ if (typeof document !== "undefined") {
   }
 
   // ----- waterfall -----
+  // A3: a cascata do mês (salário PJ → empresa → disponível → outras receitas → pessoais → saldo).
+  // Os degraus vêm em centavos (construirCascata); o desenho converte para reais só na borda.
   function drawWaterfall() {
-    const receita = +(estado.resumo.kpis?.receita || 0);
-    const cats = despesaPorMacro();
-    const steps = construirWaterfall(receita, cats);
-    const W = 560, H = 240, pl = 8, pr = 8, pb = 44, iw = W - pl - pr, ih = H - 14 - pb;
     const el = $("#waterfall");
+    const cascata = estado.resumo.cascata;
+    const steps = construirCascata(cascata).map(s => ({ ...s, lo: s.lo / 100, hi: s.hi / 100 }));
+    if (!steps.length) { el.innerHTML = `<p class="vazio">sem cascata para este período</p>`; return; }
+    // valor com sinal de cada degrau: despesa desce, receita sobe, subtotal/saldo é o nível
+    const valorDe = s => s.tipo === "despesa" ? -(s.hi - s.lo) : s.tipo === "receita" ? s.hi - s.lo : (s.lo < 0 ? s.lo : s.hi);
+    // nível em que o degrau termina (de onde parte o tracejado para o próximo)
+    const nivelDe = s => s.tipo === "despesa" ? s.lo : s.tipo === "receita" ? s.hi : valorDe(s);
+    const W = 560, H = 240, pl = 8, pr = 8, pb = 44, iw = W - pl - pr, ih = H - 14 - pb;
     // domínio [lo, hi] inclui o piso negativo (quando a despesa supera a receita, o
     // saldo/parciais ficam < 0); sem isso as barras são calculadas fora do viewBox.
     const hi = Math.max(1, ...steps.map(s => s.hi)) * 1.05;
@@ -1258,17 +1280,18 @@ if (typeof document !== "undefined") {
     steps.forEach((s, i) => {
       const x = pl + gap * i + (gap - bw) / 2;
       const y = Y(s.hi), h = Math.max(Y(s.lo) - Y(s.hi), 1);
-      const col = s.tipo === "receita" ? "var(--receita)" : s.tipo === "saldo" ? "var(--pos)" : "var(--despesa)";
+      const col = s.tipo === "receita" ? "var(--receita)" : s.tipo === "saldo" ? "var(--pos)" : s.tipo === "subtotal" ? "var(--accent)" : "var(--despesa)";
       bars += `<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="3" data-i="${i}" style="fill:${col}"/>`;
-      const nm = s.nm.length > 8 ? s.nm.slice(0, 7) + "…" : s.nm;
+      const nm = s.nm.length > 9 ? s.nm.slice(0, 8) + "…" : s.nm;
       labels += `<text class="axis" x="${(x + bw / 2).toFixed(1)}" y="${H - 26}" text-anchor="middle">${esc(nm)}</text>`;
-      const valor = s.tipo === "despesa" ? s.hi - s.lo : s.hi;
-      labels += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">${kf(valor)}</text>`;
-      if (i > 0 && steps[i].tipo !== "receita") { const px = pl + gap * (i - 1) + (gap - bw) / 2 + bw; const yp = Y(steps[i - 1].lo); conn += `<line x1="${px.toFixed(1)}" y1="${yp.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yp.toFixed(1)}" stroke-width="1" stroke-dasharray="2 2" style="stroke:var(--line)"/>`; }
+      const v = valorDe(s);
+      labels += `<text x="${(x + bw / 2).toFixed(1)}" y="${H - 12}" text-anchor="middle" font-size="10" style="font-family:var(--mono);fill:var(--mut)">${v < 0 ? "−" : ""}${kf(Math.abs(v))}</text>`;
+      if (i > 0) { const px = pl + gap * (i - 1) + (gap - bw) / 2 + bw; const yp = Y(nivelDe(steps[i - 1])); conn += `<line x1="${px.toFixed(1)}" y1="${yp.toFixed(1)}" x2="${x.toFixed(1)}" y2="${yp.toFixed(1)}" stroke-width="1" stroke-dasharray="2 2" style="stroke:var(--line)"/>`; }
     });
-    el.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="De onde vem, pra onde vai">${conn}${bars}${labels}</svg>`;
+    const selo = cascata.estimado ? `<p class="sub"><span class="selo-diferem" title="parte do salário deste mês ainda não foi convertida: valor pela última taxa conhecida">estimado</span></p>` : "";
+    el.innerHTML = `${selo}<svg viewBox="0 0 ${W} ${H}" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="De onde vem, pra onde vai">${conn}${bars}${labels}</svg>`;
     el.querySelectorAll("rect").forEach(rc => {
-      rc.addEventListener("mousemove", e => { const s = steps[+rc.dataset.i]; const v = s.tipo === "despesa" ? -(s.hi - s.lo) : s.hi; showTip(e, `<b>${esc(s.nm)}</b><br>${v < 0 ? "−" : ""}${BRL(Math.abs(v))}`); });
+      rc.addEventListener("mousemove", e => { const i = +rc.dataset.i, s = steps[i], v = valorDe(s); showTip(e, `<b>${esc(s.nm)}</b>${i === 0 && cascata.estimado ? " · estimado" : ""}<br>${v < 0 ? "−" : ""}${BRL(Math.abs(v))}`); });
       rc.addEventListener("mouseleave", hideTip);
     });
   }

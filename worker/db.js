@@ -439,6 +439,41 @@ export function criarDb(sql) {
       return rows.map(r => ({ mes: r.mes, receita_cents: Number(r.receita_cents), despesa_cents: Number(r.despesa_cents) }));
     },
 
+    // A3: as somas da cascata do mês na janela [de, ateExcl). Mesmo critério de saldoPorMes
+    // (valor_final, conta_no_resumo, natureza da TRANSAÇÃO — não a da categoria), só que a
+    // despesa separada por esfera. Receita: todas as que contam, de qualquer esfera, para a
+    // cascata fechar com o saldo do mês.
+    async somasPorEsfera(de, ateExcl) {
+      const rows = await sql`
+        select
+          (round(coalesce(sum(valor_final) filter (where natureza = 'despesa' and esfera = 'empresa'), 0)*100))::bigint as despesa_empresa_cents,
+          (round(coalesce(sum(valor_final) filter (where natureza = 'despesa' and esfera = 'pessoal'), 0)*100))::bigint as despesa_pessoal_cents,
+          (round(coalesce(sum(valor_final) filter (where natureza = 'receita'), 0)*100))::bigint as outras_receitas_cents
+        from transacoes
+        where conta_no_resumo and data >= ${de} and data < ${ateExcl}`;
+      const r = rows[0] || {};
+      // driver do Neon devolve ::bigint como string — converte na borda
+      return {
+        despesa_empresa_cents: Number(r.despesa_empresa_cents || 0),
+        despesa_pessoal_cents: Number(r.despesa_pessoal_cents || 0),
+        outras_receitas_cents: Number(r.outras_receitas_cents || 0),
+      };
+    },
+
+    // A3: despesa pessoal do mês por categoria (macro), centavos — os degraus pessoais do
+    // waterfall. Mesmo filtro da soma pessoal de somasPorEsfera: os degraus fecham com ela.
+    async despesaPessoalPorCategoria(de, ateExcl) {
+      const rows = await sql`
+        select c.nome as macro, (round(sum(t.valor_final)*100))::bigint as total_cents
+        from transacoes t
+        left join categorias c on c.id = t.categoria_id
+        where t.conta_no_resumo and t.natureza = 'despesa' and t.esfera = 'pessoal'
+          and t.data >= ${de} and t.data < ${ateExcl}
+        group by c.nome
+        order by 2 desc`;
+      return rows.map(r => ({ macro: r.macro, total_cents: Number(r.total_cents) }));
+    },
+
     // ---- G2: fechamento do mês (o que falta importar) ----
     // uma linha por import aplicado, com o período que o próprio arquivo cobre
     async registrarImportacao({ conta, tipo, de, ate }) {

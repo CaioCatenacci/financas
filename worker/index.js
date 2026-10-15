@@ -17,6 +17,7 @@ import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { alocarSalario, mesesAte } from "./salario.js";
 import { periodoAnoVsAnterior } from "./ano_vs_anterior.js";
+import { montarCascata } from "./cascata.js";
 import { montarFechamento, montarRotinas, ultimoDiaDoMes } from "./fechamento.js";
 import { ehUuid } from "./validar.js";
 import { decidirAgrupar, decidirRepresentar, decidirTirar, decidirDesagrupar, podeApagar } from "./grupos.js";
@@ -481,16 +482,21 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
     // G1: o salário do mês vem de alocarSalario (FIFO das conversões), não de lançamento; entra
     // em kpis.receita (string em reais, como sempre foi) somado às outras receitas que contam.
     // Soma de dois inteiros em centavos — nada de float acumulado.
-    let salario = null;
+    let salario = null, cascata = null;
     if (mes === mesRef && ateExcl) {
-      const [params, conversoes] = await Promise.all([db.salarioParams(), db.conversoes()]);
+      const [params, conversoes, somas, pessoais] = await Promise.all([
+        db.salarioParams(), db.conversoes(), db.somasPorEsfera(de, ateExcl), db.despesaPessoalPorCategoria(de, ateExcl),
+      ]);
       salario = alocarSalario(conversoes, params, [mesRef])[0];
       const receitaCents = Math.round(parseFloat(kpis.receita || 0) * 100) + (salario.brl_cents || 0);
       kpis.receita = (receitaCents / 100).toFixed(2);
+      // A3: salário PJ → empresa → disponível → outras receitas → pessoais → saldo (só com mes=)
+      cascata = montarCascata(salario, somas, pessoais);
     }
     return j({
       kpis,
       salario,
+      cascata,
       porCategoria: await db.resumoPorCategoria(de, ate),
       porPessoa: await db.resumoPorPessoa(de, ate),
       porPessoaCategoria: await db.resumoPorPessoaCategoria(de, ate),
