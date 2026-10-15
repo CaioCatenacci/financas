@@ -1398,8 +1398,32 @@ function dbFechamentoFake() {
     semCategoriaPorMes: async (de, ateExcl) => { estado.semCat = { de, ateExcl }; return [{ mes: "2024-09", n: 3 }, { mes: "2024-08", n: 6 }]; },
     salarioParams: async () => [{ vigente_desde: "2024-01-01", usd_cents: 100 }],
     conversoes: async () => [{ data: "2024-08-20", usd_cents: 100, brl_cents: 500, origem: "wise" }],
+    // G6: as rotinas que não são import
+    printsPorMes: async () => [
+      { mes: "2024-01", conta: "itau", pessoa: "Bia" }, { mes: "2024-09", conta: "c6", pessoa: "Ana" },
+    ],
+    diagnosticosNaJanela: async (de, ate) => { estado.diag = { de, ate }; return ["2024-08"]; },
+    transacoesPorMes: async (de, ateExcl) => { estado.trans = { de, ateExcl }; return [{ mes: "2024-09", n: 30 }]; },
   };
 }
+
+test("G6 GET /api/fechamento traz, por mês, patrimonio por conta, diagnostico, contagem de transações e o brl do salário", async () => {
+  const db = dbFechamentoFake();
+  const req = reqApi("/api/fechamento?ate=2024-10", "GET");
+  const data = await (await handleApi(req, envApi, new URL(req.url), db)).json();
+  assert.equal(data.primeiro_print, "2024-01");
+  assert.deepEqual(db.estado.diag, { de: "2023-11", ate: "2024-10" });
+  assert.deepEqual(db.estado.trans, { de: "2023-11-01", ateExcl: "2024-11-01" });
+  const ago = data.meses[9], set = data.meses[10];
+  assert.deepEqual(set.patrimonio, [{ conta: "itau", pessoa: "Bia", tem_print: false }, { conta: "c6", pessoa: "Ana", tem_print: true }]);
+  assert.equal(ago.diagnostico, true);
+  assert.equal(set.diagnostico, false);
+  assert.equal(set.transacoes, 30);
+  assert.equal(ago.transacoes, 0);
+  assert.equal(ago.salario_brl_cents, 500);
+  // o estado do mês não muda por causa das rotinas novas
+  assert.equal(ago.estado, "fechado");
+});
 
 // datas no passado: a rota usa o relógio para o mês corrente, e um mês futuro nunca fecha
 test("G2 GET /api/fechamento?ate= devolve 12 meses terminando em ate, com estado e fontes por mês", async () => {

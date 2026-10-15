@@ -74,3 +74,41 @@ export function montarFechamento(meses, mesCorrente, { coberturas = [], faturas 
     salarioEstimado: !!(sal.get(mes) && sal.get(mes).estimado), salarioAte: ultimaConversao,
   }));
 }
+
+/**
+ * G6: o calendário das rotinas. Anexa a cada mês do fechamento o que as linhas que não são import
+ * precisam — sem tocar no `estado` (o "fechado" segue só pelos imports; o lembrete do G5 lê ele).
+ *
+ * - patrimonio: uma entrada por conta/pessoa que já apareceu em `patrimonio` no histórico inteiro
+ *   (não só na janela: conta que ficou meses sem print continua sendo uma linha que falta);
+ * - diagnostico: há texto salvo do mês; transacoes: quantas contam no resumo (0 = mês vazio, a
+ *   triagem não se aplica); salario_brl_cents: o brl do mês (null = nem estimativa).
+ * - primeiro_print: o mês do primeiro print de qualquer conta (antes dele, print não se aplica).
+ *
+ * @param {Array} fechamento - saída de montarFechamento
+ * @param {{salarios?:Array<{mes,brl_cents}>, prints?:Array<{mes,conta,pessoa}>, diagnosticos?:string[],
+ *          transacoes?:Array<{mes,n}>}} leituras
+ */
+export function montarRotinas(fechamento, { salarios = [], prints = [], diagnosticos = [], transacoes = [] } = {}) {
+  const chave = (p) => `${p.conta}\u0000${p.pessoa}`;
+  const ordenados = [...prints].sort((a, b) => (a.mes < b.mes ? -1 : a.mes > b.mes ? 1 : 0));
+  const contas = new Map(), comPrint = new Set();
+  for (const p of ordenados) {
+    if (!contas.has(chave(p))) contas.set(chave(p), { conta: p.conta, pessoa: p.pessoa });
+    comPrint.add(`${p.mes}\u0000${chave(p)}`);
+  }
+  const diag = new Set(diagnosticos);
+  const nTrans = new Map(transacoes.map((t) => [t.mes, Number(t.n) || 0]));
+  const sal = new Map(salarios.map((s) => [s.mes, s]));
+  const meses = fechamento.map((m) => {
+    const s = sal.get(m.mes);
+    return {
+      ...m,
+      patrimonio: [...contas.values()].map((c) => ({ ...c, tem_print: comPrint.has(`${m.mes}\u0000${chave(c)}`) })),
+      diagnostico: diag.has(m.mes),
+      transacoes: nTrans.get(m.mes) || 0,
+      salario_brl_cents: s && s.brl_cents != null ? Number(s.brl_cents) : null,
+    };
+  });
+  return { meses, primeiro_print: ordenados.length ? ordenados[0].mes : null };
+}

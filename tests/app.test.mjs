@@ -6,7 +6,7 @@ import {
   acumularDiario, paceOrcamento, montarLinhas, filtrarLinhas, mascararChave, filtrarAssociacoes,
   escolherCandidato, rotuloCandidato, linhaEditavel, idsSelecionaveis, esc,
   TIPOS_IMPORT, fonteDoTipo, corpoPreview,
-  rotuloEstadoFechamento, linhasFechamento, gradeFechamento, mesDoFechamento,
+  rotuloEstadoFechamento, mesDoFechamento, mesesAte as mesesAteApp, calendarioRotinas, acaoCelula, ESTADOS_CELULA,
   markdownSimples, avisoMesParcial, htmlDiagnostico, AVISO_MES_PARCIAL, SEM_DIAGNOSTICO,
   montarTelaPatrimonio, htmlPatrimonio, reaisDeCents, rotuloRendimentoApp, SEM_PATRIMONIO,
   parseBRtoCents, corpoParamCasa, montarTelaCasa, htmlCasa, SEM_FOTO_CASA,
@@ -954,27 +954,6 @@ test("G2 rotuloEstadoFechamento: os três estados com rótulo legível; desconhe
   assert.equal(rotuloEstadoFechamento("x"), "—");
 });
 
-test("G2 linhasFechamento: uma linha por fonte, no texto do card, e o tipo da aba Importar em quem falta", () => {
-  const ls = linhasFechamento(mesFech());
-  assert.deepEqual(ls.map((l) => l.texto), ["Itaú até 30/09", "C6 até 28/09", "fatura: falta", "salário: estimado", "3 sem categoria"]);
-  // clicar leva à aba Importar com o tipo daquela fonte; o que está cheio não é clicável
-  assert.deepEqual(ls.map((l) => l.tipo), [null, "c6", "fatura", "wise", null]);
-  assert.deepEqual(ls.map((l) => l.falta), [false, true, true, true, false]);
-});
-
-test("G2 linhasFechamento: fonte sem import nenhum diz 'falta' e leva ao tipo certo; sem pendência não tem linha de sem categoria", () => {
-  const ls = linhasFechamento(mesFech({
-    sem_categoria: 0,
-    fontes: {
-      itau: { ate: null, cobertura: "faltando" }, c6: { ate: "2031-09-30", cobertura: "cheia" },
-      fatura: { existe: true, cobertura: "cheia" }, salario: { ate: "2031-09-20", estimado: false },
-    },
-  }));
-  assert.deepEqual(ls.map((l) => l.texto), ["Itaú: falta", "C6 até 30/09", "fatura: ok", "salário: ok"]);
-  assert.equal(ls[0].tipo, "extrato");
-  assert.ok(ls.slice(1).every((l) => l.tipo === null));
-});
-
 test("G2 mesDoFechamento acha o mês selecionado na resposta (o último dos 12)", () => {
   const r = { meses: [mesFech({ mes: "2031-08" }), mesFech()] };
   assert.equal(mesDoFechamento(r, "2031-09").mes, "2031-09");
@@ -982,13 +961,178 @@ test("G2 mesDoFechamento acha o mês selecionado na resposta (o último dos 12)"
   assert.equal(mesDoFechamento(null, "2031-09"), null);
 });
 
-test("G2 gradeFechamento: uma linha por mês × fonte, com a cobertura de cada célula e o estado do mês", () => {
-  const g = gradeFechamento({ meses: [mesFech({ mes: "2031-08", estado: "fechado" }), mesFech()] });
-  assert.deepEqual(g.colunas, ["Itaú", "C6", "Fatura", "Salário", "Sem categoria"]);
-  assert.equal(g.linhas.length, 2);
-  assert.equal(g.linhas[0].estado, "fechado");
-  assert.deepEqual(g.linhas[1].celulas.map((c) => c.cobertura), ["cheia", "parcial", "faltando", "estimado", "pendente"]);
-  assert.deepEqual(g.linhas[1].celulas.map((c) => c.texto), ["30/09", "28/09", "falta", "estimado", "3"]);
+// ---------- G6: calendário das rotinas (grade sempre aberta no topo do Resumo) ----------
+// Resposta inventada de /api/fechamento no formato do G6: o mês corrente é outubro/2031.
+const mesRot = (mes, over = {}) => ({
+  mes, estado: "fechado", sem_categoria: 0, transacoes: 50, diagnostico: false, salario_brl_cents: 100,
+  fontes: {
+    itau: { ate: `${mes}-30`, cobertura: "cheia" }, c6: { ate: `${mes}-30`, cobertura: "cheia" },
+    fatura: { existe: true, cobertura: "cheia" }, salario: { ate: null, estimado: false },
+  },
+  patrimonio: [
+    { conta: "itau", pessoa: "Bia", tem_print: false }, { conta: "c6", pessoa: "Ana", tem_print: false },
+  ],
+  ...over,
+});
+const respRot = (meses, over = {}) => ({ ate: meses[meses.length - 1].mes, mes_corrente: "2031-10", primeiro_print: "2031-10", meses, ...over });
+const linhaRot = (cal, id) => cal.linhas.find((l) => l.id === id);
+const celRot = (cal, id, mes) => linhaRot(cal, id).celulas.find((c) => c.mes === mes);
+
+test("G6 mesesAte do app: 12 meses terminando no mês pedido, atravessando o ano", () => {
+  const ms = mesesAteApp("2031-02");
+  assert.equal(ms.length, 12);
+  assert.equal(ms[0], "2030-03");
+  assert.equal(ms[11], "2031-02");
+});
+
+test("G6 calendarioRotinas: 12 colunas terminando no mês pedido, mesmo com a resposta mais curta", () => {
+  const cal = calendarioRotinas(respRot([mesRot("2031-09"), mesRot("2031-10")]), "2031-10");
+  assert.equal(cal.colunas.length, 12);
+  assert.equal(cal.colunas[11], "2031-10");
+  assert.equal(cal.colunas[0], "2030-11");
+  // mês sem dado na resposta: cinza, não vira "falta" inventado
+  assert.equal(celRot(cal, "itau", "2030-11").estado, "nao_se_aplica");
+  assert.ok(cal.linhas.every((l) => l.celulas.length === 12));
+});
+
+test("G6 linhas na ordem: Itaú extrato, Itaú fatura, C6 extrato, Salário, um print por conta, Triagem, Diagnóstico", () => {
+  const patrimonio = ["itau/Bia", "c6/Ana", "nubank/Ana", "mercadopago/Ana", "fgts/Bia"]
+    .map((x) => ({ conta: x.split("/")[0], pessoa: x.split("/")[1], tem_print: false }));
+  const cal = calendarioRotinas(respRot([mesRot("2031-10", { patrimonio })]), "2031-10");
+  assert.deepEqual(cal.linhas.map((l) => l.rotulo), [
+    "Itaú extrato", "Itaú fatura", "C6 extrato", "Salário (Wise)",
+    "Print Itaú/Bia", "Print C6/Ana", "Print Nubank/Ana", "Print Mercado Pago/Ana", "Print FGTS/Bia",
+    "Triagem", "Diagnóstico",
+  ]);
+  assert.equal(cal.linhas.filter((l) => l.id.startsWith("print:")).length, 5);
+});
+
+test("G6 contas só com print fora da janela continuam sendo linha (a API manda a lista do histórico inteiro)", () => {
+  // nenhuma conta tem print nos meses da janela; primeiro print bem antes dela
+  const cal = calendarioRotinas(respRot([mesRot("2031-09"), mesRot("2031-10")], { primeiro_print: "2029-01" }), "2031-10");
+  assert.deepEqual(cal.linhas.filter((l) => l.id.startsWith("print:")).map((l) => l.rotulo), ["Print Itaú/Bia", "Print C6/Ana"]);
+  // e o mês sem print, depois do primeiro, é falta (não cinza)
+  assert.equal(celRot(cal, "print:itau/Bia", "2031-09").estado, "falta");
+});
+
+test("G6 quatro estados fixos, cada célula com title não vazio", () => {
+  assert.deepEqual(ESTADOS_CELULA, ["feito", "parcial", "falta", "nao_se_aplica"]);
+  const cal = calendarioRotinas(respRot([mesRot("2031-09"), mesRot("2031-10", { estado: "parcial" })]), "2031-10");
+  for (const l of cal.linhas) for (const c of l.celulas) {
+    assert.ok(ESTADOS_CELULA.includes(c.estado), `${l.id} ${c.mes}`);
+    assert.ok(c.title && c.title.trim(), `${l.id} ${c.mes}`);
+  }
+});
+
+test("G6 extrato: cheia → feito, parcial → parcial, faltando → falta; o mês corrente nunca passa de parcial", () => {
+  const f = (itau, c6) => ({ ...mesRot("x").fontes, itau, c6 });
+  const cal = calendarioRotinas(respRot([
+    mesRot("2031-07", { fontes: f({ ate: "2031-07-31", cobertura: "cheia" }, { ate: null, cobertura: "faltando" }) }),
+    mesRot("2031-08", { fontes: f({ ate: "2031-08-13", cobertura: "parcial" }, { ate: "2031-08-31", cobertura: "cheia" }) }),
+    mesRot("2031-10", { fontes: f({ ate: "2031-10-31", cobertura: "cheia" }, { ate: "2031-10-13", cobertura: "parcial" }) }),
+  ]), "2031-10");
+  assert.equal(celRot(cal, "itau", "2031-07").estado, "feito");
+  assert.equal(celRot(cal, "c6", "2031-07").estado, "falta");
+  assert.equal(celRot(cal, "itau", "2031-08").estado, "parcial");
+  assert.equal(celRot(cal, "c6", "2031-08").estado, "feito");
+  assert.equal(celRot(cal, "itau", "2031-10").estado, "parcial"); // cheia, mas outubro não acabou
+  assert.equal(celRot(cal, "c6", "2031-10").estado, "parcial");
+});
+
+test("G6 fatura: existe → feito, senão falta", () => {
+  const sem = { ...mesRot("x").fontes, fatura: { existe: false, cobertura: "faltando" } };
+  const cal = calendarioRotinas(respRot([mesRot("2031-09"), mesRot("2031-10", { fontes: sem })]), "2031-10");
+  assert.equal(celRot(cal, "fatura", "2031-09").estado, "feito");
+  assert.equal(celRot(cal, "fatura", "2031-10").estado, "falta");
+});
+
+test("G6 salário: conversão real → feito, estimado → parcial, sem nem estimativa → falta", () => {
+  const sal = (estimado) => ({ ...mesRot("x").fontes, salario: { ate: null, estimado } });
+  const cal = calendarioRotinas(respRot([
+    mesRot("2031-07", { fontes: sal(false), salario_brl_cents: 500 }),
+    mesRot("2031-08", { fontes: sal(true), salario_brl_cents: 500 }),
+    mesRot("2031-09", { fontes: sal(true), salario_brl_cents: null }),
+  ]), "2031-09");
+  assert.equal(celRot(cal, "salario", "2031-07").estado, "feito");
+  assert.equal(celRot(cal, "salario", "2031-08").estado, "parcial");
+  assert.equal(celRot(cal, "salario", "2031-09").estado, "falta");
+});
+
+test("G6 print: com foto → feito, sem foto → falta, antes do primeiro print de qualquer conta → não se aplica", () => {
+  const p = (itau, c6) => [{ conta: "itau", pessoa: "Bia", tem_print: itau }, { conta: "c6", pessoa: "Ana", tem_print: c6 }];
+  const cal = calendarioRotinas(respRot([
+    mesRot("2031-08", { patrimonio: p(false, false) }),
+    mesRot("2031-09", { patrimonio: p(true, false) }),
+    mesRot("2031-10", { patrimonio: p(false, true) }),
+  ], { primeiro_print: "2031-09" }), "2031-10");
+  // Exemplo do card: C6/Ana antes do primeiro print = não se aplica; no mês do print = feito
+  assert.equal(celRot(cal, "print:c6/Ana", "2031-08").estado, "nao_se_aplica");
+  assert.equal(celRot(cal, "print:itau/Bia", "2031-08").estado, "nao_se_aplica");
+  assert.equal(celRot(cal, "print:itau/Bia", "2031-09").estado, "feito");
+  assert.equal(celRot(cal, "print:c6/Ana", "2031-09").estado, "falta"); // o corte é global, não por conta
+  assert.equal(celRot(cal, "print:c6/Ana", "2031-10").estado, "feito");
+  assert.equal(celRot(cal, "print:itau/Bia", "2031-10").estado, "falta");
+});
+
+test("G6 triagem: mês sem transação → não se aplica, 0 sem categoria → feito, 1 ou mais → parcial com o número", () => {
+  const cal = calendarioRotinas(respRot([
+    mesRot("2031-07", { transacoes: 0, sem_categoria: 0 }),
+    mesRot("2031-08", { sem_categoria: 0 }),
+    mesRot("2031-09", { sem_categoria: 26 }),
+    mesRot("2031-10", { sem_categoria: 2 }),
+  ]), "2031-10");
+  assert.equal(celRot(cal, "triagem", "2031-07").estado, "nao_se_aplica");
+  assert.equal(celRot(cal, "triagem", "2031-08").estado, "feito");
+  assert.equal(celRot(cal, "triagem", "2031-09").estado, "parcial");
+  assert.equal(celRot(cal, "triagem", "2031-09").texto, "26");
+  assert.equal(celRot(cal, "triagem", "2031-10").texto, "2");
+});
+
+test("G6 diagnóstico: salvo → feito; mês fechado sem ele → falta; mês ainda não fechado → não se aplica", () => {
+  const cal = calendarioRotinas(respRot([
+    mesRot("2031-08", { diagnostico: true }),
+    mesRot("2031-09", { diagnostico: false, estado: "fechado" }),
+    mesRot("2031-10", { diagnostico: false, estado: "faltando" }),
+  ]), "2031-10");
+  assert.equal(celRot(cal, "diagnostico", "2031-08").estado, "feito");
+  assert.equal(celRot(cal, "diagnostico", "2031-09").estado, "falta");
+  assert.equal(celRot(cal, "diagnostico", "2031-10").estado, "nao_se_aplica");
+});
+
+const catalogoG6 = { categorias: [
+  { id: "c1", nome: "Outros", padrao: false }, { id: "c2", nome: "Pendentes", padrao: true }, { id: "c3", nome: "Casa", padrao: false },
+] };
+
+test("G6 clique: extrato, fatura e salário em falta ou parcial levam à aba Importar com o tipo certo; feito não é botão", () => {
+  const sem = { ...mesRot("x").fontes,
+    itau: { ate: null, cobertura: "faltando" }, c6: { ate: "2031-10-13", cobertura: "parcial" },
+    fatura: { existe: false, cobertura: "faltando" }, salario: { ate: null, estimado: true } };
+  const cal = calendarioRotinas(respRot([mesRot("2031-09"), mesRot("2031-10", { fontes: sem })]), "2031-10");
+  const acao = (id, mes) => acaoCelula(linhaRot(cal, id), celRot(cal, id, mes), catalogoG6);
+  assert.deepEqual(acao("itau", "2031-10"), { aba: "importar", tipo: "extrato" });
+  assert.deepEqual(acao("c6", "2031-10"), { aba: "importar", tipo: "c6" });
+  assert.deepEqual(acao("fatura", "2031-10"), { aba: "importar", tipo: "fatura" });
+  assert.deepEqual(acao("salario", "2031-10"), { aba: "importar", tipo: "wise" });
+  assert.equal(acao("fatura", "2031-09"), null);
+  assert.equal(acao("salario", "2031-09"), null);
+});
+
+test("G6 clique na triagem: Lançamentos no mês da célula, filtrada na categoria padrão pela flag (não pelo nome)", () => {
+  const cal = calendarioRotinas(respRot([mesRot("2031-08", { sem_categoria: 0 }), mesRot("2031-09", { sem_categoria: 26 })]), "2031-10");
+  // a padrão foi renomeada para "Pendentes" e existe uma "Outros" comum: vale a flag
+  assert.deepEqual(acaoCelula(linhaRot(cal, "triagem"), celRot(cal, "triagem", "2031-09"), catalogoG6),
+    { aba: "lanc", mes: "2031-09", categoria: "Pendentes" });
+  assert.equal(acaoCelula(linhaRot(cal, "triagem"), celRot(cal, "triagem", "2031-08"), catalogoG6), null);
+  // sem padrão no catálogo, não há para onde levar
+  assert.equal(acaoCelula(linhaRot(cal, "triagem"), celRot(cal, "triagem", "2031-09"), { categorias: [] }), null);
+});
+
+test("G6 clique: print e diagnóstico nunca são botão, só mostram o texto", () => {
+  const cal = calendarioRotinas(respRot([mesRot("2031-09"), mesRot("2031-10")], { primeiro_print: "2031-01" }), "2031-10");
+  assert.equal(celRot(cal, "print:itau/Bia", "2031-09").estado, "falta");
+  assert.equal(acaoCelula(linhaRot(cal, "print:itau/Bia"), celRot(cal, "print:itau/Bia", "2031-09"), catalogoG6), null);
+  assert.equal(celRot(cal, "diagnostico", "2031-09").estado, "falta");
+  assert.equal(acaoCelula(linhaRot(cal, "diagnostico"), celRot(cal, "diagnostico", "2031-09"), catalogoG6), null);
 });
 
 // ---------- G3: diagnóstico mensal ----------
