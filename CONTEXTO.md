@@ -841,6 +841,30 @@ precisa marcar as despesas da empresa.
 - Nenhuma leitura agregada usa a esfera ainda; quem soma é a cascata (A3). Os importadores Python
   seguem gravando a esfera pela regra antiga (BACKLOG).
 
+## 27. Este ano × ano passado, desde o primeiro mês com fatura nos dois anos (D5, 15/10/2026)
+
+A comparação de período longo saiu com os presets no Inc 4.5 (§14); volta como um card fixo no
+Resumo, ancorado no mês selecionado. A pergunta é "em que categoria o orçamento está ficando
+mais apertado de um ano para o outro" (escola, plano de saúde e outras são corrigidas todo ano).
+
+- **Período:** do início até o mês selecionado, contra as mesmas datas do ano anterior (o fim
+  anterior é o último dia do mesmo mês). O início é regra pura (`worker/ano_vs_anterior.js`) sobre
+  os meses de fatura em `importacoes` (tipo fatura, mês do vencimento em `de`, qualquer conta):
+  há fatura de janeiro do ano anterior → janeiro; senão, o mês seguinte ao da primeira fatura do
+  ano anterior (a primeira só traz parte das compras do mês dela). Sem fatura no ano anterior, ou
+  com a primeira em dezembro, `anoVsAnterior` é `null` e o card não aparece. Antes de o cartão ser
+  importado, as compras dele não existem no banco: comparar desde janeiro faria o ano anterior
+  parecer mais barato. Não é o ano cheio: parcelas de fatura futuras vão até dezembro.
+- **Soma:** `db.resumoAnoVsAnterior` em SQL, `natureza='despesa' and conta_no_resumo`, por
+  categoria, centavos inteiros. Mês selecionado antes do início → objeto com `de` = início e
+  `categorias: []`; o app diz "sem comparação para este mês".
+- **Não Identificado entra como linha, sem correção.** Em 2025 a fatia sem classificação é bem
+  maior que em 2026 (mesmo depois do H3), então essa linha tende a cair muito e as outras a
+  parecer subir: é leitura do card, não erro de soma.
+- **Card:** uma linha por categoria com os totais dos dois anos, a diferença em R$ e o % inteiro
+  (ou "novo" sem gasto no ano anterior), ordenadas pela maior alta em reais (`linhasAnoVsAnterior`,
+  `public/app.js`).
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
