@@ -72,3 +72,8 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   passa e o app só avisa "o import entrou, mas o arquivo original não foi guardado". Nunca
   aconteceu nos imports de hoje; se aparecer, decidir se o nome cai nas datas das linhas.
   Origem: C4 (14/10/2026).
+- **P3 · Calendário: salário e print com borda a decidir.** Mês antes do primeiro `salario_param`
+  volta `brl_cents` nulo e a célula do salário cai em "falta" (seria "não se aplica"); e o "não se
+  aplica" do print usa o primeiro print de **qualquer** conta (corte global), então uma conta nova
+  aparece em "falta" nos meses antes dela existir. Nenhum dos dois afeta a janela de hoje.
+  Origem: G6 (14/10/2026).

@@ -612,7 +612,7 @@ data com movimento não diz até onde o PDF foi; por isso **a cobertura é grava
   "N sem categoria") e **salário estimado não trava** (só informa).
 - **API/UI:** `GET /api/fechamento?ate=YYYY-MM` (12 meses; `ate` inválido → 400). Bloco no topo do
   Resumo, acima do "Saldo do mês": estado do mês, uma linha por fonte; a fonte que falta leva à aba
-  Importar com o tipo escolhido; "ver 12 meses" abre a grade mês × fonte. Se a rota falhar, o
+  Importar com o tipo escolhido; (o "ver 12 meses" saiu no G6: virou o calendário da §25). Se a rota falhar, o
   Resumo carrega sem o bloco.
 
 ## 20. Diagnóstico mensal: a análise escrita do mês (G3, 10/10/2026)
@@ -785,6 +785,36 @@ Identificado".
   válidos → linhas sem sugestão e `indisponivel`; a tela mostra "classificação automática
   indisponível" e o gravar fica habilitado o tempo todo, mesmo com lotes pendentes.
 - **Secret novo:** `TYPESAFE_API_KEY` (`wrangler secret put TYPESAFE_API_KEY`), nunca no código.
+
+## 25. Calendário das rotinas do mês (G6, 14/10/2026)
+
+O fechamento olhava só os imports; as outras rotinas (print do patrimônio, triagem, diagnóstico)
+não apareciam como "feito/falta". O bloco do topo do Resumo virou uma **grade sempre aberta**:
+linhas = rotinas, colunas = os 12 meses terminando no mês selecionado.
+
+- **Linhas, uma por item:** Itaú extrato · Itaú fatura · C6 extrato · Salário (Wise) · um print
+  por conta/pessoa que **já apareceu em `patrimonio` no histórico inteiro** (não só na janela) ·
+  Triagem · Diagnóstico.
+- **Quatro estados fixos, sem gradiente:** `feito`, `parcial`, `falta`, `nao_se_aplica` (cinza).
+  Parcial só onde diz algo: extrato que cobre parte do mês (o mês corrente nunca passa de
+  parcial), salário estimado, triagem com pendência (o número na célula).
+  - extrato = cobertura do G2; fatura existe → feito, senão falta; salário com brl e não estimado →
+    feito, estimado → parcial, sem brl → falta; print com foto no mês → feito, senão falta, e antes
+    do **primeiro print de qualquer conta** (corte global) → não se aplica; triagem sem
+    lançamento `conta_no_resumo` no mês → não se aplica, 0 na padrão → feito, ≥1 → parcial;
+    diagnóstico salvo → feito, mês `fechado` sem ele → falta, mês não fechado → não se aplica.
+- **O estado do mês não muda:** `estadoDoMes`/`montarFechamento` seguem só pelos imports (o
+  lembrete do G5 e o Projeto Casa dependem disso). As rotinas novas entram como campos por mês
+  (`montarRotinas`, puro): `patrimonio [{conta, pessoa, tem_print}]`, `diagnostico`, `transacoes`
+  (contagem), `salario_brl_cents`, e `primeiro_print` no topo da resposta. Contagens e existência
+  em SQL (`db.printsPorMes`, `db.diagnosticosNaJanela`, `db.transacoesPorMes`); só a rota
+  `/api/fechamento` as lê.
+- **Clique:** import em falta/parcial → aba Importar com o tipo; triagem com pendência →
+  Lançamentos no mês da célula, filtrada na categoria `padrao=true` (pela flag); print e diagnóstico
+  só têm o texto (são feitos pelo Telegram e pelo assistente). Regras puras em `public/app.js`
+  (`calendarioRotinas`, `acaoCelula`).
+- Mês antes do primeiro `salario_param` volta `brl_cents` nulo e cai em "falta"; não afeta a janela
+  de hoje (ver BACKLOG).
 
 ## Não fizemos (por que não faz sentido ainda)
 
