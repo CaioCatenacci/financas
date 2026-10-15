@@ -28,6 +28,8 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 
 | # | Item | Como fechou |
 |---|---|---|
+| — | Rotina do assistente para escrever o diagnóstico | skill `.claude/skills/diagnostico` (PR #43, 13/10/2026) |
+| C7 | Wise como fonte do salário | absorvido pelo G1; card fechado em 15/10/2026 |
 | B1 | Telegram sem retorno (fallback de categoria por nome) | `0008` aplicada no Neon e deploy de 26/09 depois do fix — conferido em 26/09/2026 (`categorias.padrao` = 1 linha) |
 | B6 | Regex de data exigia zero-padding | `worker/validar.js` aceita `d/m/aaaa` e zero-preenche; teste "aceita data não-padronizada e zero-preenche" |
 | B4 | Gemini não vencia as leituras (limiar 0,6) | **Descartado** em 28/09/2026: o PM apurou 17 de 18 comprovantes lidos pelo Gemini, nenhuma leitura abaixo de 0,6 (card em `16af467`) |
@@ -49,10 +51,6 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
 - **P3 · Buraco no meio da cobertura fica invisível.** A cobertura de uma fonte é `max(ate)` de
   `importacoes`: um mês nunca importado entre dois imports aparece coberto. Os dados de hoje não
   têm buraco; se aparecer, a regra passa a olhar a união dos períodos. Origem: G2 (10/10/2026).
-- **P2 · Rotina do assistente para escrever o diagnóstico.** O app já guarda e mostra
-  (`PUT/GET /api/diagnostico`, roteiro no CONTEXTO §20); falta a skill/rotina que lê as rotas e
-  escreve o texto. É regra de agente (`.claude/`), vai em PR à parte, não pelo degrau 2.
-  Origem: G3 (10/10/2026).
 - **P3 · Conta sem print no mês some do total do patrimônio.** A foto do mês (`/api/patrimonio`)
   só usa prints do próprio mês: se o Caio manda o Itaú em outubro e o C6 da Paola só em setembro,
   o total de outubro sai sem o C6. Levar a última foto adiante (com selo "foto de set") seria uma
