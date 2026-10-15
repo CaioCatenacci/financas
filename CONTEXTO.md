@@ -120,8 +120,9 @@ mas macro é sempre.
 **Por que:** o Caio quer histórico longo pra análise (ver "guardado" ao longo
 dos meses, detectar padrões).
 Deixar pra depois significaria meses com dado incompleto no app — confuso.
-Fazer agora é painless: `python tools/import_planilha.py` com `--idempotente`
-(re-rodar substitui só linhas `fonte='importacao'`, nunca duplica).
+Na época, um script Python local fez o import, idempotente (re-rodar substituía só linhas
+`fonte='importacao'`, nunca duplicava). O script foi aposentado no C6 (15/10/2026), com os
+importadores de extrato/fatura: o histórico já está no banco e o caminho de import é a aba Importar.
 
 Relatório de import mostra o que aconteceu (contagens, linhas ambíguas).
 Nada silencioso.
@@ -381,8 +382,8 @@ justamente pra renomear/mesclar sem cascata, então o código não pode depender
 
 **Semântica (decisão do Caio):** `Não Identificado` é o padrão — o que ninguém classificou, a fila
 do que ele precisa analisar pra dar destino. `Outros` volta a existir como **miscelânea
-deliberada** — categoria que ele escolhe, não fallback. Por isso o import (`montarDecisao`,
-`importar_extrato.py`, `importar_fatura.py`) deixou de preencher `"Outros"` quando não há
+deliberada** — categoria que ele escolhe, não fallback. Por isso o import (`montarDecisao` e, até
+o C6 de 15/10/2026, os importadores Python) deixou de preencher `"Outros"` quando não há
 categoria: manda `null`, e o resolvedor leva pra padrão.
 
 **Por que try/catch no `handleTelegram` e responder 200:** com 500 o Telegram retenta o mesmo
@@ -455,8 +456,8 @@ servidor só grava, do mesmo jeito que o resto do fluxo de import (o app decide 
 extrato:** um lançamento casa com o banco **uma vez** — se o grupo já tem a linha do extrato como
 membro, oferecer esse lançamento de novo como candidato deixaria o import tentar casar o mesmo
 banco duas vezes. Os hashes carimbados no modelo antigo (Fase A e antes) ficam como estão — não há
-migração de carimbo pra grupo; eles só saem de circulação quando os importadores Python forem
-alinhados ou aposentados (BACKLOG C6).
+migração de carimbo pra grupo. O C6 (15/10/2026) aposentou os importadores Python, os únicos que
+ainda carimbavam: carimbo novo não nasce mais.
 
 **Prévia velha recusa o lote (F2, 29/09/2026):** como a decisão nasce no navegador, ela descreve o
 estado que a prévia viu. Se entre a prévia e o aplicar o grupo foi desfeito, ficou sem
@@ -481,8 +482,8 @@ membro mais antigo; **N conta só os membros que empataram** (mesmo valor, ±3 d
 inteiro. **Por que o consumo do lote (§6.2) virou por grupo:** se o candidato é o grupo, quem sai
 de `disponiveis` (e quem `escolherCandidato` recusa) é o grupo inteiro — senão uma segunda linha
 igual do extrato acharia o outro membro sozinho e casaria no mesmo grupo, e a segunda despesa real
-sumiria do Resumo. Valor exato e janela de ±3 dias não mudaram; os importadores Python seguem fora
-(C6).
+sumiria do Resumo. Valor exato e janela de ±3 dias não mudaram; os importadores Python ficaram fora
+(aposentados no C6, 15/10/2026).
 
 **Marcar o pagamento da fatura é idempotente (C3, 29/09/2026):** `db.marcarPagamentoFaturaNaoGasto`
 procura, na janela de 62 dias e pelo total exato (os dois sem mudança), as despesas de extrato que
@@ -492,8 +493,8 @@ pagamento já foi marcado — por uma aplicação anterior da mesma fatura ou pe
 vínculo fatura→pagamento no schema, a reaplicação via o pagamento sumir do select e tirava do
 resumo outra despesa de mesmo total que caísse na janela. **Custo aceito:** uma linha de mesmo
 total tirada do resumo à mão também bloqueia a marcação automática (conservador: o app avisa pra
-ajustar à mão). Gravar o vínculo pediria coluna nova. O `tools/importar_fatura.py` segue com o
-defeito (BACKLOG).
+ajustar à mão). Gravar o vínculo pediria coluna nova. O importador Python de fatura repetia o
+defeito até ser aposentado no C6 (15/10/2026).
 
 **Data do item da fatura (C8, 08/10/2026):** a fatura traz só dia/mês da compra e o parser
 completava com o ano da fatura — parcela de compra do fim do ano anterior caía num mês futuro.
@@ -504,7 +505,7 @@ fatura. **O histórico não é refeito** (opção 1): parcelas antigas seguem na
 linhas erradas das faturas importadas em 08/09/2026 voltaram um ano (`migrations/0010`, critério no
 arquivo, idempotente, 81 linhas). Como a `linha_hash` dessas linhas não muda, o preview calcula
 também a chave do jeito antigo e acha a linha por **igualdade de hash** (não por janela de data):
-reimportar a fatura não duplica. Os importadores Python seguem fora (C6).
+reimportar a fatura não duplica. Os importadores Python ficaram fora (aposentados no C6, 15/10/2026).
 
 ## 17. Extrato do C6 Bank e a receita da Wise (C1, 02/10/2026)
 
@@ -523,7 +524,7 @@ repasse entre contas próprias sai do resumo **nas duas pontas**. A Wise não é
   `public/pdf_extrair.js`); se faltar ou não abrir, o app pede num campo, sem guardar.
 - **Regra fixa no Itaú:** o nome do Caio saiu de `_NAO_GASTO` em `worker/classificar.js` — no Itaú
   o `PIX TRANSF <Caio>…` é a chegada da Wise (nome cortado). A Paola fica no padrão fixo. Os
-  importadores Python seguem com o padrão antigo (BACKLOG C6). **Nota (G1, 10/10/2026):** a regra
+  importadores Python ficaram com o padrão antigo (aposentados no C6, 15/10/2026). **Nota (G1, 10/10/2026):** a regra
   "conta como receita por padrão" caiu — a chegada da Wise/Nomad é transferência entre contas
   próprias (`computa_resumo=false`, Transferências) e a receita do mês passa a ser o salário alocado
   (§18). O nome segue fora do código: `PIX TRANSF <prefixo de um nome em CONTAS_PROPRIAS>` no Itaú
@@ -586,8 +587,8 @@ converte dólar quando o Caio pede — um mês com o salário de três, o seguin
   de Salário da planilha de abr–out/2025 e os 2 lançamentos manuais de salário de set/2026. As
   linhas com nome próprio saem pelo arquivo local de `dados/`.
 - **Salário não se lança à mão** (Telegram): a receita de salário vem de `alocarSalario`. Um
-  lançamento manual de salário contaria em dobro; os importadores Python seguem no modelo antigo
-  (BACKLOG C6). A receita da Paola e as outras receitas (reembolso, restituição) seguem como estão.
+  lançamento manual de salário contaria em dobro; os importadores Python ficaram no modelo antigo
+  (aposentados no C6, 15/10/2026). A receita da Paola e as outras receitas (reembolso, restituição) seguem como estão.
 
 ## 19. Fechamento do mês: o que falta importar (G2, 10/10/2026)
 
@@ -691,7 +692,7 @@ entra por **print da tela**, mandado pelo Telegram como um comprovante. É a bas
 - **PERS BLACK** no extrato do Itaú é o pagamento da fatura do cartão: regra própria `PERS BLACK →
   Banco` (não-gasto) no `worker/classificar.js`, fora da regex de Investimentos (senão viraria
   aporte); a migração de dados `0016` leva as linhas antigas de Investimentos para Banco. O
-  classificador Python segue com a regra antiga (BACKLOG C6).
+  classificador Python ficou com a regra antiga (aposentado no C6, 15/10/2026).
 - **API/UI:** `GET /api/patrimonio?ate=YYYY-MM` (12 meses; `ate` inválido → 400): por mês, o total
   da família, `porPessoa` e `porConta` (foto, `rendimento_cents`, `origem ∈ {calculado, print,
   sem}` e o `motivo`). Somas em SQL (`db.patrimonioPorDia`, `db.aportesInvestimentoPorMes`). Aba
@@ -838,8 +839,10 @@ precisa marcar as despesas da empresa.
   {esfera}`; o Worker valida o vocabulário (fora dele → 400) e grava a categoria e as transações
   dela numa única `sql.transaction` (`db.mudarEsferaCategoria`). `{nome}` e `{esfera}` são
   independentes no PATCH.
-- A única leitura agregada que usa a esfera é a cascata do Resumo (A3, §27). Os importadores Python
-  seguem gravando a esfera pela regra antiga (BACKLOG).
+- A única leitura agregada que usa a esfera é a cascata do Resumo (A3, §27). Os importadores Python,
+  que gravavam a esfera pela regra antiga, saíram no C6 (15/10/2026); o `tools/jev_classificar.py
+  gerar-sql` passou a gravar a esfera da categoria aplicada (`esfera_da_categoria`, espelho de
+  `esferaDaCategoria`), e o `desfazer.sql` devolve a esfera lida do banco antes.
 
 ## 27. Cascata no Resumo: do salário PJ ao que sobra para a casa (A3, 15/10/2026)
 

@@ -131,8 +131,8 @@ limpeza `0005` (drop) — gate destrutivo, só após o cutover validado.
   `/api/resumo` apelida `c.nome as macro` no join — por isso os gráficos não mudaram.
 - **UI:** Lançamentos usa selects por id; a aba **"Ajustes"** gere categorias/subs/pessoas
   (add/renomear/mesclar/desativar).
-- **Tools:** `tools/categorias.py` (`resolver_categoria`/`carregar_catalogo`) — `import_planilha`
-  e `ensino_aplicar` resolvem nome→id.
+- **Tools:** `tools/categorias.py` (`resolver_categoria`/`carregar_catalogo`) — `ensino_aplicar`
+  resolve nome→id.
 
 A UI chama `categoria` a categoria (nome) e `subcategoria` a sub; internamente é tudo por id.
 
@@ -182,7 +182,7 @@ selo "valores diferem". `Outros`/`Não Identificado` seguem como na seção ante
 
 **Import:** um casado insere a linha do extrato no grupo do lançamento (novo ou existente),
 nunca carimba o hash nele; candidatos ao casamento excluem extrato/fatura, hash antigo e grupo
-que já tem extrato; os importadores Python seguem no modelo antigo (BACKLOG C6).
+que já tem extrato. Os importadores Python (modelo antigo) foram aposentados em 15/10/2026 (C6).
 
 ---
 
@@ -312,9 +312,8 @@ itens classificados + status de reconciliação) e `POST /api/importar/aplicar` 
 revisada; na fatura, marca o pagamento correspondente no extrato como fora do resumo). O casado
 entra no grupo do lançamento (seção do Inc 4.6).
 
-**Tools:** `tools/importar_extrato.py` e `tools/importar_fatura.py` (dry-run sem `--commit`;
-parsers em `tools/extrato_itau.py`/`tools/fatura_itau.py`, `tools/reconciliar.py`) são o caminho
-local do mesmo fluxo e seguem no modelo antigo, sem grupo (BACKLOG C6).
+**Um caminho só:** a aba Importar. Os importadores Python locais (modelo antigo, sem grupo) foram
+aposentados em 15/10/2026 (C6); os lançamentos que eles carimbaram ficam como estão.
 
 ### Colunas novas (Incremento 4)
 
