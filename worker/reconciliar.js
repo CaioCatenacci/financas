@@ -1,4 +1,5 @@
-// Porte de tools/reconciliar.py. linhaHash: sha256 hex da MESMA base do Python.
+// linhaHash: sha256 hex da mesma base que os importadores Python (aposentados em 15/10/2026)
+// usavam; os hashes já gravados dependem dela, então a base não muda.
 import { createHash } from "node:crypto";
 
 export function linhaHash(conta, data, descricao, valorCents, ordinal) {

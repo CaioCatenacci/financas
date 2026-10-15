@@ -838,7 +838,7 @@ export function criarDb(sql) {
 
     // Marca o pagamento da fatura no extrato como fora do resumo (computa_resumo=false): procura
     // UMA despesa de extrato que ainda CONTA no resumo (conta_no_resumo) cujo valor bata com o
-    // total da fatura, dentro de [de,ate]. Espelha tools/importar_fatura.py: 1 candidato → marca;
+    // total da fatura, dentro de [de,ate]. 1 candidato → marca;
     // 0 ou >1 → não mexe (devolve a contagem p/ quem chama avisar). Sem isso, os itens da fatura +
     // o pagamento no extrato contariam o gasto do cartão duas vezes no Resumo.
     // Fase B (Inc 4.6): filtra por conta_no_resumo, não computa_resumo=true — uma linha de extrato
@@ -918,8 +918,7 @@ export function criarDb(sql) {
     },
 
     // associações aprendidas por nome, no formato que classificar() espera: dict chaveado por
-    // normalizarNome(chave) -> { categoriaNome, subNome } (camelCase — espelha
-    // tools/importar_extrato.py::carregar_associacoes, mas com chaves de valor em camelCase).
+    // normalizarNome(chave) -> { categoriaNome, subNome } (chaves de valor em camelCase).
     async associacoesPorNome() {
       const rows = await sql`
         select a.chave, c.nome as categoria_nome, s.nome as sub_nome
