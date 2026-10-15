@@ -5,13 +5,10 @@
 -- não é transação, então a esfera só marca despesa da empresa: Empresa = empresa; o resto,
 -- inclusive Impostos/IR, = pessoal. Quem grava categoria (captura, import, reclassificação, aba
 -- Ajustes) passa a copiar a esfera da categoria (esferaDaCategoria, worker/categorias.js).
-alter table categorias add column if not exists esfera text not null default 'pessoal';
-
-do $$ begin
-  if not exists (select 1 from pg_constraint where conname = 'categorias_esfera_check') then
-    alter table categorias add constraint categorias_esfera_check check (esfera in ('pessoal','empresa'));
-  end if;
-end $$;
+-- um comando só (sem bloco DO: o tools/db.py corta em ';' e recusaria o 'end $$'); o
+-- `if not exists` pula o comando inteiro, check incluso, então segue idempotente.
+alter table categorias add column if not exists esfera text not null default 'pessoal'
+  check (esfera in ('pessoal','empresa'));
 
 -- semente: a categoria "Empresa" (por nome só aqui, uma vez; dali em diante vale o seletor da aba
 -- Ajustes). O guard evita re-marcar se a migração rodar de novo depois de alguém mexer no seletor.

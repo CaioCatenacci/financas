@@ -421,7 +421,7 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
   // ---- gestão de categorias ----
   if (url.pathname === "/api/categorias" && request.method === "POST") { const b = await body(); return j(await db.criarCategoria(b.nome, b.natureza)); }
   if (url.pathname.startsWith("/api/categorias/") && request.method === "PATCH") {
-    const b = await body();
+    const b = (await body()) || {}; // corpo JSON `null` não pode virar TypeError/500 no `in`
     // A1: {esfera} e {nome} são independentes — um PATCH só com esfera não pode apagar o nome
     // (antes renomeava incondicionalmente, gravando nome=undefined). Valida antes de gravar.
     if ("esfera" in b && !ESFERAS.includes(b.esfera)) return erroJson("esfera inválida (pessoal|empresa)", 400);

@@ -2251,3 +2251,15 @@ test("PATCH /api/categorias/:id só com {nome} continua renomeando, sem tocar na
   assert.equal(r.status, 200);
   assert.deepEqual(chamadas, [["nome", "cEquip", "Equipamento"]]);
 });
+
+test("PATCH /api/categorias/:id com corpo JSON null não vira 500: não há o que gravar, segue 200 sem tocar em nada", async () => {
+  // `"esfera" in null` lançava TypeError; o corpo vazio/null tem que ser tratado como {}
+  const chamadas = [];
+  const db = { mudarEsferaCategoria: async () => chamadas.push("esfera"), renomearCategoria: async () => chamadas.push("nome") };
+  const req = new Request("http://localhost/api/categorias/cEquip", {
+    method: "PATCH", headers: { "Cookie": "token=token123", "content-type": "application/json" }, body: "null",
+  });
+  const r = await handleApi(req, envApi, new URL("http://localhost/api/categorias/cEquip"), db);
+  assert.equal(r.status, 200);
+  assert.deepEqual(chamadas, []);
+});
