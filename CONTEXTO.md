@@ -838,8 +838,31 @@ precisa marcar as despesas da empresa.
   {esfera}`; o Worker valida o vocabulário (fora dele → 400) e grava a categoria e as transações
   dela numa única `sql.transaction` (`db.mudarEsferaCategoria`). `{nome}` e `{esfera}` são
   independentes no PATCH.
-- Nenhuma leitura agregada usa a esfera ainda; quem soma é a cascata (A3). Os importadores Python
+- A única leitura agregada que usa a esfera é a cascata do Resumo (A3, §27). Os importadores Python
   seguem gravando a esfera pela regra antiga (BACKLOG).
+
+## 27. Cascata no Resumo: do salário PJ ao que sobra para a casa (A3, 15/10/2026)
+
+O card "De onde vem, pra onde vai" deixou de ser receita → despesas → saldo e virou a cascata do
+mês: **Salário (PJ) → − Empresa → = Disponível para a casa → + Outras receitas → − despesas
+pessoais por categoria → = Saldo do mês**, com o selo "estimado" quando o salário do mês é estimado.
+
+- **`/api/resumo?mes=` devolve `cascata`** (só com `mes=`; com `de/ate` livre vem `null`), tudo em
+  centavos: `salario_cents` (de `alocarSalario`, G1; o `brl_cents` nulo antes do primeiro
+  `salario_param` vira **0**), `despesa_empresa_cents`, `disponivel_cents = salario − empresa`,
+  `outras_receitas_cents`, `despesa_pessoal_cents`, `saldo_cents = disponível + outras − pessoal`,
+  `estimado`, e `pessoais [{macro, total_cents}]` (os degraus). Montagem pura em
+  `worker/cascata.js` (`montarCascata`); as somas em SQL (`db.somasPorEsfera`,
+  `db.despesaPessoalPorCategoria`), filtrando `conta_no_resumo`.
+- **A cascata fecha com o saldo do mês** (`/api/saldo-mensal`, G1), e é isso que decide o que entra
+  em cada degrau: soma pela **natureza da transação** (não a da categoria, como o `saldoPorMes`) e
+  **outras receitas = todas as receitas que contam, de qualquer esfera**. Assim uma receita de
+  esfera empresa (por exemplo um estorno de despesa da empresa vindo de extrato/fatura) entra em
+  "+ Outras receitas" e não abate o degrau Empresa. Interpretação do PM em 15/10/2026, quando
+  ainda não havia nenhuma receita de esfera empresa no banco.
+- **Na tela:** `construirCascata` (`public/app.js`, pura, centavos) monta os degraus; o último é o
+  `saldo_cents` do servidor. Se os grupos pessoais não somarem `despesa_pessoal_cents`, a diferença
+  vira o degrau "Outras despesas" (o saldo nunca mente). O sunburst segue lendo `porCategoria`.
 
 ## Não fizemos (por que não faz sentido ainda)
 
@@ -847,7 +870,7 @@ precisa marcar as despesas da empresa.
 |---|---|---|
 | Extrato + fatura | PDF parsing é complexo; v1 é imagem. | Incremento 3 |
 | Conciliação | Depende de Incremento 3 (extrato/fatura). | Incremento 3 |
-| PJ em cascata | Estrutura simples pro Caio pessoa física primeiro. | Incremento 5 |
+| PJ além da cascata do mês | A cascata do Resumo (§27) liga salário PJ, empresa e casa; receita da empresa como transação, impostos da PJ e visão por conta seguem fora. | Incremento 5 |
 | Investimentos (além do saldo por print) | O A2 trouxe saldo e rendimento por print (§21); carteira, ativos e corretora por export seguem fora. | Incremento 6 |
 
 Cada incremento entrega valor E2E. Nada é plumbing que ficaria inútil sozinho.
