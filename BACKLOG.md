@@ -75,3 +75,9 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   aplica" do print usa o primeiro print de **qualquer** conta (corte global), então uma conta nova
   aparece em "falta" nos meses antes dela existir. Nenhum dos dois afeta a janela de hoje.
   Origem: G6 (14/10/2026).
+- **P3 · Importadores Python não herdam a esfera da categoria.** `tools/import_planilha.py`
+  (`esfera_de(tipo)`), `tools/importar_extrato.py` e `tools/importar_fatura.py` gravam a esfera
+  pela regra antiga, e `tools/jev_classificar.py` troca `categoria_id` sem tocar na esfera: usar
+  esses caminhos para pôr linha na categoria Empresa (ou tirar dela) volta a criar
+  `transacoes.esfera <> categorias.esfera`. Saídas: um trigger no banco (cobre todos os
+  caminhos) ou levar `esferaDaCategoria` para os tools, junto com o C6. Origem: A1 (15/10/2026).
