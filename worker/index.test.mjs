@@ -2579,3 +2579,270 @@ test("H5: banco falhando na leitura → 200 com aviso (nunca 500)", async () => 
   assert.equal(d.itens[0].sugestao, null);
   assert.equal(d.aviso, "classificação automática indisponível");
 });
+
+// ---- H6: a legenda do comprovante vira a categoria ----
+// Catálogo e contraparte inventados. Casa não tem genérica (nem "Casa" nem "Outros") — por isso o
+// JEV pode responder "sem subcategoria" ali; Compras tem a genérica Compras › Compras; Outros
+// não tem sub ativa; Empresa tem esfera empresa (A1).
+const catalogoH6 = {
+  categorias: [
+    { id: "cCasa", nome: "Casa", natureza: "despesa", esfera: "pessoal" },
+    { id: "cAli", nome: "Alimentação", natureza: "despesa", esfera: "pessoal" },
+    { id: "cCompras", nome: "Compras", natureza: "despesa", esfera: "pessoal" },
+    { id: "cEmp", nome: "Empresa", natureza: "despesa", esfera: "empresa" },
+    { id: "cOut", nome: "Outros", natureza: "despesa", esfera: "pessoal" },
+    { id: "cNI", nome: "Não Identificado", natureza: "despesa", esfera: "pessoal", padrao: true },
+    { id: "cRec", nome: "Receita", natureza: "receita", esfera: "pessoal" },
+  ],
+  subcategorias: [
+    { id: "sAlug", categoria_id: "cCasa", nome: "Aluguel" },
+    { id: "sLuz", categoria_id: "cCasa", nome: "Luz" },
+    { id: "sMerc", categoria_id: "cAli", nome: "Mercado" },
+    { id: "sAliOut", categoria_id: "cAli", nome: "Outros" },
+    { id: "sCompras", categoria_id: "cCompras", nome: "Compras" },
+    { id: "sRoupa", categoria_id: "cCompras", nome: "Roupa" },
+    { id: "sCont", categoria_id: "cEmp", nome: "Contador" },
+    { id: "sEmpOut", categoria_id: "cEmp", nome: "Outros" },   // "Outros" repetida: não casa no passo 2
+    { id: "sSal", categoria_id: "cRec", nome: "Salário" },
+  ],
+};
+
+const leituraH6 = { dataISO: "2026-10-10", valorCents: 12345, natureza: "despesa", macro: "Casa", sub: "Luz",
+  descricao: "Pix enviado", contraparte_nome: "FULANA DE TESTE", contraparte_chave: "fulana@exemplo.com" };
+
+// perguntar falso: responde pelo id da pergunta (categoria/subcategoria); Error → lança.
+function perguntarFalso(respostas, chamadas) {
+  return async (corpo) => {
+    chamadas.push(corpo);
+    const id = Object.keys(corpo.questions)[0];
+    const r = respostas[id];
+    if (r === undefined || r instanceof Error) throw r ?? new Error(`pergunta inesperada: ${id}`);
+    return { answers: { [id]: { choice: r.choice, probabilities: { [r.choice]: r.prob ?? 0.99 } } } };
+  };
+}
+
+function depsH6({ leitura = {}, respostas = {}, chave = "k-teste", associacao = null } = {}) {
+  const db = dbFake();
+  db.catalogo = async () => catalogoH6;
+  db.buscarAssociacao = async () => associacao;
+  const aprendidas = [];
+  db.upsertAssociacao = async (a) => { aprendidas.push(a); };
+  const enviados = [], chamadas = [];
+  const deps = {
+    db,
+    baixar: async () => ({ bytes: new Uint8Array([1, 2, 3]) }),
+    hashBytes: async () => "hH6",
+    extrairImpl: async () => ({ ok: true, extraido_por: "gemini", confianca: 0.9, normalizado: { ...leituraH6, ...leitura } }),
+    subir: async (e, caminho) => caminho,
+    confirmar: async (c, texto) => enviados.push(texto),
+    responderImpl: async () => {},
+    jevChave: chave,
+    perguntar: perguntarFalso(respostas, chamadas),
+  };
+  return { deps, db, aprendidas, enviados, chamadas };
+}
+
+const fotoH6 = (caption) => ({ message: { chat: { id: 7 }, message_id: 1, ...(caption === undefined ? {} : { caption }),
+  photo: [{ file_id: "fH6", width: 800 }] } });
+const pdfH6 = (caption) => ({ message: { chat: { id: 7 }, message_id: 1, caption,
+  document: { file_id: "pH6", mime_type: "application/pdf" } } });
+
+test("H6: legenda com nome de sub único ('aluguel') grava Casa › Aluguel, manual, aprende a regra e avisa '(da legenda)'", async () => {
+  const t = depsH6();
+  await tratarUpdate(fotoH6("aluguel"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  const ins = t.db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cCasa");
+  assert.equal(ins.subcategoria_id, "sAlug");
+  assert.equal(ins.origem_categoria, "manual");
+  assert.equal(t.chamadas.length, 0);                    // casamento exato não gasta JEV
+  assert.deepEqual(t.aprendidas, [{ chave: "fulana@exemplo.com", tipo: "pix_cpf", categoria_id: "cCasa", subcategoria_id: "sAlug" }]);
+  assert.match(t.enviados[0], /Casa › Aluguel \(da legenda\)/);
+});
+
+test("H6: legenda 'Casa › Aluguel' casa o par (passo 1)", async () => {
+  const t = depsH6();
+  await tratarUpdate(fotoH6("Casa › Aluguel"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.db.estado.inseridos[0].subcategoria_id, "sAlug");
+  assert.match(t.enviados[0], /Casa › Aluguel \(da legenda\)/);
+});
+
+test("H6: legenda com acento e maiúscula trocados ('ALIMENTACAO > mercado') casa", async () => {
+  const t = depsH6();
+  await tratarUpdate(fotoH6("ALIMENTACAO > mercado"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.db.estado.inseridos[0].categoria_id, "cAli");
+  assert.equal(t.db.estado.inseridos[0].subcategoria_id, "sMerc");
+});
+
+test("H6: legenda 'Outros' vai à categoria Outros sem perguntar ao JEV (categoria sem sub ativa)", async () => {
+  const t = depsH6();
+  await tratarUpdate(fotoH6("Outros"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  const ins = t.db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cOut");
+  assert.equal(ins.subcategoria_id, null);
+  assert.equal(t.chamadas.length, 0);
+  assert.doesNotMatch(t.enviados[0], /não consegui escolher/);   // sem sub para escolher não é falha
+});
+
+test("H6: legenda só com a categoria e sub do modelo dentro dela: usa a do modelo, sem JEV", async () => {
+  const t = depsH6({ leitura: { macro: "Compras", sub: "Roupa" } });
+  await tratarUpdate(fotoH6("Compras"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.db.estado.inseridos[0].categoria_id, "cCompras");   // "Compras" foi ao passo 3
+  assert.equal(t.db.estado.inseridos[0].subcategoria_id, "sRoupa");
+  assert.equal(t.chamadas.length, 0);
+});
+
+test("H6: legenda só com a categoria e o modelo em outra: o JEV falso escolhe a sub dentro dela", async () => {
+  // o Exemplo do card: "Alimentação" com o modelo lendo Casa › Luz → Alimentação › Mercado
+  const t = depsH6({ respostas: { subcategoria: { choice: "Mercado", prob: 0.6 } } });
+  await tratarUpdate(fotoH6("Alimentação"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  const ins = t.db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cAli");
+  assert.equal(ins.subcategoria_id, "sMerc");                       // sem limiar na sub
+  assert.equal(ins.origem_categoria, "manual");
+  assert.equal(t.chamadas.length, 1);
+  const pergunta = t.chamadas[0].questions.subcategoria;
+  assert.deepEqual(Object.keys(pergunta.criteria).sort(), ["Mercado", "Outros"]);   // só subs de Alimentação
+  assert.equal(t.chamadas[0].state.legenda, "Alimentação");
+  assert.equal(t.chamadas[0].state.fonte, "comprovante fotografado (Pix, boleto ou recibo)");
+  // a categoria veio do casamento exato: a regra aprende o par final
+  assert.deepEqual(t.aprendidas.map((a) => [a.categoria_id, a.subcategoria_id]), [["cAli", "sMerc"]]);
+});
+
+test("H6: 'Compras' com o modelo em outra categoria grava a genérica só porque o JEV a escolheu", async () => {
+  const t = depsH6({ respostas: { subcategoria: { choice: "Compras" } } });
+  await tratarUpdate(fotoH6("Compras"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.chamadas.length, 1);
+  assert.equal(t.db.estado.inseridos[0].subcategoria_id, "sCompras");
+});
+
+test("H6: JEV respondendo 'sem subcategoria' grava a sub null, sem aviso", async () => {
+  const t = depsH6({ leitura: { macro: "Alimentação", sub: "Mercado" }, respostas: { subcategoria: { choice: "sem subcategoria" } } });
+  await tratarUpdate(fotoH6("Casa"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.db.estado.inseridos[0].categoria_id, "cCasa");
+  assert.equal(t.db.estado.inseridos[0].subcategoria_id, null);
+  assert.doesNotMatch(t.enviados[0], /não consegui escolher/);
+});
+
+for (const [nome, opts] of [
+  ["sem chave", { chave: "" }],
+  ["fetch lança", { respostas: { subcategoria: new Error("rede caiu") } }],
+  ["resposta inválida (escolha fora das opções)", { respostas: { subcategoria: { choice: "Inventada" } } }],
+]) {
+  test(`H6: JEV sem resposta (${nome}) grava a categoria da legenda com sub null e avisa`, async () => {
+    const t = depsH6(opts);
+    await tratarUpdate(fotoH6("Alimentação"), { TELEGRAM_TOKEN: "t" }, t.deps);
+    const ins = t.db.estado.inseridos[0];
+    assert.equal(ins.categoria_id, "cAli");
+    assert.equal(ins.subcategoria_id, null);
+    assert.equal(ins.origem_categoria, "manual");
+    assert.match(t.enviados[0], /não consegui escolher a subcategoria; ajuste no app/);
+    assert.match(t.enviados[0], /\(da legenda\)/);
+  });
+}
+
+test("H6: legenda sem casamento vai às duas perguntas do JEV; com 0,95 grava e NÃO aprende regra", async () => {
+  const t = depsH6({ respostas: { categoria: { choice: "Alimentação", prob: 0.95 }, subcategoria: { choice: "Mercado", prob: 0.7 } } });
+  await tratarUpdate(fotoH6("mercadinho"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  const ins = t.db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cAli");
+  assert.equal(ins.subcategoria_id, "sMerc");
+  assert.equal(ins.origem_categoria, "manual");
+  assert.deepEqual(t.chamadas.map((c) => Object.keys(c.questions)[0]), ["categoria", "subcategoria"]);
+  const opcoes = Object.keys(t.chamadas[0].questions.categoria.criteria);
+  assert.ok(!opcoes.includes("Não Identificado"));   // a padrão nunca é opção
+  assert.ok(!opcoes.includes("Receita"));            // filtrada pela natureza (despesa)
+  assert.equal(t.chamadas[0].state.legenda, "mercadinho");
+  assert.equal(t.aprendidas.length, 0);              // palpite do modelo não vira regra (como H3/H4)
+  assert.match(t.enviados[0], /Alimentação › Mercado \(da legenda\)/);
+});
+
+test("H6: JEV abaixo de 0,90 é sem casamento: grava como hoje e avisa que não reconheceu", async () => {
+  const t = depsH6({ respostas: { categoria: { choice: "Alimentação", prob: 0.3 } } });
+  await tratarUpdate(fotoH6("xpto"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  const ins = t.db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cCasa");           // a leitura do modelo
+  assert.equal(ins.subcategoria_id, "sLuz");
+  assert.equal(ins.origem_categoria, "modelo");
+  assert.equal(t.chamadas.length, 1);                // nem pergunta a sub
+  assert.equal(t.aprendidas.length, 0);
+  assert.match(t.enviados[0], /Não reconheci a categoria 'xpto'; gravei como Casa › Luz/);
+  assert.match(t.enviados[0], /corrija no app/);
+  assert.doesNotMatch(t.enviados[0], /da legenda/);
+});
+
+test("H6: JEV 'nenhuma serve', com erro ou sem chave, sem casamento exato: grava como hoje e avisa", async () => {
+  for (const opts of [
+    { respostas: { categoria: { choice: "nenhuma serve", prob: 0.99 } } },
+    { respostas: { categoria: new Error("rede caiu") } },
+    { chave: "" },
+  ]) {
+    const t = depsH6(opts);
+    await tratarUpdate(fotoH6("xpto"), { TELEGRAM_TOKEN: "t" }, t.deps);
+    assert.equal(t.db.estado.inseridos[0].origem_categoria, "modelo");
+    assert.match(t.enviados[0], /Não reconheci a categoria 'xpto'/);
+  }
+});
+
+test("H6: sem casamento, a regra aprendida segue valendo (origem regra) e o aviso cita o que gravou", async () => {
+  const t = depsH6({ chave: "", associacao: { categoria_id: "cCompras", subcategoria_id: "sRoupa" } });
+  await tratarUpdate(fotoH6("xpto"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.db.estado.inseridos[0].origem_categoria, "regra");
+  assert.match(t.enviados[0], /gravei como Compras › Roupa/);
+});
+
+test("H6: a legenda vence a regra aprendida da contraparte", async () => {
+  const t = depsH6({ associacao: { categoria_id: "cCompras", subcategoria_id: "sRoupa" } });
+  await tratarUpdate(fotoH6("aluguel"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  const ins = t.db.estado.inseridos[0];
+  assert.equal(ins.categoria_id, "cCasa");
+  assert.equal(ins.subcategoria_id, "sAlug");
+  assert.equal(ins.origem_categoria, "manual");
+  assert.doesNotMatch(t.enviados[0], /✓ aprendido/);
+});
+
+test("H6: sem contraparte, a legenda grava a categoria mas não há regra a aprender", async () => {
+  const t = depsH6({ leitura: { contraparte_nome: null, contraparte_chave: null } });
+  await tratarUpdate(fotoH6("aluguel"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.db.estado.inseridos[0].subcategoria_id, "sAlug");
+  assert.equal(t.aprendidas.length, 0);
+});
+
+test("H6: regra aprendida pelo nome quando o comprovante não tem chave Pix", async () => {
+  const t = depsH6({ leitura: { contraparte_chave: null } });
+  await tratarUpdate(fotoH6("aluguel"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.deepEqual(t.aprendidas, [{ chave: "FULANA DE TESTE", tipo: "nome", categoria_id: "cCasa", subcategoria_id: "sAlug" }]);
+});
+
+test("H6: natureza e esfera seguem a categoria da legenda", async () => {
+  const t1 = depsH6();
+  await tratarUpdate(fotoH6("Salário"), { TELEGRAM_TOKEN: "t" }, t1.deps);
+  assert.equal(t1.db.estado.inseridos[0].categoria_id, "cRec");
+  assert.equal(t1.db.estado.inseridos[0].natureza, "receita");    // o modelo leu despesa
+  const t2 = depsH6();
+  await tratarUpdate(fotoH6("contador"), { TELEGRAM_TOKEN: "t" }, t2.deps);
+  assert.equal(t2.db.estado.inseridos[0].esfera, "empresa");
+});
+
+test("H6: PDF com legenda também casa", async () => {
+  const t = depsH6();
+  await tratarUpdate(pdfH6("aluguel"), { TELEGRAM_TOKEN: "t" }, t.deps);
+  assert.equal(t.db.estado.inseridos[0].subcategoria_id, "sAlug");
+  assert.equal(t.db.estado.inseridos[0].origem_categoria, "manual");
+  assert.match(t.enviados[0], /\(da legenda\)/);
+});
+
+test("H6: legenda vazia, só espaços ou '/comando' não muda nada do fluxo de hoje (foto e PDF)", async () => {
+  const base = depsH6();
+  await tratarUpdate(fotoH6(undefined), { TELEGRAM_TOKEN: "t" }, base.deps);
+  for (const caption of ["", "   ", "/qualquer coisa"]) {
+    for (const upd of [fotoH6(caption), pdfH6(caption)]) {
+      const t = depsH6();
+      await tratarUpdate(upd, { TELEGRAM_TOKEN: "t" }, t.deps);
+      assert.equal(t.chamadas.length, 0);
+      assert.equal(t.aprendidas.length, 0);
+      assert.equal(t.enviados[0], base.enviados[0]);
+      assert.deepEqual(t.db.estado.inseridos[0], base.db.estado.inseridos[0]);
+      assert.equal(t.db.estado.inseridos[0].origem_categoria, "modelo");
+    }
+  }
+});
