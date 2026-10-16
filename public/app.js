@@ -264,8 +264,8 @@ export function opcoesEsfera(esferaAtual) {
   return ESFERAS.map(e => `<option value="${e}"${e === atual ? " selected" : ""}>${e}</option>`).join("");
 }
 
-// monta a decisao revisada (novos/naoGasto/casados) a partir do preview + catálogo, espelhando
-// tools/importar_extrato.py::_gravar / importar_fatura.py, e — Inc 4.6 — a linha do "casado"
+// monta a decisao revisada (novos/naoGasto/casados) a partir do preview + catálogo; desde o
+// Inc 4.6, a linha do "casado"
 // também vira transação: entra no grupo do lançamento que ela casou (nunca é a representante).
 // "ambiguo" e "jaTem" não são aplicados por padrão (o app pode resolver um ambíguo mutando
 // status antes). `gerarId` é injetável (default crypto.randomUUID) pra dar id de grupo novo

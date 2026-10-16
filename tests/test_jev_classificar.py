@@ -425,9 +425,10 @@ def _l(n, cat, p, sub="", natureza="despesa", origem="jev"):
     return linha
 
 
-def _gerar(linhas, limiar=0.90, origens=None):
+def _gerar(linhas, limiar=0.90, origens=None, esferas=None, catalogo=CATALOGO_H3):
     origens = origens if origens is not None else {l["id"]: "modelo" for l in linhas}
-    return jev.gerar_sql(linhas, CATALOGO_H3, PADRAO, origens, limiar)
+    esferas = esferas if esferas is not None else {i: "pessoal" for i in origens}
+    return jev.gerar_sql(linhas, catalogo, PADRAO, origens, limiar, esferas)
 
 
 def _exemplo():
@@ -474,7 +475,7 @@ def test_todo_update_tem_a_guarda_pela_padrao():
         assert "origem_categoria = 'modelo'" in u["sql"]
     assert r["aplicar"][0]["sql"] == (
         f"update transacoes set categoria_id = 'kA', subcategoria_id = 'a1', "
-        f"origem_categoria = 'modelo' where id = '{_uid(1)}' and categoria_id = '{PADRAO}';")
+        f"origem_categoria = 'modelo', esfera = 'pessoal' where id = '{_uid(1)}' and categoria_id = '{PADRAO}';")
 
 
 def test_sub_vazia_ou_sem_subcategoria_vira_null():
@@ -491,10 +492,36 @@ def test_desfazer_espelha_o_aplicar_e_devolve_a_origem_lida_do_banco():
     assert [u["id"] for u in r["desfazer"]] == [u["id"] for u in r["aplicar"]]
     assert r["desfazer"][0]["sql"] == (
         f"update transacoes set categoria_id = '{PADRAO}', subcategoria_id = null, "
-        f"origem_categoria = 'manual' where id = '{_uid(1)}' and categoria_id = 'kA';")
+        f"origem_categoria = 'manual', esfera = 'pessoal' where id = '{_uid(1)}' "
+        f"and categoria_id = 'kA';")
     # a guarda é a categoria aplicada: se o Caio mexeu depois, o desfazer não pisa
     assert r["desfazer"][1]["sql"].endswith(f"where id = '{_uid(2)}' and categoria_id = 'kC';")
     assert "origem_categoria = 'modelo'" in r["desfazer"][1]["sql"]
+
+
+def test_aplicar_grava_a_esfera_da_categoria_e_desfazer_devolve_a_lida_do_banco():
+    # A transação herda a esfera da categoria (0019); sem isso, a despesa classificada
+    # como Empresa ficaria 'pessoal' e entraria no gasto da casa. O desfazer devolve a
+    # esfera de antes, não a da categoria.
+    catalogo = {"categorias": CATALOGO_H3["categorias"] + [
+                    {"id": "kE", "nome": "Empresa", "natureza": "despesa", "padrao": False,
+                     "ativa": True, "esfera": "empresa"}],
+                "subcategorias": CATALOGO_H3["subcategorias"]}
+    r = _gerar([_l(1, "Empresa", "0,9900")], esferas={_uid(1): "pessoal"}, catalogo=catalogo)
+    assert r["aplicar"][0]["sql"] == (
+        f"update transacoes set categoria_id = 'kE', subcategoria_id = null, "
+        f"origem_categoria = 'modelo', esfera = 'empresa' "
+        f"where id = '{_uid(1)}' and categoria_id = '{PADRAO}';")
+    assert r["desfazer"][0]["sql"] == (
+        f"update transacoes set categoria_id = '{PADRAO}', subcategoria_id = null, "
+        f"origem_categoria = 'modelo', esfera = 'pessoal' "
+        f"where id = '{_uid(1)}' and categoria_id = 'kE';")
+
+
+def test_linha_sem_esfera_lida_do_banco_e_pulada():
+    # sem a esfera de antes, o desfazer não teria o que devolver
+    r = _gerar([_l(1, "Compras", "0,9900", "Amazon")], esferas={})
+    assert r["aplicar"] == [] and [p["id"] for p in r["pulados"]] == [_uid(1)]
 
 
 def test_nome_fora_do_catalogo_e_pulado_e_listado_sem_abortar():
@@ -551,7 +578,8 @@ def test_gerar_sql_recusado_nao_grava_os_arquivos(tmp_path):
     aplicar, desfazer = tmp_path / "aplicar.sql", tmp_path / "desfazer.sql"
     with pytest.raises(SystemExit):
         jev.cmd_gerar_sql(csv_, 0.90, aplicar, desfazer, ler_banco=lambda ids: (
-            CATALOGO_H3, PADRAO, {i: "modelo" for i in ids}), saida=lambda *_: None)
+            CATALOGO_H3, PADRAO, {i: "modelo" for i in ids}, {i: "pessoal" for i in ids}),
+            saida=lambda *_: None)
     assert not aplicar.exists() and not desfazer.exists()
 
 
@@ -563,7 +591,7 @@ def test_gerar_sql_le_a_planilha_e_grava_os_dois_arquivos(tmp_path):
 
     def ler_banco(ids):
         pedidos.append(sorted(ids))
-        return CATALOGO_H3, PADRAO, {i: "modelo" for i in ids}
+        return CATALOGO_H3, PADRAO, {i: "modelo" for i in ids}, {i: "pessoal" for i in ids}
 
     impresso = []
     jev.cmd_gerar_sql(csv_, 0.90, aplicar, desfazer, ler_banco=ler_banco, saida=impresso.append)

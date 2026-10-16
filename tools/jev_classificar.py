@@ -497,12 +497,24 @@ def _uuid_valido(v: str) -> bool:
     return True
 
 
+ESFERAS = ("pessoal", "empresa")
+
+
+def esfera_da_categoria(esfera_atual, esfera_categoria):
+    """Espelho de esferaDaCategoria (worker/categorias.js): a transação herda a esfera
+    da categoria; categoria sem esfera válida não mexe na da transação."""
+    return esfera_categoria if esfera_categoria in ESFERAS else esfera_atual
+
+
 def gerar_sql(linhas: list[dict], catalogo: dict, id_padrao, origens: dict,
-              limiar: float = LIMIAR_PADRAO) -> dict:
+              limiar: float = LIMIAR_PADRAO, esferas: dict | None = None) -> dict:
     """Os updates do aplicar e do desfazer a partir da planilha, sem banco.
 
     `origens` é id → origem_categoria lida do banco na hora de gerar (o desfazer
     devolve exatamente essa; as pendentes 'manual' não podem voltar 'modelo').
+    `esferas` é id → esfera atual, lida junto: o aplicar grava a esfera da categoria
+    aplicada (a transação herda a da categoria, migração 0019) e o desfazer devolve
+    a lida. Sem a esfera de um id, a linha é pulada como a que saiu do banco.
 
     Levanta ValueError se alguma despesa tem categoria de receita: a natureza não
     muda nesta rodada, e uma despesa sob "Receita" bagunçaria o resumo. Receita sob
@@ -513,6 +525,7 @@ def gerar_sql(linhas: list[dict], catalogo: dict, id_padrao, origens: dict,
     subs = {(s["categoria_id"], _norm(s["nome"])): s for s in catalogo["subcategorias"]
             if s.get("ativa", True)}
     corte = Decimal(str(limiar))
+    esferas = esferas or {}
 
     recusadas = [l["id"] for l in linhas
                  if l.get("natureza") == "despesa"
@@ -546,18 +559,19 @@ def gerar_sql(linhas: list[dict], catalogo: dict, id_padrao, origens: dict,
                 r["pulados"].append({"id": i, "motivo": f"sub fora do catálogo: "
                                      f"{cat['nome']} › {l.get('subcategoria')!r}"})
                 continue
-        if i not in origens:
+        if i not in origens or i not in esferas:
             r["pulados"].append({"id": i, "motivo": "não está mais no banco"})
             continue
         sub_id = sub["id"] if sub else None
+        esfera = esfera_da_categoria(esferas[i], cat.get("esfera"))
         r["aplicar"].append({"id": i, "sql": (
             f"update transacoes set categoria_id = {_literal(cat['id'])}, "
-            f"subcategoria_id = {_literal(sub_id)}, origem_categoria = 'modelo' "
-            f"where id = {_literal(i)} and categoria_id = {_literal(id_padrao)};")})
+            f"subcategoria_id = {_literal(sub_id)}, origem_categoria = 'modelo', "
+            f"esfera = {_literal(esfera)} where id = {_literal(i)} and categoria_id = {_literal(id_padrao)};")})
         r["desfazer"].append({"id": i, "sql": (
             f"update transacoes set categoria_id = {_literal(id_padrao)}, "
-            f"subcategoria_id = null, origem_categoria = {_literal(origens[i])} "
-            f"where id = {_literal(i)} and categoria_id = {_literal(cat['id'])};")})
+            f"subcategoria_id = null, origem_categoria = {_literal(origens[i])}, "
+            f"esfera = {_literal(esferas[i])} where id = {_literal(i)} and categoria_id = {_literal(cat['id'])};")})
         r["por_categoria"][cat["nome"]] = r["por_categoria"].get(cat["nome"], 0) + 1
     return r
 
@@ -592,13 +606,14 @@ def gravar_sql(r: dict, aplicar: pathlib.Path, desfazer: pathlib.Path) -> None:
 
 def cmd_gerar_sql(csv_entrada: pathlib.Path, limiar: float, aplicar: pathlib.Path,
                   desfazer: pathlib.Path, *, ler_banco, saida=print):
-    """`ler_banco(ids)` → (catálogo ativo, id da padrão, id → origem_categoria). Só
+    """`ler_banco(ids)` → (catálogo ativo, id da padrão, id → origem_categoria,
+    id → esfera). Só
     leitura; quem grava é o `tools/db.py aplicar`, com permissão."""
     linhas = ler_csv(csv_entrada)
     ids = [(l.get("id") or "").strip() for l in linhas]
-    catalogo, id_padrao, origens = ler_banco([i for i in ids if _uuid_valido(i)])
+    catalogo, id_padrao, origens, esferas = ler_banco([i for i in ids if _uuid_valido(i)])
     try:
-        r = gerar_sql(linhas, catalogo, id_padrao, origens, limiar)
+        r = gerar_sql(linhas, catalogo, id_padrao, origens, limiar, esferas)
     except ValueError as e:
         raise SystemExit(f"RECUSADO: {e}. Nada foi gravado.")
     gravar_sql(r, aplicar, desfazer)
@@ -632,10 +647,11 @@ def ler_pendentes(cur) -> list[dict]:
 
 
 def ler_catalogo(cur) -> dict:
-    """Como tools/categorias.carregar_catalogo, com a natureza (que a regra das opções usa)."""
-    cur.execute("select id, nome, natureza, padrao, ativa from categorias where ativa")
-    cats = [{"id": r[0], "nome": r[1], "natureza": r[2], "padrao": r[3], "ativa": r[4]}
-            for r in cur.fetchall()]
+    """Como tools/categorias.carregar_catalogo, com a natureza (que a regra das opções usa)
+    e a esfera (que o gerar-sql grava na transação)."""
+    cur.execute("select id, nome, natureza, padrao, ativa, esfera from categorias where ativa")
+    cats = [{"id": r[0], "nome": r[1], "natureza": r[2], "padrao": r[3], "ativa": r[4],
+             "esfera": r[5]} for r in cur.fetchall()]
     cur.execute("select id, categoria_id, nome, ativa from subcategorias where ativa")
     subs = [{"id": r[0], "categoria_id": r[1], "nome": r[2], "ativa": r[3]} for r in cur.fetchall()]
     return {"categorias": cats, "subcategorias": subs}
@@ -643,14 +659,18 @@ def ler_catalogo(cur) -> dict:
 
 def ler_banco_gerar_sql(ids: list[str]):
     """O que o gerar-sql precisa do banco, numa conexão só-leitura: catálogo ativo,
-    id da padrão e a origem_categoria atual de cada id (o desfazer devolve essa)."""
+    id da padrão e a origem_categoria e a esfera atuais de cada id (o desfazer devolve
+    essas)."""
     with conectar() as conn, conn.cursor() as cur:
         catalogo = ler_catalogo(cur)
         cur.execute("select id from categorias where padrao")
         (id_padrao,) = cur.fetchone()
-        cur.execute("select id, origem_categoria from transacoes where id = any(%s::uuid[])", (ids,))
-        origens = {str(r[0]): r[1] for r in cur.fetchall()}
-    return catalogo, id_padrao, origens
+        cur.execute("select id, origem_categoria, esfera from transacoes "
+                    "where id = any(%s::uuid[])", (ids,))
+        linhas = cur.fetchall()
+        origens = {str(r[0]): r[1] for r in linhas}
+        esferas = {str(r[0]): r[2] for r in linhas}
+    return catalogo, id_padrao, origens, esferas
 
 
 def conectar():

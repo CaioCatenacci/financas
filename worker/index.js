@@ -773,7 +773,7 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
         de = linhas.reduce((min, l) => (l.data < min ? l.data : min), linhas[0].data);
         ate = linhas.reduce((max, l) => (l.data > max ? l.data : max), linhas[0].data);
       }
-      // Janela de reconciliação ±3 dias (igual tools/importar_extrato.py): reconciliarLinha casa
+      // Janela de reconciliação ±3 dias: reconciliarLinha casa
       // dentro de ±3d, então uma transação já lançada 1–3 dias antes/depois da borda do extrato é
       // candidata legítima e PRECISA entrar em `existentes` — senão a linha vira "novo" e duplica.
       const deJanela = deslocaDias(de, -3), ateJanela = deslocaDias(ate, 3);
@@ -881,7 +881,7 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
     }
     const r = await aplicar(db, b.decisao);
     // fatura: depois de gravar os itens, marca o pagamento correspondente no extrato como fora do
-    // resumo (janela de 62 dias a partir do 1º dia do mês da fatura, igual tools/importar_fatura.py).
+    // resumo (janela de 62 dias a partir do 1º dia do mês da fatura).
     if (b.fatura && b.fatura.totalCents) {
       const mes = String(b.fatura.mes).padStart(2, "0");
       const de = `${b.fatura.ano}-${mes}-01`;

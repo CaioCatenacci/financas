@@ -1,6 +1,6 @@
 // Orquestração pura de import (extrato/fatura): monta o preview (parse → checksum → classifica
-// → reconcilia) e aplica a decisão revisada no banco. Espelha tools/importar_extrato.py e
-// tools/importar_fatura.py, mas puro — todo dado que viria do banco (catálogo, associações,
+// → reconcilia) e aplica a decisão revisada no banco. Puro — todo dado que viria do banco
+// (catálogo, associações,
 // existentes, hashes já gravados) entra por parâmetro; só `aplicar` recebe `db` (injetado),
 // porque é o único ponto do fluxo que precisa gravar de fato.
 import { parseExtrato, conferirChecksum } from "./extrato.js";
@@ -204,7 +204,7 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
   const { itens: itensBrutos, totalCents } = parseFatura(texto, ano, mes);
   const soma = itensBrutos.reduce((s, i) => s + i.valorCents, 0);
   // totalCents=0 quando a fatura não trouxe "Total dos lançamentos atuais" — sem total pra
-  // comparar não há o que checar (mesmo critério do tools/importar_fatura.py).
+  // comparar não há o que checar.
   // fatura: o "Total dos lançamentos atuais" inclui IOF/encargos que NÃO são lançamentos com data,
   // então a soma dos itens pode ficar um pouco abaixo do total. O checksum é AVISO (bloqueiaAplicar
   // = false): mostra a diferença mas não impede aplicar.
@@ -246,7 +246,7 @@ export function montarPreviewFatura(texto, ano, mes, { catalogo, associacoes = {
 
     const info = classificar(item.descricao, associacoes);
     // remove "PARCELA XX/YY" do texto do estabelecimento (já temos `item.parcela` separado) e
-    // reanexa como sufixo "(parc XX/YY)" — mesma limpeza do tools/importar_fatura.py.
+    // reanexa como sufixo "(parc XX/YY)".
     const descLimpo = item.descricao.replace(/\bPARCELA\s+\d{2}\/\d{2}\b/i, "").trim();
     const descricaoFinal = descLimpo + (item.parcela ? ` (parc ${item.parcela})` : "");
 

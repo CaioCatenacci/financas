@@ -43,11 +43,6 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   subcategorias e pessoas passam o id cru pro `::uuid`; corpo que não é JSON faz `request.json()`
   lançar em qualquer rota. O helper `ehUuid` (`worker/validar.js`) já existe. Origem: F3
   (28/09/2026), que fechou só as 4 rotas `/api/grupos`.
-- **P3 · `tools/importar_fatura.py` remarca o pagamento na reaplicação.** Repete a lógica antiga
-  (filtra `computa_resumo=true`, não confere se o pagamento já está marcado): reaplicar a fatura
-  pelo Python pode tirar do resumo outra despesa de extrato de mesmo total na janela. O Worker já
-  foi corrigido (`marcarPagamentoFaturaNaoGasto`). Vai junto com C6 (importadores Python no modelo
-  antigo). Origem: C3 (29/09/2026).
 - **P3 · Buraco no meio da cobertura fica invisível.** A cobertura de uma fonte é `max(ate)` de
   `importacoes`: um mês nunca importado entre dois imports aparece coberto. Os dados de hoje não
   têm buraco; se aparecer, a regra passa a olhar a união dos períodos. Origem: G2 (10/10/2026).
@@ -75,12 +70,6 @@ Em 26/09/2026 todos os itens abertos viraram cards em `fila/`, **com o mesmo id*
   aplica" do print usa o primeiro print de **qualquer** conta (corte global), então uma conta nova
   aparece em "falta" nos meses antes dela existir. Nenhum dos dois afeta a janela de hoje.
   Origem: G6 (14/10/2026).
-- **P3 · Importadores Python não herdam a esfera da categoria.** `tools/import_planilha.py`
-  (`esfera_de(tipo)`), `tools/importar_extrato.py` e `tools/importar_fatura.py` gravam a esfera
-  pela regra antiga, e `tools/jev_classificar.py` troca `categoria_id` sem tocar na esfera: usar
-  esses caminhos para pôr linha na categoria Empresa (ou tirar dela) volta a criar
-  `transacoes.esfera <> categorias.esfera`. Saídas: um trigger no banco (cobre todos os
-  caminhos) ou levar `esferaDaCategoria` para os tools, junto com o C6. Origem: A1 (15/10/2026).
 - **P2 · Receita na categoria padrão pode duplicar o salário na cascata.** O salário vem de
   `alocarSalario` (G1), mas um repasse do próprio salário (Wise → banco) que ficou sem
   classificação na `padrao=true`, com natureza receita, entra também em "+ Outras receitas" (e no

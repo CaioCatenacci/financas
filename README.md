@@ -52,19 +52,11 @@ psql "$DATABASE_URL" -f migrations/0001_init.sql
 
 Isso cria as tabelas `transacoes`, `categorias` e `documentos`.
 
-### 3. (Opcional) Importar o histórico da planilha
+### 3. Importar extrato e fatura
 
-Se você tiver `Gastos.xlsx`:
-
-```bash
-DATABASE_URL=$(wrangler secret view DATABASE_URL) python tools/import_planilha.py "Dropbox/Financas/Gastos.xlsx"
-```
-
-Isso importa as linhas (2022–2026) como `fonte='importacao'`.
-Relatório mostra contagens e linhas ambíguas.
-
-Para atualizar (ex: corrigir mojibake): re-rodar é idempotente — substitui só
-as linhas `fonte='importacao'`, nunca duplica.
+O único caminho de import é a aba **Importar** do app (PDF do extrato/fatura, CSV da Wise). Os
+importadores Python locais, inclusive o do histórico da planilha (`fonte='importacao'`, já no
+banco), foram aposentados em 15/10/2026 (C6).
 
 ---
 
@@ -159,20 +151,16 @@ do `CLAUDE.md`.
 │   └── shell.css                   # Estilos
 │
 ├── tools/
-│   ├── import_planilha.py          # Import do histórico Excel
-│   ├── importar_extrato.py         # Import local de extrato (Inc 3)
-│   ├── importar_fatura.py          # Import local de fatura (Inc 3)
 │   ├── categorias.py               # resolver_categoria / carregar_catalogo
 │   ├── db.py                       # Banco sem MCP: select / ensaiar / aplicar
 │   ├── fila.mjs                    # Fila autônoma: checar / concluir
 │   ├── deploy.mjs                  # Deploy do Worker
 │   ├── hooks/pre-push              # O master só muda por PR
-│   └── …                           # parsers Itaú, reconciliar, classificar, ensino, app.mjs
+│   └── …                           # contraparte, ensino, jev_classificar, app.mjs
 │
 ├── tests/
 │   ├── app.test.mjs                # Testes do app (node --test; fora de public/ p/ não ir no deploy)
-│   ├── test_import.py              # Testes do import da planilha (pytest)
-│   └── test_*.py                   # Demais tools Python (pytest)
+│   └── test_*.py                   # Tools Python (pytest)
 │
 ├── fila/                            # Fila autônoma: <id>.md, ORDEM.md, feitos.js
 │
