@@ -771,7 +771,8 @@ Identificado".
   fonte explicada, padrão fora das opções e "nenhuma serve" no lugar dela, descrições à mão (Banco;
   Alimentação → Restaurante/Outros), sub genérica no lugar de "sem subcategoria", `IFD*` →
   Alimentação/Ifood com prob 1 e sem chamada. A sub só é perguntada quando a categoria vai
-  preencher.
+  preencher (no import; `classificarLinha` recebe o limiar da sub, padrão 0,90 — a triagem do §29
+  passa o dela).
 - **HTTP direto, sem SDK** (`worker/sugestoes.js`): `POST https://api.typesafe.ai/v1/systemone`,
   `Authorization: Bearer <TYPESAFE_API_KEY>`, corpo `{model: "jev-latest", state, questions}`;
   lê `answers.<id>.choice` e `answers.<id>.probabilities[choice]`. 429/529 → uma nova tentativa
@@ -890,6 +891,33 @@ mais apertado de um ano para o outro" (escola, plano de saúde e outras são cor
 - **Card:** uma linha por categoria com os totais dos dois anos, a diferença em R$ e o % inteiro
   (ou "novo" sem gasto no ano anterior), ordenadas pela maior alta em reais (`linhasAnoVsAnterior`,
   `public/app.js`).
+
+## 29. Triagem assistida pelo JEV em Lançamentos (H5, 15/10/2026)
+
+Depois do H3, centenas de linhas seguiram na padrão (o JEV abaixo de 0,90). O chip **"Triagem"**
+da aba Lançamentos mostra só elas, com a sugestão do JEV ao lado e um **aceitar**: o Caio decide,
+nada é gravado sem clique (gravar sozinho foi o H3).
+
+- **Quem entra:** categoria com `padrao = true` (pela flag, nunca pelo nome) e que não seja membro
+  não-representante de grupo (membro não conta nem é editável, §Inc 4.6). A tela pede as pendentes
+  à API (`GET /api/transacoes?categoria_id=<padrão>&de&ate`), nunca filtra a lista da aba: o
+  `limit 1000` por data desc esconderia as antigas no "Todos os meses".
+- **Sugestões sob demanda:** `POST /api/triagem/sugestoes` (`worker/triagem.js`), `{ids, limiar}`,
+  **até 10 ids** (400 acima): a sub é perguntada mais vezes que no import, então o lote é a metade.
+  A rota lê as linhas do banco por id (`db.transacoesParaTriagem`, só SELECT), ignora as que não
+  entram (`ignorado: true`, sem chamada) e reaproveita perguntas, `IFD*` e o cliente HTTP do H4.
+  No mês, todos os lotes saem ao abrir o chip, um por vez; no "Todos os meses", 10 por clique em
+  "sugerir mais". Falha ou chave ausente → linha sem sugestão + "classificação automática
+  indisponível". A triagem não reconfere `associacoes` antes do JEV (o import reconfere).
+- **O X da tela (padrão 0,70, vírgula ou ponto):** a sub só é perguntada com a confiança da
+  categoria ≥ X; abaixo, a sugestão é só a categoria e não tem aceitar. "nenhuma serve" aparece
+  como "—", sem aceitar. Formato: "Categoria › Sub · 0,74".
+- **Aceitar = reclassificação manual:** `PATCH /api/transacoes/:id` com `categoria_id`/
+  `subcategoria_id` resolvidos do nome pelo catálogo (`origem_categoria = 'manual'`, natureza e
+  esfera seguem a categoria, a regra da contraparte é aprendida). **"Aceitar todas ≥ X"** confirma
+  quantas linhas entram (só as com sugestão aceitável e confiança ≥ X; lote pendente fica fora) e
+  grava por `POST /api/transacoes/lote`, um por par (categoria, sub) sugerido. A linha aceita sai
+  da lista; o select "escolher…" da linha faz a reclassificação à mão pelo mesmo PATCH.
 
 ## Não fizemos (por que não faz sentido ainda)
 
