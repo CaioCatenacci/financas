@@ -124,16 +124,21 @@ export function formatarValor(centavos) {
   return `${c < 0 ? "-" : ""}${milhar},${String(cent).padStart(2, "0")}`;
 }
 
-/** O que o JEV vê da linha. Contraparte pode ser nula (extrato não tem). */
+/** O que o JEV vê da linha. Contraparte pode ser nula (extrato não tem).
+ *  H6: a `legenda` (o que o Caio escreveu no comprovante do Telegram) é opcional e só entra no
+ *  estado quando existe — no import e na triagem ela não vem, e o estado fica idêntico ao medido
+ *  no H2 (por isso não há o que espelhar em tools/jev_classificar.py). */
 export function estado(linha) {
   if (!FONTES.includes(linha.fonte)) throw new Error(`fonte fora do vocabulário: ${linha.fonte}`);
-  return {
+  const est = {
     descricao: linha.descricao || "",
     contraparte: linha.contraparte ?? null,
     valor: formatarValor(linha.valorCents),
     natureza: linha.natureza,
     fonte: FONTE_EXPLICADA[linha.fonte],
   };
+  if (typeof linha.legenda === "string" && linha.legenda.trim()) est.legenda = linha.legenda.trim();
+  return est;
 }
 
 /** A sugestão da regra fixa, ou null se nenhuma regra se aplica. Não gasta chamada. */

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { casarLegenda, legendaDeCategoria, normalizarLegenda } from "./legenda.js";
+import { estado } from "./jev.js";
 
 // Catálogo inventado (nada do catálogo real): cobre os três passos e as armadilhas que o PM achou —
 // "Outros" repetida em várias categorias, a genérica com o nome da própria categoria (Compras ›
@@ -99,4 +100,14 @@ test("legendaDeCategoria: vazia, só espaços ou comando ('/...') não é legend
   assert.equal(legendaDeCategoria("/qualquer coisa"), null);
   assert.equal(legendaDeCategoria("  /aprender Casa"), null);
   assert.equal(legendaDeCategoria("  Aluguel "), "Aluguel");
+});
+
+// O estado do JEV ganha a legenda só quando ela existe: sem ela, é o mesmo estado medido no H2
+// (import e triagem não mudam).
+
+test("estado do JEV: com legenda, ela entra; sem legenda, o estado é o de sempre", () => {
+  const linha = { descricao: "Pix", contraparte: null, valorCents: 1234, natureza: "despesa", fonte: "imagem" };
+  assert.equal("legenda" in estado(linha), false);
+  assert.equal("legenda" in estado({ ...linha, legenda: "   " }), false);
+  assert.equal(estado({ ...linha, legenda: " conta de luz " }).legenda, "conta de luz");
 });
