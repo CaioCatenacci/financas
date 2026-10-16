@@ -12,7 +12,9 @@ import { resolverCategoria, catalogoParaLista, nomesDeCategoria, categoriaPadrao
 import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, montarPreviewWise, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
-import { validarLote, sugerirLote, AVISO_INDISPONIVEL } from "./sugestoes.js";
+import { validarLote, sugerirLote, criarPerguntar, AVISO_INDISPONIVEL } from "./sugestoes.js";
+import { classificarLinha, perguntaSubcategoria, corpoPergunta, lerResposta, estado as estadoJev, opcoesCategoria, subsAtivas, preenche, SEM_SUB, LIMIAR_JEV } from "./jev.js";
+import { casarLegenda, legendaDeCategoria } from "./legenda.js";
 import { validarLoteTriagem, sugerirTriagem } from "./triagem.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
@@ -136,6 +138,15 @@ export async function tratarUpdate(update, env, deps) {
   const ck = normalizarChave(n.contraparte_chave);
   if (ck) { const r = await deps.db.buscarAssociacao(ck, "pix_cpf"); if (r) { categoria_id = r.categoria_id; subcategoria_id = r.subcategoria_id; origemCat = "regra"; } }
   if (origemCat === "modelo") { const nm = normalizarNome(n.contraparte_nome); if (nm) { const r = await deps.db.buscarAssociacao(nm, "nome"); if (r) { categoria_id = r.categoria_id; subcategoria_id = r.subcategoria_id; origemCat = "regra"; } } }
+  // H6: a legenda (decisão do Caio) vence o modelo e a regra aprendida. Vazia ou "/..." → nada muda.
+  const legenda = legendaDeCategoria(ev.caption);
+  const daLegenda = legenda ? await categoriaDaLegenda(legenda, n, catalogo, deps) : null;
+  let natureza = n.natureza;
+  if (daLegenda) {
+    ({ categoria_id, subcategoria_id } = daLegenda);
+    origemCat = "manual";
+    natureza = naturezaAoReclassificar(n.natureza, "imagem", catalogo.categorias.find((x) => x.id === categoria_id)?.natureza);
+  }
   const ext = ev.tipo === "pdf" ? "pdf" : (mime === "image/png" ? "png" : "jpg");
   const caminho = `${caminhoDropbox(n.dataISO)}/${nomeArquivo({ ...n, ext })}`;
   const dropboxPath = await deps.subir(env, caminho, bytes);
@@ -145,8 +156,8 @@ export async function tratarUpdate(update, env, deps) {
     tipo_arquivo: mime, hash, telegram_file_id: ev.fileId,
   });
   const tx = await deps.db.inserirTransacao({
-    // A1: a esfera é a da categoria FINAL (modelo ou regra aprendida)
-    dataISO: n.dataISO, natureza: n.natureza,
+    // A1: a esfera é a da categoria FINAL (modelo, regra aprendida ou legenda)
+    dataISO: n.dataISO, natureza,
     esfera: esferaDaCategoria("pessoal", catalogo.categorias.find((x) => x.id === categoria_id)?.esfera),
     valorCents: n.valorCents, reembolsoCents: 0, categoria_id, subcategoria_id,
     descricao: n.descricao, pessoa_id: null, fonte: "imagem", origem_categoria: origemCat,
@@ -154,12 +165,63 @@ export async function tratarUpdate(update, env, deps) {
     contraparte_nome: n.contraparte_nome, contraparte_chave: n.contraparte_chave,
   });
 
-  // nomes p/ a confirmação vêm dos ids resolvidos (podem ter mudado pela regra)
+  // H6: só o casamento exato ensina a regra (é o Caio escrevendo a categoria, como a correção no
+  // app: par FINAL, via derivarChave); palpite do JEV não vira regra (H3/H4). Sem contraparte, nada.
+  if (daLegenda?.exato) {
+    const dc = derivarChave({ contraparte_nome: n.contraparte_nome, contraparte_chave: n.contraparte_chave });
+    if (dc) await deps.db.upsertAssociacao({ chave: dc.chave, tipo: dc.tipo, categoria_id, subcategoria_id });
+  }
+
+  // nomes p/ a confirmação vêm dos ids resolvidos (podem ter mudado pela regra ou pela legenda)
   const nm2 = nomesDeCategoria(catalogo, categoria_id, subcategoria_id);
   const cat = nm2.subcategoria ? `${nm2.categoria} › ${nm2.subcategoria}` : nm2.categoria;
-  const selo = origemCat === "regra" ? " ✓ aprendido" : "";
+  const selo = daLegenda ? " (da legenda)" : (origemCat === "regra" ? " ✓ aprendido" : "");
+  let aviso = "";
+  if (daLegenda?.semSub) aviso = "\n⚠ não consegui escolher a subcategoria; ajuste no app";
+  else if (legenda && !daLegenda) aviso = `\n⚠ Não reconheci a categoria '${legenda}'; gravei como ${cat} — corrija no app se precisar`;
   const [a, m, d] = n.dataISO.split("-");
-  await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat}${selo} · "${n.descricao ?? ""}"\najuste a categoria no app`, tx.id);
+  await deps.confirmar(ev.chatId, `✅ R$ ${centsToBR(n.valorCents)} · ${d}/${m} · ${cat}${selo} · "${n.descricao ?? ""}"\najuste a categoria no app${aviso}`, tx.id);
+}
+
+// H6: a categoria que a legenda pede, ou null (sem casamento → grava como hoje e avisa).
+// Devolve {categoria_id, subcategoria_id, exato, semSub}: `exato` = casou com o catálogo (ensina a
+// regra); `semSub` = casou só a categoria e o JEV não respondeu a sub (o bot avisa).
+// O JEV entra pelas mesmas peças do H4/H5 (worker/jev.js; o HTTP é o sugestoes.criarPerguntar).
+async function categoriaDaLegenda(legenda, n, catalogo, deps) {
+  const jevOk = !!(deps.jevChave && deps.perguntar);
+  const linha = { descricao: n.descricao, contraparte: n.contraparte_nome ?? null, valorCents: n.valorCents,
+                  natureza: n.natureza, fonte: "imagem", legenda };
+  const m = casarLegenda(legenda, catalogo);
+  if (m) {
+    if (m.subcategoria_id) return { ...m, exato: true, semSub: false };
+    // casou só a categoria: a sub do modelo, se for dela; senão o JEV escolhe dentro dela —
+    // nunca a genérica por padrão (só se for a escolha do JEV). Sem limiar na sub, como no H4.
+    const doModelo = resolverCategoria(n.macro, n.sub, catalogo);
+    if (doModelo.categoria_id === m.categoria_id && doModelo.subcategoria_id) {
+      return { categoria_id: m.categoria_id, subcategoria_id: doModelo.subcategoria_id, exato: true, semSub: false };
+    }
+    const cat = catalogo.categorias.find((c) => c.id === m.categoria_id);
+    const ps = perguntaSubcategoria(cat, catalogo);
+    if (!ps) return { ...m, exato: true, semSub: false };          // categoria sem sub ativa: nada a escolher
+    let rs = null;
+    if (jevOk) {
+      try { rs = lerResposta(await deps.perguntar(corpoPergunta(estadoJev(linha), "subcategoria", ps)), "subcategoria", ps); }
+      catch (err) { console.error("JEV (sub da legenda) falhou:", err?.message ?? err); }
+    }
+    if (!rs) return { ...m, exato: true, semSub: true };
+    const sub = rs.choice === SEM_SUB ? null : subsAtivas(cat.id, catalogo).find((s) => s.nome === rs.choice);
+    return { categoria_id: m.categoria_id, subcategoria_id: sub ? sub.id : null, exato: true, semSub: false };
+  }
+  // sem casamento exato: o JEV interpreta a legenda com as duas perguntas do H4/H5, limiar 0,90
+  if (!jevOk) return null;
+  let s;
+  try { s = await classificarLinha(linha, catalogo, deps.perguntar, LIMIAR_JEV); }
+  catch (err) { console.error("JEV (legenda) falhou:", err?.message ?? err); return null; }
+  if (!preenche(s, LIMIAR_JEV)) return null;
+  const cat = opcoesCategoria(n.natureza, "imagem", catalogo).find((c) => c.nome === s.categoria);
+  if (!cat) return null;
+  const sub = s.subcategoria ? subsAtivas(cat.id, catalogo).find((x) => x.nome === s.subcategoria) : null;
+  return { categoria_id: cat.id, subcategoria_id: sub ? sub.id : null, exato: false, semSub: false };
 }
 
 // A2: lê o print (modo patrimonio), completa conta/pessoa/data, sobe pro Dropbox e grava um
@@ -220,8 +282,12 @@ export async function handleTelegram(request, env, depsOpt = null) {
 function montarDepsTelegram(env) {
   const sql = neon(env.DATABASE_URL);
   const db = criarDb(sql);
+  // H6: o JEV que interpreta a legenda — mesma chave e mesmo cliente HTTP do H4/H5
+  const jevChave = typeof env.TYPESAFE_API_KEY === "string" ? env.TYPESAFE_API_KEY : "";
   return {
     db,
+    jevChave,
+    perguntar: jevChave ? criarPerguntar({ chave: jevChave, fetchImpl: (...a) => fetch(...a) }) : null,
     baixar: (fileId) => downloadArquivo(env.TELEGRAM_TOKEN, fileId),
     hashBytes: sha256hex,
     extrairImpl: (bytes, mime, categorias, modo = "comprovante") => extrair(bytes, mime, categorias, {
