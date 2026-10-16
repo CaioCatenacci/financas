@@ -13,6 +13,8 @@ import {
   lotesSugestao, aplicarSugestoes, jevPreenche, seloJev, celulaCategoriaImport, avisoJevHtml, AVISO_JEV,
   consultaArquivoImport, aplicarEGuardarArquivo, AVISO_ARQUIVO_NAO_GUARDADO,
   linhasAnoVsAnterior, subtituloAnoVsAnterior, htmlAnoVsAnterior, SEM_COMPARACAO,
+  pendentesTriagem, consultaTriagem, lotesAoAbrirTriagem, loteSugerirMais, LOTE_TRIAGEM, parseLimiar,
+  textoSugestao, celulaSugestao, resolverSugestao, guardarSugestoesTriagem, planoAceitarTodas,
 } from "../public/app.js";
 import { montarCasa } from "../worker/casa.js";
 import { mesesAte } from "../worker/salario.js";
@@ -1740,4 +1742,160 @@ test("D5 anoVsAnterior null (sem fatura no ano anterior): o card não é renderi
 test("D5 o texto da categoria vai escapado (nome vem do banco)", () => {
   const html = htmlAnoVsAnterior({ ...AV_EXEMPLO, categorias: [{ categoria: "<b>x</b>", atual_cents: 100, anterior_cents: 100 }] }, "2026-09");
   assert.doesNotMatch(html, /<b>x<\/b>/);
+});
+
+// ---- H5: triagem assistida pelo JEV (aba Lançamentos) ----
+// Valores e descrições inventados. A padrão é achada pela flag `padrao` (nunca pelo nome).
+const CAT_TRI = {
+  categorias: [
+    { id: "kA", nome: "Alimentação", natureza: "despesa", padrao: false },
+    { id: "kC", nome: "Compras", natureza: "despesa", padrao: false },
+    { id: "kO", nome: "Outros", natureza: "despesa", padrao: false },
+    { id: "kN", nome: "Não Identificado", natureza: "despesa", padrao: true },
+  ],
+  subcategorias: [
+    { id: "a1", categoria_id: "kA", nome: "Ifood" },
+    { id: "c1", categoria_id: "kC", nome: "Compras" },
+    { id: "c2", categoria_id: "kC", nome: "Amazon" },
+  ],
+};
+const txTri = (id, extra = {}) => ({ id, descricao: "X", categoria_id: "kN", grupo_id: null, representante: false, ...extra });
+
+test("H5: pendentesTriagem — só a padrão (pela flag), sem membro não-representante de grupo", () => {
+  const rows = [
+    txTri("t1"), txTri("t2", { categoria_id: "kC" }),
+    txTri("t3", { grupo_id: "g", representante: false }), txTri("t4", { grupo_id: "g", representante: true }),
+    txTri("t5", { categoria_id: "kO" }), // "Outros" não é a padrão (miscelânea deliberada)
+  ];
+  assert.deepEqual(pendentesTriagem(rows, CAT_TRI).map((t) => t.id), ["t1", "t4"]);
+  assert.deepEqual(pendentesTriagem(rows, { categorias: [], subcategorias: [] }), []);
+});
+
+test("H5: consultaTriagem pede a padrão pela API (o 'Todos os meses' não pode passar pelo limit sem filtro)", () => {
+  assert.equal(consultaTriagem(CAT_TRI, { de: "1900-01-01", ate: "2999-12-31" }),
+    "/api/transacoes?categoria_id=kN&de=1900-01-01&ate=2999-12-31");
+  assert.equal(consultaTriagem(CAT_TRI, { de: "2026-09-01", ate: "2026-09-30" }),
+    "/api/transacoes?categoria_id=kN&de=2026-09-01&ate=2026-09-30");
+  assert.equal(consultaTriagem({ categorias: [{ id: "kO", nome: "Outros" }] }, { de: "a", ate: "b" }), null);
+});
+
+test("H5: no mês, N pendentes geram ceil(N/10) lotes ao abrir o chip; com 'Todos os meses', nenhum", () => {
+  for (const n of [0, 1, 10, 11, 58]) {
+    const ids = Array.from({ length: n }, (_, i) => `t${i}`);
+    const lotes = lotesAoAbrirTriagem(ids, false);
+    assert.equal(lotes.length, Math.ceil(n / 10), `n=${n}`);
+    assert.ok(lotes.every((l) => l.length <= LOTE_TRIAGEM));
+    assert.deepEqual(lotes.flat(), ids); // ninguém fica de fora nem repete
+    assert.deepEqual(lotesAoAbrirTriagem(ids, true), []);
+  }
+  assert.equal(LOTE_TRIAGEM, 10);
+});
+
+test("H5: 'sugerir mais' (Todos os meses) manda 1 lote de até 10 ainda não pedidos por clique", () => {
+  const ids = Array.from({ length: 25 }, (_, i) => `t${i}`);
+  const pedidos = new Set();
+  const l1 = loteSugerirMais(ids, pedidos);
+  assert.equal(l1.length, 10);
+  l1.forEach((id) => pedidos.add(id));
+  const l2 = loteSugerirMais(ids, pedidos);
+  assert.deepEqual(l2, ids.slice(10, 20));
+  l2.forEach((id) => pedidos.add(id));
+  assert.deepEqual(loteSugerirMais(ids, pedidos), ids.slice(20));
+  ids.forEach((id) => pedidos.add(id));
+  assert.deepEqual(loteSugerirMais(ids, pedidos), []);
+});
+
+test("H5: parseLimiar aceita vírgula ou ponto ('0,7' e '0.7' valem igual) e recusa fora de 0..1", () => {
+  assert.equal(parseLimiar("0,7"), 0.7);
+  assert.equal(parseLimiar("0.7"), 0.7);
+  assert.equal(parseLimiar(" 0,70 "), 0.7);
+  assert.equal(parseLimiar("1"), 1);
+  assert.equal(parseLimiar("1,5"), null);
+  assert.equal(parseLimiar("-0,1"), null);
+  assert.equal(parseLimiar("abc"), null);
+  assert.equal(parseLimiar(""), null);
+});
+
+test("H5: textoSugestao no formato 'Categoria › Sub · 0,74', só categoria sem sub, '—' no 'nenhuma serve'", () => {
+  assert.equal(textoSugestao({ categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.82 }), "Compras › Compras · 0,82");
+  assert.equal(textoSugestao({ categoria: "Compras", subcategoria: null, prob_categoria: 0.4 }), "Compras · 0,40");
+  assert.equal(textoSugestao({ categoria: "Alimentação", subcategoria: "Ifood", prob_categoria: 1 }), "Alimentação › Ifood · 1,00");
+  assert.equal(textoSugestao({ categoria: "nenhuma serve", subcategoria: null, prob_categoria: 0.9 }), "—");
+});
+
+test("H5: celulaSugestao — 'nenhuma serve' mostra '—' sem botão aceitar; abaixo do limiar, sem botão", () => {
+  const nenhuma = celulaSugestao({ categoria: "nenhuma serve", subcategoria: null, prob_categoria: 0.95, limiar: 0.7 }, CAT_TRI);
+  assert.match(nenhuma, /—/);
+  assert.doesNotMatch(nenhuma, /aceitar/);
+  const baixa = celulaSugestao({ categoria: "Compras", subcategoria: null, prob_categoria: 0.4, limiar: 0.7 }, CAT_TRI);
+  assert.match(baixa, /Compras · 0,40/);
+  assert.doesNotMatch(baixa, /aceitar/);
+  const alta = celulaSugestao({ categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.82, limiar: 0.7 }, CAT_TRI);
+  assert.match(alta, /Compras › Compras · 0,82/);
+  assert.match(alta, /class="[^"]*traceitar[^"]*"[^>]*>aceitar</);
+  // categoria que não existe (ou é a padrão) não tem como ser aceita
+  assert.doesNotMatch(celulaSugestao({ categoria: "Sumida", subcategoria: null, prob_categoria: 0.99, limiar: 0.7 }, CAT_TRI), /aceitar/);
+  assert.doesNotMatch(celulaSugestao({ categoria: "Não Identificado", subcategoria: null, prob_categoria: 0.99, limiar: 0.7 }, CAT_TRI), /aceitar/);
+  // ainda sem sugestão: pedido em andamento x não pedido
+  assert.match(celulaSugestao(undefined, CAT_TRI, { pedido: true }), /…/);
+  assert.equal(celulaSugestao(undefined, CAT_TRI, { pedido: false }), "");
+});
+
+test("H5: resolverSugestao vai de nome a id pelo catálogo (sub fora da categoria → null)", () => {
+  assert.deepEqual(resolverSugestao({ categoria: "Compras", subcategoria: "Amazon" }, CAT_TRI), { categoria_id: "kC", subcategoria_id: "c2" });
+  assert.deepEqual(resolverSugestao({ categoria: "Compras", subcategoria: "Ifood" }, CAT_TRI), { categoria_id: "kC", subcategoria_id: null });
+  assert.deepEqual(resolverSugestao({ categoria: "Outros", subcategoria: null }, CAT_TRI), { categoria_id: "kO", subcategoria_id: null });
+  assert.equal(resolverSugestao({ categoria: "Não Identificado", subcategoria: null }, CAT_TRI), null);
+  assert.equal(resolverSugestao({ categoria: "nenhuma serve", subcategoria: null }, CAT_TRI), null);
+});
+
+test("H5: guardarSugestoesTriagem grava a sugestão com o limiar pedido e devolve os ignorados", () => {
+  const sug = {};
+  const r = guardarSugestoesTriagem(sug, { itens: [
+    { id: "t1", ignorado: false, sugestao: { categoria: "Compras", subcategoria: null, prob_categoria: 0.5, prob_subcategoria: null } },
+    { id: "t2", ignorado: true, sugestao: null },
+    { id: "t3", ignorado: false, sugestao: null },
+  ], indisponivel: true }, 0.7);
+  assert.deepEqual(sug, { t1: { categoria: "Compras", subcategoria: null, prob_categoria: 0.5, prob_subcategoria: null, limiar: 0.7 } });
+  assert.deepEqual(r, { ignorados: ["t2"], indisponivel: true });
+});
+
+test("H5: Exemplo do card — 'aceitar todas ≥ 0,70' pega LOJA e IFD e deixa o FULANO", () => {
+  const linhas = [txTri("loja"), txTri("fulano"), txTri("ifd")];
+  const sug = {
+    loja: { categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.82, limiar: 0.7 },
+    fulano: { categoria: "Compras", subcategoria: null, prob_categoria: 0.4, limiar: 0.7 },
+    ifd: { categoria: "Alimentação", subcategoria: "Ifood", prob_categoria: 1, limiar: 0.7 },
+  };
+  const p = planoAceitarTodas(linhas, sug, CAT_TRI, parseLimiar("0,70"));
+  assert.equal(p.n, 2);
+  assert.deepEqual(p.lotes, [
+    { ids: ["loja"], mudancas: { categoria_id: "kC", subcategoria_id: "c1" } },
+    { ids: ["ifd"], mudancas: { categoria_id: "kA", subcategoria_id: "a1" } },
+  ]);
+});
+
+test("H5: 'aceitar todas ≥ X' — limiar, pendentes de fora, 'nenhuma serve' de fora, agrupado por par", () => {
+  const linhas = ["a", "b", "c", "d", "e", "f", "g"].map((id) => txTri(id));
+  const sug = {
+    a: { categoria: "Compras", subcategoria: "Amazon", prob_categoria: 0.9, limiar: 0.7 },
+    b: { categoria: "Compras", subcategoria: "Amazon", prob_categoria: 0.75, limiar: 0.7 },
+    c: { categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.95, limiar: 0.7 },
+    d: { categoria: "Compras", subcategoria: "Amazon", prob_categoria: 0.69, limiar: 0.7 }, // abaixo de X
+    e: { categoria: "nenhuma serve", subcategoria: null, prob_categoria: 0.99, limiar: 0.7 }, // nunca entra
+    // f: lote pendente (sem sugestão ainda) — não entra
+    g: { categoria: "Outros", subcategoria: null, prob_categoria: 0.8, limiar: 0.7 },
+  };
+  const p = planoAceitarTodas(linhas, sug, CAT_TRI, 0.7);
+  assert.equal(p.n, 4);
+  assert.deepEqual(p.lotes, [
+    { ids: ["a", "b"], mudancas: { categoria_id: "kC", subcategoria_id: "c2" } },
+    { ids: ["c"], mudancas: { categoria_id: "kC", subcategoria_id: "c1" } },
+    { ids: ["g"], mudancas: { categoria_id: "kO", subcategoria_id: null } },
+  ]);
+  // X mais alto corta mais; o 'nenhuma serve' segue fora até com X = 0
+  assert.equal(planoAceitarTodas(linhas, sug, CAT_TRI, 0.9).n, 2);
+  assert.ok(!planoAceitarTodas(linhas, sug, CAT_TRI, 0).lotes.some((l) => l.ids.includes("e")));
+  // só linhas visíveis: a que já saiu da lista não volta pelo mapa de sugestões
+  assert.equal(planoAceitarTodas(linhas.filter((l) => l.id !== "a"), sug, CAT_TRI, 0.7).n, 3);
 });

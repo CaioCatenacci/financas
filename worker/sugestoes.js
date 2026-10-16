@@ -71,7 +71,7 @@ function esperaPadrao(ms) {
   return new Promise((ok) => setTimeout(ok, ms));
 }
 
-async function emParalelo(lista, n, fn) {
+export async function emParalelo(lista, n, fn) {
   const saida = new Array(lista.length);
   let prox = 0;
   const trabalhador = async () => {

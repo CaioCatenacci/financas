@@ -382,6 +382,125 @@ export function avisoJevHtml({ indisponivel = false, pendentes = 0 } = {}) {
 }
 // ---------- fim H4 ----------
 
+// ---------- H5: triagem assistida pelo JEV (aba Lançamentos) ----------
+// Chip "Triagem": as linhas que seguem na categoria padrão ganham a sugestão do JEV
+// (POST /api/triagem/sugestoes, lotes de 10) e um "aceitar" que é a reclassificação manual de
+// sempre (PATCH por linha; POST /api/transacoes/lote no "aceitar todas"). Nada é gravado sem clique.
+export const LIMIAR_TRIAGEM = 0.7; // o X da tela (decisão do Caio no H5); o import segue com 0,90
+export const LOTE_TRIAGEM = 10;    // o mesmo teto da rota (worker/triagem.js)
+
+// a padrão pela flag — nunca pelo nome (fix de 25/09/2026), e sem o fallback "Outros" de categoriaPadrao
+const padraoDoCatalogo = (catalogo) => (catalogo?.categorias || []).find(c => c.padrao) || null;
+
+// Pendentes = na padrão e não membro não-representante de grupo (membro não conta nem é editável).
+export function pendentesTriagem(transacoes, catalogo) {
+  const padrao = padraoDoCatalogo(catalogo);
+  if (!padrao) return [];
+  return (transacoes || []).filter(t => t.categoria_id === padrao.id && !(t.grupo_id && !t.representante));
+}
+
+// A triagem pede a padrão À API, nunca filtra a lista da aba: GET /api/transacoes tem limit 1000
+// por data desc, e no "Todos os meses" as pendentes mais antigas ficariam de fora sem aviso.
+export function consultaTriagem(catalogo, { de, ate }) {
+  const padrao = padraoDoCatalogo(catalogo);
+  if (!padrao) return null;
+  return `/api/transacoes?categoria_id=${encodeURIComponent(padrao.id)}&de=${de}&ate=${ate}`;
+}
+
+function emLotes(ids, tamanho = LOTE_TRIAGEM) {
+  const lotes = [];
+  for (let i = 0; i < ids.length; i += tamanho) lotes.push(ids.slice(i, i + tamanho));
+  return lotes;
+}
+
+// No mês, todos os lotes saem ao abrir o chip (no máximo algumas dezenas de linhas); com
+// "Todos os meses" (centenas), nenhum — só pelo "sugerir mais", 10 por clique.
+export function lotesAoAbrirTriagem(ids, todosOsMeses) {
+  return todosOsMeses ? [] : emLotes(ids);
+}
+
+export function loteSugerirMais(ids, pedidos) {
+  return ids.filter(id => !pedidos.has(id)).slice(0, LOTE_TRIAGEM);
+}
+
+// "0,7" e "0.7" valem igual (teclado brasileiro); fora de 0..1 ou não-número → null.
+export function parseLimiar(txt) {
+  const s = String(txt ?? "").trim().replace(",", ".");
+  if (!/^\d*\.?\d+$|^\d+\.$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
+}
+
+export const fmtProb = (p) => Number(p).toFixed(2).replace(".", ",");
+
+export function textoSugestao(s) {
+  if (!s) return "";
+  if (s.categoria === JEV_NENHUMA) return "—";
+  return s.categoria + (s.subcategoria ? " › " + s.subcategoria : "") + " · " + fmtProb(s.prob_categoria);
+}
+
+// nome sugerido → ids do catálogo. Categoria que não existe, a padrão ou "nenhuma serve" → null
+// (não há o que aceitar); sub que não existe dentro da categoria → sub nula.
+export function resolverSugestao(s, catalogo) {
+  if (!s || s.categoria === JEV_NENHUMA) return null;
+  const cat = (catalogo?.categorias || []).find(c => c.nome === s.categoria && !c.padrao);
+  if (!cat) return null;
+  const sub = s.subcategoria
+    ? (catalogo.subcategorias || []).find(x => x.categoria_id === cat.id && x.nome === s.subcategoria)
+    : null;
+  return { categoria_id: cat.id, subcategoria_id: sub ? sub.id : null };
+}
+
+// Tem "aceitar"? Confiança da categoria >= o limiar com que a sugestão foi pedida (abaixo dele a sub
+// nem foi perguntada) e categoria de verdade, que exista no catálogo.
+export function aceitavel(s, catalogo) {
+  return !!s && typeof s.prob_categoria === "number" && s.prob_categoria >= (s.limiar ?? LIMIAR_TRIAGEM) &&
+    !!resolverSugestao(s, catalogo);
+}
+
+export function celulaSugestao(s, catalogo, { pedido = false } = {}) {
+  if (!s) return pedido ? `<span class="vazio">…</span>` : "";
+  const texto = `<span class="sugestao">${esc(textoSugestao(s))}</span>`;
+  if (!aceitavel(s, catalogo)) return texto;
+  return texto + ` <button class="chip traceitar" type="button">aceitar</button>`;
+}
+
+// grava a resposta de um lote em `sugestoes` (id → sugestão + o limiar pedido); devolve os ids que a
+// rota ignorou (saíram da padrão entre a carga e o pedido) para a tela tirá-los da lista.
+export function guardarSugestoesTriagem(sugestoes, resposta, limiar) {
+  const ignorados = [];
+  for (const it of resposta?.itens || []) {
+    if (it.ignorado) { ignorados.push(it.id); continue; }
+    if (it.sugestao) sugestoes[it.id] = { ...it.sugestao, limiar };
+  }
+  return { ignorados, indisponivel: !!resposta?.indisponivel };
+}
+
+// "aceitar todas com confiança >= X": entre as linhas visíveis, as que têm sugestão aceitável com
+// confiança >= X. Sem sugestão ainda (lote pendente) e "nenhuma serve" ficam de fora. Um lote por
+// par (categoria, sub), porque atualizarTransacoesLote grava uma categoria/sub por chamada.
+export function planoAceitarTodas(linhas, sugestoes, catalogo, X) {
+  const porPar = new Map();
+  let n = 0;
+  for (const t of linhas || []) {
+    const s = sugestoes?.[t.id];
+    if (!s || !(s.prob_categoria >= X) || !aceitavel(s, catalogo)) continue;
+    const r = resolverSugestao(s, catalogo);
+    const k = `${r.categoria_id}|${r.subcategoria_id ?? ""}`;
+    if (!porPar.has(k)) porPar.set(k, { ids: [], mudancas: { categoria_id: r.categoria_id, subcategoria_id: r.subcategoria_id } });
+    porPar.get(k).ids.push(t.id);
+    n++;
+  }
+  return { n, lotes: [...porPar.values()] };
+}
+
+export function avisoTriagemHtml({ indisponivel = false, pendentes = 0 } = {}) {
+  if (indisponivel) return `<p class="impchk impchk-warn">⚠ ${esc(AVISO_JEV)}</p>`;
+  if (pendentes > 0) return `<p class="impchk">pedindo sugestões… (${pendentes} lote(s) pendente(s))</p>`;
+  return "";
+}
+// ---------- fim H5 ----------
+
 // C2: casa à mão um item "ambiguo" com um dos seus candidatos (vindos do preview). Muta o item
 // (mesmo estilo do "tratar como novo") para status "casado", com matchId/matchGrupoId do escolhido —
 // daí em diante montarDecisao o trata como qualquer casado do Inc 4.6. Recusa (devolve false e não
@@ -945,6 +1064,9 @@ if (typeof document !== "undefined") {
     // B2: regras aprendidas (aba Ajustes). `assocEditando` é o índice em `associacoes` da linha
     // em edição — o DOM endereça por índice, nunca pela chave (a pix_cpf não vai pra tela).
     associacoes: [], assocBusca: "", assocEditando: null,
+    // H5: triagem. `linhas` = pendentes carregadas; `sugestoes` = id → sugestão (+ limiar pedido);
+    // `pedidos` = ids já mandados à rota; `geracao` descarta resposta de uma carga antiga.
+    triagem: { ativa: false, linhas: [], sugestoes: {}, pedidos: new Set(), pendentes: 0, indisponivel: false, geracao: 0 },
   };
 
   // API
@@ -2322,6 +2444,7 @@ if (typeof document !== "undefined") {
   // Recarrega só as transações (aba Lançamentos) com o range corrente — usado pela troca de
   // mês/"Todos os meses" p/ não refazer o fetch do Resumo (agora em carregarResumo()).
   async function carregarLancamentos() {
+    if (estado.triagem.ativa) return carregarTriagem();
     try {
       const { de, ate } = transacoesRange();
       const transacoes = await apiGet(`/api/transacoes?de=${de}&ate=${ate}`);
@@ -2334,6 +2457,131 @@ if (typeof document !== "undefined") {
       drawRows();
     } catch (e) { alert("Falha ao carregar lançamentos: " + e.message); }
   }
+
+  // ----- H5: triagem (chip "Triagem" em Lançamentos) -----
+  // Carrega as pendentes pela API (consultaTriagem) no range de transacoesRange(): mês do #mesSel ou,
+  // com "Todos os meses", a janela aberta. No mês, já pede todas as sugestões; no "Todos os meses",
+  // espera o "sugerir mais".
+  async function carregarTriagem() {
+    const tr = estado.triagem;
+    const ger = ++tr.geracao;
+    tr.linhas = []; tr.sugestoes = {}; tr.pedidos = new Set(); tr.pendentes = 0; tr.indisponivel = false;
+    const url = consultaTriagem(estado.catalogo, transacoesRange());
+    try {
+      const rows = url ? await apiGet(url) : [];
+      if (ger !== tr.geracao) return;
+      tr.linhas = pendentesTriagem(rows, estado.catalogo);
+    } catch (e) { alert("Falha ao carregar a triagem: " + e.message); }
+    drawTriagem();
+    await pedirSugestoesTriagem(lotesAoAbrirTriagem(tr.linhas.map(t => t.id), estado.lancTudo), ger);
+  }
+
+  // Um lote por vez: cada lote são até 20 chamadas ao JEV, e mandar todos juntos só traria 429.
+  async function pedirSugestoesTriagem(lotes, ger) {
+    const tr = estado.triagem;
+    if (!lotes.length) return;
+    const limiar = parseLimiar($("#trlimiar").value);
+    if (limiar == null) { alert("Confiança inválida: use um número entre 0 e 1 (ex.: 0,70)."); return; }
+    lotes.forEach(ids => ids.forEach(id => tr.pedidos.add(id)));
+    tr.pendentes += lotes.length; drawTriagem();
+    for (const ids of lotes) {
+      if (ger !== tr.geracao) return;
+      try {
+        const r = await apiPost("/api/triagem/sugestoes", { ids, limiar });
+        if (ger !== tr.geracao) return;
+        const { ignorados, indisponivel } = guardarSugestoesTriagem(tr.sugestoes, r, limiar);
+        if (indisponivel) tr.indisponivel = true;
+        if (ignorados.length) tr.linhas = tr.linhas.filter(t => !ignorados.includes(t.id));
+      } catch { tr.indisponivel = true; }
+      tr.pendentes--; drawTriagem();
+    }
+  }
+
+  function drawTriagem() {
+    const tr = estado.triagem;
+    const X = parseLimiar($("#trlimiar").value);
+    $("#traceitartodas").textContent = `Aceitar todas com confiança ≥ ${X == null ? "?" : fmtProb(X)}`;
+    const faltam = tr.linhas.filter(t => !tr.pedidos.has(t.id)).length;
+    $("#trmais").classList.toggle("hidden", !estado.lancTudo);
+    $("#trmais").disabled = faltam === 0;
+    $("#trmais").textContent = faltam ? `Sugerir mais (${Math.min(LOTE_TRIAGEM, faltam)} de ${faltam} sem sugestão)` : "Sugerir mais";
+    $("#traviso").innerHTML = avisoTriagemHtml({ indisponivel: tr.indisponivel, pendentes: tr.pendentes });
+    const contador = $("#fcontador");
+    if (contador) contador.textContent = `${tr.linhas.length} na triagem`;
+    if (!tr.linhas.length) {
+      $("#trrows").innerHTML = `<tr><td colspan="5" class="vazio">nada para triar neste período</td></tr>`;
+      return;
+    }
+    const cats = estado.catalogo.categorias.filter(c => !c.padrao);
+    const opts = `<option value="">escolher…</option>` + cats.map(c => `<option value="${esc(c.id)}">${esc(c.nome)}</option>`).join("");
+    $("#trrows").innerHTML = tr.linhas.map(t => {
+      const rec = t.natureza === "receita";
+      const contra = t.contraparte_nome && t.contraparte_nome !== t.descricao ? ` <span class="vazio">${esc(t.contraparte_nome)}</span>` : "";
+      return `<tr data-id="${esc(t.id)}">
+        <td class="dt">${fmtData(t.data)}</td>
+        <td>${esc(t.descricao || "—")}${contra}</td>
+        <td class="val" style="color:${rec ? "var(--receita)" : "var(--ink)"}">${rec ? "+" : ""}R$ ${centavosBR(t.valor_total)}</td>
+        <td>${celulaSugestao(tr.sugestoes[t.id], estado.catalogo, { pedido: tr.pedidos.has(t.id) })}</td>
+        <td><select class="trcat" aria-label="Escolher a categoria">${opts}</select></td>
+      </tr>`;
+    }).join("");
+  }
+
+  function tirarDaTriagem(ids) {
+    const fora = new Set(ids);
+    estado.triagem.linhas = estado.triagem.linhas.filter(t => !fora.has(t.id));
+    drawTriagem();
+  }
+
+  $("#lancTriagem").addEventListener("click", () => {
+    const tr = estado.triagem;
+    tr.ativa = !tr.ativa;
+    $("#lancTriagem").setAttribute("aria-pressed", String(tr.ativa));
+    $("#triagem").classList.toggle("hidden", !tr.ativa);
+    $("#lanctabela").classList.toggle("hidden", tr.ativa);
+    if (tr.ativa) { $("#massabar").classList.add("hidden"); carregarTriagem(); }
+    else { tr.geracao++; carregarLancamentos(); } // recarrega: os aceites já mudaram a lista
+  });
+  $("#trlimiar").addEventListener("input", drawTriagem);
+  $("#trmais").addEventListener("click", () => {
+    const tr = estado.triagem;
+    const lote = loteSugerirMais(tr.linhas.map(t => t.id), tr.pedidos);
+    pedirSugestoesTriagem(lote.length ? [lote] : [], tr.geracao);
+  });
+  // aceitar = a reclassificação manual de hoje (origem 'manual', natureza/esfera seguem a categoria,
+  // a regra da contraparte é aprendida) — pelo mesmo PATCH da tabela normal.
+  $("#trrows").addEventListener("click", async e => {
+    if (!e.target.classList.contains("traceitar")) return;
+    const id = e.target.closest("tr")?.dataset.id; if (!id) return;
+    const r = resolverSugestao(estado.triagem.sugestoes[id], estado.catalogo); if (!r) return;
+    e.target.disabled = true;
+    try {
+      await apiPatch(`/api/transacoes/${id}`, { categoria_id: r.categoria_id, subcategoria_id: r.subcategoria_id || "" });
+      tirarDaTriagem([id]);
+    } catch (err) { e.target.disabled = false; alert("Falha ao aceitar: " + err.message); }
+  });
+  $("#trrows").addEventListener("change", async e => {
+    if (!e.target.classList.contains("trcat") || !e.target.value) return;
+    const id = e.target.closest("tr")?.dataset.id; if (!id) return;
+    try {
+      await apiPatch(`/api/transacoes/${id}`, { categoria_id: e.target.value, subcategoria_id: "" });
+      tirarDaTriagem([id]);
+    } catch (err) { alert("Falha ao salvar: " + err.message); }
+  });
+  $("#traceitartodas").addEventListener("click", async () => {
+    const tr = estado.triagem;
+    const X = parseLimiar($("#trlimiar").value);
+    if (X == null) { alert("Confiança inválida: use um número entre 0 e 1 (ex.: 0,70)."); return; }
+    const plano = planoAceitarTodas(tr.linhas, tr.sugestoes, estado.catalogo, X);
+    if (!plano.n) { alert(`Nenhuma linha com sugestão de confiança ≥ ${fmtProb(X)}.`); return; }
+    if (!confirm(`Aceitar a sugestão em ${plano.n} linha${plano.n === 1 ? "" : "s"} com confiança ≥ ${fmtProb(X)}?`)) return;
+    for (const l of plano.lotes) {
+      try {
+        await apiPost("/api/transacoes/lote", { ids: l.ids, mudancas: l.mudancas });
+        tirarDaTriagem(l.ids);
+      } catch (err) { alert("Falha ao aceitar: " + err.message); return; }
+    }
+  });
 
   document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach(t => t.classList.remove("on")); b.classList.add("on");

@@ -13,6 +13,7 @@ import { parseLancamentoTexto } from "./texto.js";
 import { montarPreviewExtrato, montarPreviewExtratoC6, montarPreviewFatura, montarPreviewWise, chavesFatura, aplicar, conferirPreviaCasados } from "./importar.js";
 import { parseExtrato } from "./extrato.js";
 import { validarLote, sugerirLote, AVISO_INDISPONIVEL } from "./sugestoes.js";
+import { validarLoteTriagem, sugerirTriagem } from "./triagem.js";
 import { parseExtratoC6, lerContasProprias } from "./extrato_c6.js";
 import { alvoEfetivo, mediaSugestao, statusMeta, primeiroDiaDoMes, mesAnterior } from "./metas.js";
 import { alocarSalario, mesesAte } from "./salario.js";
@@ -835,6 +836,23 @@ export async function handleApi(request, env, url, dbOpt = null, depsOpt = null)
     } catch {
       return j({ itens: b.itens.map((i) => ({ indice: i?.indice ?? null, sugestao: null, preenche: false })),
                  indisponivel: true, aviso: AVISO_INDISPONIVEL });
+    }
+  }
+  // H5: triagem assistida — sugestão do JEV para as linhas gravadas na categoria padrão, em lotes
+  // de até 10 ids (worker/triagem.js). Só leitura: aceitar é a reclassificação manual, pela tela.
+  // Nunca 500: qualquer falha vira linhas sem sugestão + o aviso, como no import.
+  if (url.pathname === "/api/triagem/sugestoes" && request.method === "POST") {
+    let b;
+    try { b = await body(); } catch { return erroJson("corpo inválido", 400); }
+    const v = validarLoteTriagem(b);
+    if (v.erro) return erroJson(v.erro, 400);
+    try {
+      const chave = typeof env.TYPESAFE_API_KEY === "string" ? env.TYPESAFE_API_KEY : "";
+      if (!chave) return j(await sugerirTriagem(v.ids, v.limiar, { chave }));
+      const [catalogo, linhas] = await Promise.all([db.catalogo(), db.transacoesParaTriagem(v.ids)]);
+      return j(await sugerirTriagem(v.ids, v.limiar, { linhas, catalogo, chave, fetchImpl: (...a) => fetch(...a) }));
+    } catch {
+      return j({ itens: v.ids.map((id) => ({ id, sugestao: null, ignorado: false })), indisponivel: true, aviso: AVISO_INDISPONIVEL });
     }
   }
   if (url.pathname === "/api/importar/aplicar" && request.method === "POST") {

@@ -164,21 +164,23 @@ export function lerResposta(json, id, pergunta) {
   return { choice: a.choice, prob };
 }
 
-/** A sugestão preenche a linha? Só com confiança da categoria >= 0,90 e categoria de verdade
- *  ("nenhuma serve" nunca preenche, nem com confiança alta — como no H3). */
-export function preenche(sugestao) {
+/** A sugestão preenche a linha? Só com confiança da categoria >= limiar (0,90 no import) e
+ *  categoria de verdade ("nenhuma serve" nunca preenche, nem com confiança alta — como no H3). */
+export function preenche(sugestao, limiar = LIMIAR_JEV) {
   return !!sugestao && sugestao.categoria !== NENHUMA && typeof sugestao.prob_categoria === "number" &&
-    sugestao.prob_categoria >= LIMIAR_JEV;
+    sugestao.prob_categoria >= limiar;
 }
 
 /**
  * Classifica uma linha. `perguntar(corpo)` faz a chamada (async) e devolve o JSON da resposta, ou
  * lança. Resposta inválida também lança: quem chama decide que a linha fica sem sugestão.
  *
- * A pergunta da sub só é feita quando a categoria vai preencher (>= limiar): abaixo dele a linha
- * fica na padrão e a sub não seria usada — e cada chamada a menos é um subrequest a menos no lote.
+ * A pergunta da sub só é feita quando a confiança da categoria passa de `limiarSub`: abaixo dele a
+ * sub não seria usada — e cada chamada a menos é um subrequest a menos no lote. O import (H4) usa o
+ * padrão 0,90 (é o mesmo corte que preenche a linha); a triagem (H5) passa o X da tela (0,70), já
+ * que lá quem decide é o Caio, ao aceitar.
  */
-export async function classificarLinha(linha, catalogo, perguntar) {
+export async function classificarLinha(linha, catalogo, perguntar, limiarSub = LIMIAR_JEV) {
   const regra = regraFixa(linha);
   if (regra) return regra;
   const est = estado(linha);
@@ -187,7 +189,7 @@ export async function classificarLinha(linha, catalogo, perguntar) {
   if (!rc) throw new Error("resposta do JEV sem answers válidos (categoria)");
   const sugestao = { categoria: rc.choice, subcategoria: null, prob_categoria: rc.prob,
                      prob_subcategoria: null, origem: "jev" };
-  if (!preenche(sugestao)) return sugestao;
+  if (!preenche(sugestao, limiarSub)) return sugestao;
   const escolhida = opcoesCategoria(linha.natureza, linha.fonte, catalogo).find((c) => c.nome === rc.choice);
   const ps = escolhida ? perguntaSubcategoria(escolhida, catalogo) : null;
   if (!ps) return sugestao;
