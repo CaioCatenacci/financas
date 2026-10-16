@@ -269,3 +269,35 @@ test("resposta sem answers, com escolha fora das opções ou prob inválida é n
 test("resposta inválida faz classificarLinha lançar (quem chama deixa a linha sem sugestão)", async () => {
   await assert.rejects(jev.classificarLinha(tx(), CATALOGO, async () => ({ answers: {} })));
 });
+
+// --- H5: limiar da sub como parâmetro ---------------------------------------
+// A triagem (H5) mostra a sugestão para o Caio aceitar, então vale perguntar a sub já a partir do X
+// da tela (padrão 0,70). O import (H4) segue com 0,90 — sem o 4º argumento, nada muda para ele.
+
+test("H5: com limiar 0,70, Compras 0,82 pergunta a sub (2 chamadas)", async () => {
+  const f = perguntadorFalso({ categoria: ["Compras", 0.82], subcategoria: ["Compras", 0.6] });
+  const r = await jev.classificarLinha(tx({ descricao: "LOJA EXEMPLO" }), CATALOGO_H2, f.perguntar, 0.7);
+  assert.equal(f.chamadas.length, 2);
+  assert.deepEqual(r, { categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.82, prob_subcategoria: 0.6, origem: "jev" });
+});
+
+test("H5: com limiar 0,70, Compras 0,40 não pergunta a sub (1 chamada, sub nula)", async () => {
+  const f = perguntadorFalso({ categoria: ["Compras", 0.4] });
+  const r = await jev.classificarLinha(tx({ descricao: "FULANO DE TAL" }), CATALOGO_H2, f.perguntar, 0.7);
+  assert.equal(f.chamadas.length, 1);
+  assert.equal(r.subcategoria, null);
+  assert.equal(r.prob_subcategoria, null);
+});
+
+test("H5: sem o 4º argumento o limiar da sub segue 0,90 (o import não muda): 0,82 não pergunta", async () => {
+  const f = perguntadorFalso({ categoria: ["Compras", 0.82] });
+  await jev.classificarLinha(tx({ descricao: "LOJA EXEMPLO" }), CATALOGO_H2, f.perguntar);
+  assert.equal(f.chamadas.length, 1);
+});
+
+test("H5: 'nenhuma serve' não pergunta a sub nem com limiar baixo", async () => {
+  const f = perguntadorFalso({ categoria: [NENHUMA, 0.95] });
+  const r = await jev.classificarLinha(tx(), CATALOGO_H2, f.perguntar, 0.5);
+  assert.equal(f.chamadas.length, 1);
+  assert.equal(r.categoria, NENHUMA);
+});

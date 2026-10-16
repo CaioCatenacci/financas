@@ -2424,3 +2424,158 @@ test("A3 /api/resumo sem mes= (de/ate livre) não monta cascata", async () => {
   const data = await (await handleApi(req, G1_ENV, new URL(req.url), db)).json();
   assert.equal(data.cascata, null);
 });
+
+// ---- H5: POST /api/triagem/sugestoes (triagem assistida pelo JEV) ----
+// As linhas vêm do banco por id. O db falso só sabe ler (catálogo e as linhas); qualquer outro
+// método — escrita em transacoes ou associacoes — lança: a rota não pode gravar nada.
+const uuidT = (n) => `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+const linhaT = (n, descricao, extra = {}) => ({
+  id: uuidT(n), descricao, contraparte_nome: null, natureza: "despesa", fonte: "fatura",
+  categoria_id: "kN", grupo_id: null, representante: false, valor_cents: "4990", ...extra,
+});
+function dbTriagem(linhas) {
+  const f = { lidos: [] };
+  const permitido = {
+    catalogo: async () => CATALOGO_JEV,
+    transacoesParaTriagem: async (ids) => { f.lidos.push(ids); return linhas.filter((l) => ids.includes(l.id)); },
+  };
+  return new Proxy(f, {
+    get(alvo, nome) {
+      if (nome in permitido) return permitido[nome];
+      if (nome in alvo || typeof nome === "symbol" || nome === "then") return alvo[nome];
+      return () => { throw new Error(`a triagem não pode chamar db.${String(nome)}`); };
+    },
+  });
+}
+const postTri = (corpo) => reqApi("/api/triagem/sugestoes", "POST", corpo);
+const urlTri = new URL("http://localhost/api/triagem/sugestoes");
+// responde pela descrição; quem não está no mapa leva Compras 0,2 (só a pergunta da categoria)
+function fetchTri(porDescricao = {}) {
+  const f = { chamadas: [] };
+  f.impl = async (url, init) => {
+    const corpo = JSON.parse(init.body);
+    f.chamadas.push({ url, init, corpo });
+    const [id] = Object.keys(corpo.questions);
+    const [choice, prob] = porDescricao[corpo.state.descricao]?.[id] ?? ["Compras", 0.2];
+    return new Response(JSON.stringify({ answers: { [id]: { choice, probabilities: { [choice]: prob } } } }), { status: 200 });
+  };
+  return f;
+}
+
+test("H5: lote com mais de 10 ids → 400, sem ler o banco nem chamar o JEV", async () => {
+  const f = fetchTri();
+  const db = dbTriagem([]);
+  const ids = Array.from({ length: 11 }, (_, i) => uuidT(i + 1));
+  const r = await comFetch(f, () => handleApi(postTri({ ids, limiar: 0.7 }), envJev, urlTri, db));
+  assert.equal(r.status, 400);
+  assert.equal(f.chamadas.length, 0);
+  assert.deepEqual(db.lidos, []);
+});
+
+test("H5: ids que não são uuid, sem lista ou limiar fora de 0..1 → 400", async () => {
+  const db = dbTriagem([]);
+  assert.equal((await handleApi(postTri({ ids: ["x"] }), envJev, urlTri, db)).status, 400);
+  assert.equal((await handleApi(postTri({ ids: [uuidT(1)], limiar: 1.5 }), envJev, urlTri, db)).status, 400);
+  assert.equal((await handleApi(postTri({}), envJev, urlTri, db)).status, 400);
+});
+
+test("H5: Exemplo do card — LOJA 0,82 com sub, FULANO 0,40 só categoria, IFD* sem chamada", async () => {
+  const f = fetchTri({
+    "LOJA EXEMPLO": { categoria: ["Compras", 0.82], subcategoria: ["Compras", 0.7] },
+    "FULANO DE TAL": { categoria: ["Compras", 0.4] },
+  });
+  const linhas = [linhaT(1, "LOJA EXEMPLO"), linhaT(2, "FULANO DE TAL"), linhaT(3, "IFD*LANCHE")];
+  const r = await comFetch(f, () => handleApi(postTri({ ids: linhas.map((l) => l.id), limiar: 0.7 }), envJev, urlTri, dbTriagem(linhas)));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(d.indisponivel, false);
+  const [loja, fulano, ifd] = d.itens;
+  assert.deepEqual(loja, { id: uuidT(1), ignorado: false,
+    sugestao: { categoria: "Compras", subcategoria: "Compras", prob_categoria: 0.82, prob_subcategoria: 0.7 } });
+  // abaixo do limiar: só a categoria, e a pergunta da sub não é feita
+  assert.deepEqual(fulano.sugestao, { categoria: "Compras", subcategoria: null, prob_categoria: 0.4, prob_subcategoria: null });
+  assert.deepEqual(ifd.sugestao, { categoria: "Alimentação", subcategoria: "Ifood", prob_categoria: 1, prob_subcategoria: 1 });
+  // LOJA: categoria + sub (2); FULANO: só categoria (1); IFD*: nenhuma
+  assert.equal(f.chamadas.length, 3);
+  assert.equal(f.chamadas.filter((c) => c.corpo.state.descricao === "FULANO DE TAL").length, 1);
+  assert.ok(f.chamadas.every((c) => !c.corpo.state.descricao.startsWith("IFD*")));
+});
+
+test("H5: o limiar do corpo governa a sub — com 0,90 a LOJA 0,82 não tem a 2ª chamada", async () => {
+  const f = fetchTri({ "LOJA EXEMPLO": { categoria: ["Compras", 0.82] } });
+  const linhas = [linhaT(1, "LOJA EXEMPLO")];
+  const d = await (await comFetch(f, () => handleApi(postTri({ ids: [uuidT(1)], limiar: 0.9 }), envJev, urlTri, dbTriagem(linhas)))).json();
+  assert.equal(f.chamadas.length, 1);
+  assert.equal(d.itens[0].sugestao.subcategoria, null);
+});
+
+test("H5: sem limiar no corpo vale 0,70 (a sub da LOJA 0,82 é perguntada)", async () => {
+  const f = fetchTri({ "LOJA EXEMPLO": { categoria: ["Compras", 0.82], subcategoria: ["Amazon", 0.5] } });
+  await comFetch(f, () => handleApi(postTri({ ids: [uuidT(1)] }), envJev, urlTri, dbTriagem([linhaT(1, "LOJA EXEMPLO")])));
+  assert.equal(f.chamadas.length, 2);
+});
+
+test("H5: membro não-representante de grupo, id fora da padrão e id inexistente são ignorados, sem chamada", async () => {
+  const f = fetchTri();
+  const linhas = [
+    linhaT(1, "MEMBRO DO GRUPO", { grupo_id: uuidT(90), representante: false }),
+    linhaT(2, "JA CLASSIFICADA", { categoria_id: "kC" }),
+    linhaT(3, "REPRESENTANTE NA PADRAO", { grupo_id: uuidT(91), representante: true }),
+    linhaT(4, "LOJA SOLTA"),
+  ];
+  const ids = [...linhas.map((l) => l.id), uuidT(99)]; // o último não existe no banco
+  const d = await (await comFetch(f, () => handleApi(postTri({ ids, limiar: 0.7 }), envJev, urlTri, dbTriagem(linhas)))).json();
+  assert.deepEqual(d.itens.map((i) => i.id), ids);
+  assert.deepEqual(d.itens.map((i) => i.ignorado), [true, true, false, false, true]);
+  assert.equal(d.itens[0].sugestao, null);
+  assert.equal(d.itens[1].sugestao, null);
+  const perguntadas = f.chamadas.map((c) => c.corpo.state.descricao).sort();
+  assert.deepEqual(perguntadas, ["LOJA SOLTA", "REPRESENTANTE NA PADRAO"]);
+});
+
+test("H5: 429 duas vezes → linha sem sugestão e aviso, 200", async () => {
+  const f = fetchJev({}, { status: 429 });
+  const r = await comFetch(f, () => handleApi(postTri({ ids: [uuidT(1)] }), envJev, urlTri, dbTriagem([linhaT(1, "LOJA X")])));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(f.chamadas.length, 2);
+  assert.equal(d.itens[0].sugestao, null);
+  assert.equal(d.indisponivel, true);
+  assert.equal(d.aviso, "classificação automática indisponível");
+});
+
+test("H5: fetch lançando erro ou resposta inválida → linha sem sugestão e aviso", async () => {
+  for (const impl of [
+    async () => { throw new Error("rede caiu"); },
+    async () => new Response(JSON.stringify({ outra: 1 }), { status: 200 }),
+  ]) {
+    const r = await comFetch({ impl }, () => handleApi(postTri({ ids: [uuidT(1)] }), envJev, urlTri, dbTriagem([linhaT(1, "LOJA X")])));
+    assert.equal(r.status, 200);
+    const d = await r.json();
+    assert.equal(d.itens[0].sugestao, null);
+    assert.equal(d.aviso, "classificação automática indisponível");
+  }
+});
+
+test("H5: sem TYPESAFE_API_KEY → linhas sem sugestão e aviso, sem chamada", async () => {
+  const f = fetchTri();
+  const linhas = [linhaT(1, "IFD*LANCHE"), linhaT(2, "LOJA X")];
+  const r = await comFetch(f, () => handleApi(postTri({ ids: [uuidT(1), uuidT(2)] }), envApi, urlTri, dbTriagem(linhas)));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(f.chamadas.length, 0);
+  assert.deepEqual(d.itens.map((i) => i.sugestao), [null, null]);
+  assert.equal(d.aviso, "classificação automática indisponível");
+});
+
+test("H5: banco falhando na leitura → 200 com aviso (nunca 500)", async () => {
+  const quebrado = {
+    catalogo: async () => CATALOGO_JEV,
+    transacoesParaTriagem: async () => { throw new Error("banco fora"); },
+  };
+  const r = await comFetch(fetchTri(), () => handleApi(postTri({ ids: [uuidT(1)] }), envJev, urlTri, quebrado));
+  assert.equal(r.status, 200);
+  const d = await r.json();
+  assert.equal(d.itens[0].sugestao, null);
+  assert.equal(d.aviso, "classificação automática indisponível");
+});

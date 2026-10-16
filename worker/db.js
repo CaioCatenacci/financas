@@ -72,6 +72,16 @@ export function criarDb(sql) {
         limit 1000`;
     },
 
+    // H5: as linhas que a triagem manda ao JEV, lidas por id (só leitura; quem decide se entram —
+    // categoria padrão, membro de grupo — é worker/triagem.js). Valor em centavos, arredondado no SQL.
+    async transacoesParaTriagem(ids) {
+      if (!ids || !ids.length) return [];
+      return await sql`
+        select id, descricao, contraparte_nome, natureza, fonte, categoria_id, grupo_id, representante,
+               (round(valor_total*100))::bigint as valor_cents
+        from transacoes where id = any(${ids}::uuid[])`;
+    },
+
     async atualizarTransacao(id, c) {
       // read-modify-write: o driver HTTP do Neon não compõe fragmentos aninhados,
       // então lemos a linha e mesclamos em JS. undefined = manter; '' = limpar (null).

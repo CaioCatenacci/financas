@@ -24,7 +24,9 @@
     font:inherit;font-size:13px;border-radius:8px;padding:6px 8px}
   /* chip "Todos os meses" reusa a aparência ativa de .chip.on, mas via aria-pressed
      (não é um preset de período — é um alternador independente dentro de Lançamentos). */
-  #lancTudo[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+  #lancTudo[aria-pressed="true"],#lancTriagem[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+  .triagembar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+  .triagembar input{width:4.5em}
   .planAlvo{border:1px solid transparent;background:transparent;color:var(--ink);font:inherit;font-size:13.5px;
     width:110px;padding:4px 6px;border-radius:6px;text-align:right}
   .planAlvo:hover,.planAlvo:focus{border-color:var(--line);background:var(--ground);outline:none}
@@ -238,6 +240,8 @@
       <button id="flimpar" class="chip" type="button">Limpar</button>
       <!-- Inc 4.5 Tarefa 2: ignora o mês global e recarrega Lançamentos sem filtro de data (reclassificação em massa). -->
       <button type="button" class="chip" id="lancTudo" aria-pressed="false">Todos os meses</button>
+      <!-- H5: só as linhas na categoria padrão, com a sugestão do JEV e o "aceitar". -->
+      <button type="button" class="chip" id="lancTriagem" aria-pressed="false">Triagem</button>
       <span class="fcontador" id="fcontador"></span>
     </div>
     <div class="massabar hidden" id="massabar">
@@ -254,7 +258,23 @@
       <button id="maplicar" class="chip" type="button">Aplicar</button>
       <button id="mlimpar" class="chip" type="button">Limpar seleção</button>
     </div>
-    <div class="tblwrap">
+    <div id="triagem" class="hidden">
+      <div class="triagembar">
+        <label>confiança ≥ <input id="trlimiar" type="text" inputmode="decimal" value="0,70" aria-label="Confiança mínima"></label>
+        <button id="traceitartodas" class="chip" type="button">Aceitar todas com confiança ≥ 0,70</button>
+        <button id="trmais" class="chip hidden" type="button">Sugerir mais</button>
+        <span id="traviso"></span>
+      </div>
+      <div class="tblwrap">
+        <table>
+          <thead><tr>
+            <th>Data</th><th>Descrição</th><th style="text-align:right">Valor</th><th>Sugestão</th><th>Escolher</th>
+          </tr></thead>
+          <tbody id="trrows"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="tblwrap" id="lanctabela">
       <table>
         <thead><tr>
           <th class="selcol"><input type="checkbox" id="selall" aria-label="Selecionar todos"></th>
