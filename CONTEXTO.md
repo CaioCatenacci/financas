@@ -922,6 +922,30 @@ nada é gravado sem clique (gravar sozinho foi o H3).
   grava por `POST /api/transacoes/lote`, um por par (categoria, sub) sugerido. A linha aceita sai
   da lista; o select "escolher…" da linha faz a reclassificação à mão pelo mesmo PATCH.
 
+## 30. Legenda do comprovante vira a categoria (H6, 16/10/2026)
+
+O Caio mandou o comprovante do aluguel com a legenda "Aluguel" e o bot gravou outra coisa: a
+legenda era ignorada (só `/aprender` e `/patrimonio` eram lidos). Agora a legenda de foto/PDF é a
+decisão dele e **vence o modelo e a regra aprendida** (`origem_categoria = 'manual'`, natureza e
+esfera seguem a categoria). Exceção ao §7 (correção no app): escrever a categoria na hora do envio
+é captura, não edição.
+
+- **Casamento exato** (`worker/legenda.js`, puro; sem acento, sem maiúscula, espaços colapsados):
+  (1) "Categoria › Sub" ou "Categoria > Sub"; (2) sub ativa de nome que existe numa só categoria e
+  que não é a genérica de mesmo nome da categoria (Compras › Compras); (3) nome de categoria
+  (inclusive "Outros"). A padrão nunca é alvo. Só o casamento exato **ensina a regra** da
+  contraparte (par final, `derivarChave`, como a correção no app); sem contraparte, nada.
+- **Legenda só com a categoria:** a sub do modelo, se for dela; senão o JEV escolhe a sub dentro
+  dela (genérica só se ele a escolher, nunca por padrão). JEV sem resposta → sub vazia e o bot avisa
+  "não consegui escolher a subcategoria; ajuste no app". Categoria sem sub ativa → sub vazia, sem aviso.
+- **Sem casamento exato:** o JEV (`classificarLinha`, as duas perguntas do H4/H5 com a `legenda` no
+  estado, só quando ela existe) vale com ≥ 0,90; o palpite **não** vira regra (como H3/H4). Abaixo
+  disso, sem chave ou com erro → grava como antes e o bot avisa "Não reconheci a categoria '…';
+  gravei como … — corrija no app se precisar".
+- Legenda vazia ou começando com `/` não muda nada. O Telegram usa a mesma `TYPESAFE_API_KEY` e o
+  mesmo `criarPerguntar` do H4 (no máximo 2 chamadas por comprovante). A confirmação marca
+  "(da legenda)".
+
 ## Não fizemos (por que não faz sentido ainda)
 
 | O que | Por que não | Quando |
