@@ -1406,3 +1406,23 @@ test("A3 despesaPessoalPorCategoria: só despesa pessoal que conta, por categori
   assert.match(q, /esfera = 'pessoal'/);
   assert.match(q, /c\.nome as macro/);
 });
+
+test("H5: transacoesParaTriagem lê por id, só SELECT, com valor em centavos e o grupo", async () => {
+  const sql = fakeSql([{ id: "t1" }]);
+  const db = criarDb(sql);
+  await db.transacoesParaTriagem(["t1", "t2"]);
+  assert.equal(sql.chamadas.length, 1);
+  const q = sql.chamadas[0].text;
+  assert.match(q, /^\s*select/i);
+  assert.doesNotMatch(q, /insert|update|delete/i); // a triagem nunca grava
+  assert.match(q, /id = any\(/i);
+  assert.match(q, /grupo_id, representante/i);
+  assert.match(q, /round\(valor_total\*100\)/i);
+  assert.deepEqual(sql.chamadas[0].values, [["t1", "t2"]]);
+});
+
+test("H5: transacoesParaTriagem sem ids não vai ao banco", async () => {
+  const sql = fakeSql([]);
+  assert.deepEqual(await criarDb(sql).transacoesParaTriagem([]), []);
+  assert.equal(sql.chamadas.length, 0);
+});
